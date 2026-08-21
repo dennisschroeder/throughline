@@ -1,0 +1,5 @@
+/.workgraph/
+/workgraph
+/coverage.out
+*.db-shm
+*.db-wal
