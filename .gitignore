@@ -1,6 +1,7 @@
 /.workgraph/
 /workgraph
 /coverage.out
+/graphify-out/
 *.db-shm
 *.db-wal
 .DS_Store

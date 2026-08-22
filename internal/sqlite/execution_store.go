@@ -351,6 +351,14 @@ func (s *Store) ListActivity(ctx context.Context, filter ports.ActivityFilter) (
 	return result, rows.Err()
 }
 
+func (s *Store) LatestActivitySequence(ctx context.Context) (int64, error) {
+	var sequence int64
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(sequence), 0) FROM activity").Scan(&sequence); err != nil {
+		return 0, fmt.Errorf("query latest activity sequence: %w", err)
+	}
+	return sequence, nil
+}
+
 func (s *Store) ListAcceptedOutputs(ctx context.Context, filter ports.AcceptedOutputFilter) ([]ports.AcceptedOutput, error) {
 	var result []ports.AcceptedOutput
 	err := s.withinReadTransaction(ctx, func(reader sqlReader) error {

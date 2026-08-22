@@ -123,6 +123,7 @@ type Store interface {
 	ListReadyWork(ctx context.Context) ([]ReadyWorkItem, error)
 	ListReadyWorkForActor(ctx context.Context, actorID string) ([]ReadyWorkItem, error)
 	ListActivity(ctx context.Context, filter ActivityFilter) ([]work.Activity, error)
+	LatestActivitySequence(ctx context.Context) (int64, error)
 	ListAcceptedOutputs(ctx context.Context, filter AcceptedOutputFilter) ([]AcceptedOutput, error)
 }
 

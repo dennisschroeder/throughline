@@ -15,6 +15,15 @@ go test ./internal/sqlite -run TestConcurrentAgentsCannotBothClaimWorkItem -coun
 CGO_ENABLED=0 go build ./...
 ```
 
+## MCP smoke test
+
+Build outside the repository, initialize a temporary workspace, then configure two independent
+MCP clients with the same `mcp` command. Both clients should receive `workspace.id: "local"`.
+Use one client to claim an item and the other with the stale version to confirm a
+`version_conflict`; resume with `get_item` and `get_changes`. The package-level MCP test uses a
+real MCP client/server session and verifies tool discovery, read-only annotations, and stable
+`not_found` errors.
+
 `go build ./...` validates the binary without writing it into the repository. To build an executable
 explicitly, choose an output path outside the working tree:
 

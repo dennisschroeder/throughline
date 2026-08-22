@@ -12,6 +12,7 @@ import (
 
 	"github.com/dennisschroeder/workgraph/internal/app"
 	"github.com/dennisschroeder/workgraph/internal/config"
+	workgraphmcp "github.com/dennisschroeder/workgraph/internal/mcp"
 	workgraphsqlite "github.com/dennisschroeder/workgraph/internal/sqlite"
 )
 
@@ -39,6 +40,12 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return 0
+	case "mcp":
+		if err := runMCP(ctx, args[1:], stderr); err != nil {
+			fmt.Fprintf(stderr, "workgraph mcp: %v\n", err)
+			return 1
+		}
+		return 0
 	case "help", "-h", "--help":
 		writeUsage(stdout)
 		return 0
@@ -47,6 +54,23 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		writeUsage(stderr)
 		return 2
 	}
+}
+
+func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
+	flags := flag.NewFlagSet("mcp", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() > 1 {
+		return errors.New("expected at most one workspace directory")
+	}
+	service, closeDatabase, err := workspaceService(ctx, optionalDirectory(flags.Args()))
+	if err != nil {
+		return err
+	}
+	defer closeDatabase()
+	return workgraphmcp.Run(ctx, service)
 }
 
 func runReady(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -170,5 +194,5 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) error
 }
 
 func writeUsage(writer io.Writer) {
-	fmt.Fprintln(writer, "usage: workgraph <init|ready|show> [arguments]")
+	fmt.Fprintln(writer, "usage: workgraph <init|ready|show|mcp> [arguments]")
 }

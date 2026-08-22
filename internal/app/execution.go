@@ -556,6 +556,14 @@ func (s *Service) ListActivity(ctx context.Context, filter ActivityFilter) ([]wo
 	return items, nil
 }
 
+func (s *Service) LatestActivitySequence(ctx context.Context) (int64, error) {
+	sequence, err := s.store.LatestActivitySequence(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("latest activity sequence: %w", err)
+	}
+	return sequence, nil
+}
+
 func (s *Service) recordActivity(ctx context.Context, repository ports.Repository, candidate work.Activity) error {
 	id, err := s.ids.New()
 	if err != nil {

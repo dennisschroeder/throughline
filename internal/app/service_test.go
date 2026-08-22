@@ -624,6 +624,10 @@ func (s *memoryStore) ListActivity(context.Context, ports.ActivityFilter) ([]wor
 	return nil, nil
 }
 
+func (s *memoryStore) LatestActivitySequence(context.Context) (int64, error) {
+	return 0, nil
+}
+
 func (s *memoryStore) ListAcceptedOutputs(context.Context, ports.AcceptedOutputFilter) ([]ports.AcceptedOutput, error) {
 	return nil, nil
 }
