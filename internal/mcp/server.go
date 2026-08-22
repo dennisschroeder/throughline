@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/dennisschroeder/workgraph/internal/app"
@@ -45,50 +46,102 @@ const serverInstructions = `Use Workgraph as durable shared coordination state, 
 type adapter struct{ service *app.Service }
 
 func (a *adapter) addTools(server *mcp.Server) {
-	a.add(server, "board_overview", "Compact orientation summary.", true, schema(), a.boardOverview)
-	a.add(server, "list_ready_items", "List executable candidate work without claiming it.", true, schema("actor_id"), a.listReady)
-	a.add(server, "get_item", "Retrieve structured work-item context.", true, schema("id"), a.getItem)
-	a.add(server, "get_objective_context", "Retrieve deterministic, bounded objective continuation context.", true, schema("objective_id"), a.getObjectiveContext)
-	a.add(server, "get_changes", "Read cursor-based activity deltas.", true, schema(), a.getChanges)
-	a.add(server, "list_output_profiles", "List governed persisted output profiles.", true, schema(), a.listProfiles)
-	a.add(server, "list_outputs", "Discover accepted reusable outputs.", true, schema(), a.listOutputs)
-	a.add(server, "register_actor", "Register a trusted-local actor.", false, schema("actor_id", "kind", "display_name", "idempotency_key"), a.registerActor)
-	a.add(server, "create_objective", "Create durable intent.", false, schema("actor_id", "key", "title", "desired_outcome", "phase"), a.createObjective)
-	a.add(server, "transition_objective", "Move an objective through its governed phase lifecycle.", false, schema("objective_id", "actor_id", "target_phase", "expected_version"), a.transitionObjective)
-	a.add(server, "propose_plan", "Create a proposed plan with domain-neutral work.", false, schema("objective_id", "actor_id", "title", "revision", "items"), a.proposePlan)
-	a.add(server, "review_plan", "Approve or reject a proposed plan.", false, schema("plan_id", "actor_id", "decision", "reason", "expected_version"), a.reviewPlan)
-	a.add(server, "claim_item", "Acquire an exclusive, expiring work lease.", false, schema("id", "actor_id", "expected_version", "idempotency_key", "lease_seconds"), a.claimItem)
-	a.add(server, "append_progress", "Append a concise durable progress checkpoint.", false, schema("id", "actor_id", "expected_version", "idempotency_key", "summary"), a.appendProgress)
-	a.add(server, "transition_item", "Transition a claimed work item through execution.", false, schema("id", "actor_id", "target_status", "expected_version", "idempotency_key"), a.transitionItem)
-	a.add(server, "define_expected_output", "Bind work to an exact active output profile.", false, schema("work_item_id", "actor_id", "name", "profile_name", "profile_version", "expected_version", "idempotency_key"), a.defineExpectedOutput)
-	a.add(server, "create_output_revision", "Create an immutable output revision with artifact references.", false, schema("expected_output_id", "actor_id", "artifacts"), a.createOutputRevision)
-	a.add(server, "record_validation", "Record validation evidence and re-evaluate acceptance.", false, schema("output_revision_id", "actor_id", "criterion_ref", "validator_kind", "verdict"), a.recordValidation)
-	a.add(server, "propose_external_action", "Record an external action proposal; this never executes it.", false, schema("work_item_id", "actor_id", "expected_version", "idempotency_key", "title", "authorization_subject"), a.proposeAction)
-	a.add(server, "request_action_approval", "Request a principal-bound grant for the current action revision.", false, schema("action_id", "actor_id", "approved_for_actor_id", "expected_action_version", "idempotency_key", "constraints", "request"), a.requestActionApproval)
-	a.add(server, "resolve_action_approval", "Approve or reject a requested external action grant.", false, schema("approval_id", "actor_id", "expected_action_version", "idempotency_key", "decision", "rationale"), a.resolveActionApproval)
-	a.add(server, "check_action_authorization", "Deterministically check a principal-bound external-action grant.", true, schema("action_id", "actor_id", "subject_hash"), a.checkAuthorization)
-	a.add(server, "record_external_action_execution", "Record an observed start, success, or failure; no effect is executed.", false, schema("action_id", "actor_id", "expected_action_version", "idempotency_key", "subject_hash", "authority_grant_id", "state"), a.recordExecution)
+	a.add(server, "board_overview", "Compact orientation summary.", true, schemaFor[workspaceInput](), a.boardOverview)
+	a.add(server, "list_ready_items", "List executable candidate work without claiming it.", true, schemaFor[listReadyInput]("actor_id"), a.listReady)
+	a.add(server, "get_item", "Retrieve structured work-item context.", true, schemaFor[getItemInput]("id"), a.getItem)
+	a.add(server, "get_objective_context", "Retrieve deterministic, bounded objective continuation context.", true, schemaFor[objectiveContextInput]("objective_id"), a.getObjectiveContext)
+	a.add(server, "get_changes", "Read cursor-based activity deltas.", true, schemaFor[changesInput](), a.getChanges)
+	a.add(server, "list_output_profiles", "List governed persisted output profiles.", true, schemaFor[workspaceInput](), a.listProfiles)
+	a.add(server, "get_output_profile", "Read one exact governed output profile version.", true, schemaFor[outputProfileInput]("profile_name", "profile_version"), a.getProfile)
+	a.add(server, "list_outputs", "Discover accepted reusable outputs.", true, schemaFor[outputsInput](), a.listOutputs)
+	a.add(server, "register_actor", "Register a trusted-local actor.", false, schemaFor[registerActorInput]("actor_id", "kind", "display_name", "idempotency_key"), a.registerActor)
+	a.add(server, "create_objective", "Create durable intent.", false, schemaFor[createObjectiveInput]("actor_id", "idempotency_key", "key", "title", "desired_outcome", "phase"), a.createObjective)
+	a.add(server, "transition_objective", "Move an objective through its governed phase lifecycle.", false, schemaFor[transitionObjectiveInput]("objective_id", "actor_id", "target_phase", "expected_version", "idempotency_key"), a.transitionObjective)
+	a.add(server, "propose_plan", "Create a proposed plan with domain-neutral work.", false, schemaFor[planInput]("objective_id", "actor_id", "title", "revision", "items"), a.proposePlan)
+	a.add(server, "review_plan", "Approve or reject a proposed plan.", false, schemaFor[reviewPlanInput]("plan_id", "actor_id", "decision", "reason", "expected_version"), a.reviewPlan)
+	a.add(server, "renew_claim", "Renew an owned work lease.", false, schemaFor[claimRenewInput]("work_item_id", "claim_id", "actor_id", "expected_version", "idempotency_key", "lease_seconds"), a.renewClaim)
+	a.add(server, "release_item", "Release an owned work lease.", false, schemaFor[claimReleaseInput]("work_item_id", "claim_id", "actor_id", "expected_version", "idempotency_key", "reason"), a.releaseClaim)
+	a.add(server, "claim_item", "Acquire an exclusive, expiring work lease.", false, schemaFor[claimInput]("id", "actor_id", "expected_version", "idempotency_key", "lease_seconds"), a.claimItem)
+	a.add(server, "append_progress", "Append a concise durable progress checkpoint.", false, schemaFor[progressInput]("id", "actor_id", "expected_version", "idempotency_key", "summary"), a.appendProgress)
+	a.add(server, "transition_item", "Transition a claimed work item through execution.", false, schemaFor[transitionItemInput]("id", "actor_id", "target_status", "expected_version", "idempotency_key"), a.transitionItem)
+	a.add(server, "define_expected_output", "Bind work to an exact active output profile.", false, schemaFor[expectedOutputInput]("work_item_id", "actor_id", "name", "profile_name", "profile_version", "expected_version", "idempotency_key"), a.defineExpectedOutput)
+	a.add(server, "create_output_revision", "Create an immutable output revision with artifact references.", false, schemaFor[outputRevisionInput]("expected_output_id", "actor_id", "artifacts"), a.createOutputRevision)
+	a.add(server, "record_validation", "Record validation evidence and re-evaluate acceptance.", false, schemaFor[validationInput]("output_revision_id", "actor_id", "criterion_ref", "validator_kind", "verdict"), a.recordValidation)
+	a.add(server, "attach_artifact", "Attach an immutable external reference to work.", false, schemaFor[artifactInput]("work_item_id", "actor_id", "expected_version", "idempotency_key", "kind", "uri"), a.attachArtifact)
+	a.add(server, "link_dependency", "Link a typed dependency within one objective.", false, schemaFor[dependencyInput]("work_item_id", "depends_on_work_item_id", "actor_id", "expected_version", "idempotency_key", "kind"), a.linkDependency)
+	a.add(server, "revise_external_action", "Create the next immutable authorization-subject revision.", false, schemaFor[reviseActionInput]("action_id", "actor_id", "expected_action_version", "expected_work_item_version", "idempotency_key", "authorization_subject"), a.reviseAction)
+	a.add(server, "propose_external_action", "Record an external action proposal; this never executes it.", false, schemaFor[actionInput]("work_item_id", "actor_id", "expected_version", "idempotency_key", "title", "authorization_subject"), a.proposeAction)
+	a.add(server, "request_action_approval", "Request a principal-bound grant for the current action revision.", false, schemaFor[requestActionApprovalInput]("action_id", "actor_id", "approved_for_actor_id", "expected_action_version", "idempotency_key", "constraints", "request"), a.requestActionApproval)
+	a.add(server, "resolve_action_approval", "Approve or reject a requested external action grant.", false, schemaFor[resolveActionApprovalInput]("approval_id", "actor_id", "expected_action_version", "idempotency_key", "decision", "rationale"), a.resolveActionApproval)
+	a.add(server, "check_action_authorization", "Deterministically check a principal-bound external-action grant.", true, schemaFor[authorizationInput]("action_id", "actor_id", "subject_hash"), a.checkAuthorization)
+	a.add(server, "record_external_action_execution", "Record an observed start, success, or failure; no effect is executed.", false, schemaFor[executionInput]("actor_id", "expected_action_version", "idempotency_key", "state"), a.recordExecution)
 }
 
 func (a *adapter) add(server *mcp.Server, name, description string, readOnly bool, inputSchema map[string]any, handler func(context.Context, json.RawMessage) (any, error)) {
 	server.AddTool(&mcp.Tool{Name: name, Description: description, InputSchema: inputSchema, OutputSchema: outputSchema(), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly}}, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		result, err := handler(ctx, request.Params.Arguments)
-		cursor := int64(0)
-		if err == nil {
-			cursor, err = a.service.LatestActivitySequence(ctx)
+		if err != nil {
+			return toolErrorResult(a.errorPayload(ctx, err, request.Params.Arguments)), nil
 		}
-		return toolResult(result, err, cursor), nil
+		cursor := int64(0)
+		cursor, err = a.service.LatestActivitySequence(ctx)
+		if err != nil {
+			return toolErrorResult(a.errorPayload(ctx, err, request.Params.Arguments)), nil
+		}
+		return toolResult(result, cursor), nil
 	})
 }
 
 func schema(required ...string) map[string]any {
-	properties := map[string]any{}
+	return schemaOptional(required)
+}
+
+func schemaFor[T any](required ...string) map[string]any {
+	schema, err := jsonschema.For[T](nil)
+	if err != nil {
+		panic(fmt.Sprintf("derive MCP schema: %v", err))
+	}
+	schema.Required = required
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		panic(fmt.Sprintf("encode MCP schema: %v", err))
+	}
+	var result map[string]any
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		panic(fmt.Sprintf("decode MCP schema: %v", err))
+	}
+	return result
+}
+
+func schemaOptional(required []string, optional ...string) map[string]any {
+	types := map[string]map[string]any{
+		"workspace_id":     {"type": "string", "description": "Optional in the single-workspace server; only local is accepted."},
+		"expected_version": {"type": "integer", "minimum": 1}, "expected_action_version": {"type": "integer", "minimum": 1}, "profile_version": {"type": "integer", "minimum": 1}, "revision": {"type": "integer", "minimum": 1}, "lease_seconds": {"type": "integer", "minimum": 60, "maximum": 28800}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}, "max_items_per_section": {"type": "integer", "minimum": 1, "maximum": 100}, "since": {"type": "string", "pattern": "^[0-9]+$"},
+		"items": {"type": "array"}, "artifacts": {"type": "array"}, "completed": {"type": "array", "items": map[string]any{"type": "string"}}, "remaining": {"type": "array", "items": map[string]any{"type": "string"}}, "discovered": {"type": "array", "items": map[string]any{"type": "string"}},
+		"authorization_subject": {"type": "object"}, "constraints": {"type": "object"}, "contract": {"type": "object"}, "details": {"type": "object"}, "result": {"type": "object"}, "metadata": {"type": "object"}, "transition_to_in_progress": {"type": "boolean"}, "required": {"type": "boolean"}, "return_to_ready": {"type": "boolean"},
+	}
+	properties := map[string]any{"workspace_id": types["workspace_id"]}
+	for _, field := range required {
+		if definition, ok := types[field]; ok {
+			properties[field] = definition
+			continue
+		}
+		properties[field] = map[string]any{"type": "string", "minLength": 1}
+	}
+	for _, field := range optional {
+		if definition, ok := types[field]; ok {
+			properties[field] = definition
+		} else {
+			properties[field] = map[string]any{"type": "string", "minLength": 1}
+		}
+	}
 	for _, field := range []string{
 		"workspace_id", "id", "objective_id", "work_item_id", "plan_id", "approval_id", "action_id", "execution_id", "expected_output_id", "output_revision_id", "actor_id", "approved_for_actor_id", "key", "title", "description", "desired_outcome", "display_name", "kind", "phase", "target_phase", "target_status", "reason", "summary", "revision", "items", "decision", "expected_version", "expected_action_version", "idempotency_key", "lease_seconds", "transition_to_in_progress", "completed", "remaining", "discovered", "blocker", "name", "profile_name", "profile_version", "destination_hint", "ordinal", "contract", "required", "artifacts", "content_digest", "criterion_ref", "validator_kind", "verdict", "evidence_artifact_id", "details", "authorization_subject", "rationale", "constraints", "request", "subject_hash", "authority_grant_id", "state", "result", "since", "limit", "max_items_per_section", "version_constraint", "produced_by", "include", "include_attention",
 	} {
-		properties[field] = map[string]any{}
+		if _, ok := properties[field]; !ok && field == "workspace_id" {
+			properties[field] = types[field]
+		}
 	}
-	properties["workspace_id"] = map[string]any{"type": "string", "description": "Optional in the single-workspace server; only local is accepted."}
 	return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
 }
 
@@ -99,18 +152,19 @@ func outputSchema() map[string]any {
 	}, "required": []string{"workspace", "result"}}
 }
 
-func toolResult(result any, err error, cursor int64) *mcp.CallToolResult {
-	if err != nil {
-		payload := map[string]any{"error": errorPayload(err)}
-		encoded, _ := json.Marshal(payload)
-		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: string(encoded)}}, StructuredContent: payload}
-	}
+func toolResult(result any, cursor int64) *mcp.CallToolResult {
 	payload := map[string]any{"workspace": map[string]string{"id": workspaceID, "change_cursor": fmt.Sprint(cursor)}, "result": result}
 	encoded, _ := json.Marshal(payload)
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded)}}, StructuredContent: payload}
 }
 
-func errorPayload(err error) map[string]any {
+func toolErrorResult(error map[string]any) *mcp.CallToolResult {
+	payload := map[string]any{"error": error}
+	encoded, _ := json.Marshal(payload)
+	return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: string(encoded)}}, StructuredContent: payload}
+}
+
+func (a *adapter) errorPayload(ctx context.Context, err error, raw json.RawMessage) map[string]any {
 	code := "validation_failed"
 	switch {
 	case errors.Is(err, ports.ErrNotFound):
@@ -124,7 +178,14 @@ func errorPayload(err error) map[string]any {
 	}
 	var claim app.ClaimGateError
 	if errors.As(err, &claim) {
-		return map[string]any{"code": "blocked", "message": err.Error(), "requirements": claim.Requirements}
+		code := "blocked"
+		for _, requirement := range claim.Requirements {
+			if requirement.Code == work.ClaimRequirementClaimAvailable {
+				code = "claim_conflict"
+				break
+			}
+		}
+		return map[string]any{"code": code, "message": err.Error(), "requirements": claim.Requirements}
 	}
 	var transition app.TransitionGateError
 	if errors.As(err, &transition) {
@@ -142,7 +203,32 @@ func errorPayload(err error) map[string]any {
 	if err.Error() == "workspace_not_found" {
 		code = "workspace_not_found"
 	}
-	return map[string]any{"code": code, "message": err.Error(), "requirements": []any{}}
+	payload := map[string]any{"code": code, "message": err.Error(), "requirements": []any{}}
+	if code == "version_conflict" {
+		var input map[string]json.RawMessage
+		if json.Unmarshal(raw, &input) == nil {
+			for _, field := range []string{"id", "work_item_id", "objective_id", "action_id"} {
+				var id string
+				if json.Unmarshal(input[field], &id) == nil && id != "" {
+					if current, getErr := a.service.GetWorkItem(ctx, id); getErr == nil {
+						payload["current"] = map[string]any{"id": current.WorkItem.ID, "key": current.WorkItem.Key, "version": current.WorkItem.Version, "status": current.WorkItem.ExecutionStatus}
+						return payload
+					}
+					context, contextErr := a.service.GetObjectiveContext(ctx, id)
+					if contextErr == nil {
+						payload["current"] = map[string]any{"id": context.Objective.ID, "key": context.Objective.Key, "version": context.Objective.Version, "phase": context.Objective.Phase}
+						return payload
+					}
+					action, actionErr := a.service.GetExternalAction(ctx, id)
+					if actionErr == nil {
+						payload["current"] = map[string]any{"id": action.ID, "version": action.Version, "state": action.State, "current_revision": action.CurrentRevision}
+						return payload
+					}
+				}
+			}
+		}
+	}
+	return payload
 }
 
 func decode(raw json.RawMessage, target any) error {
@@ -220,6 +306,7 @@ func (a *adapter) getItem(ctx context.Context, raw json.RawMessage) (any, error)
 type objectiveContextInput struct {
 	workspaceInput
 	ObjectiveID string `json:"objective_id"`
+	ActorID     string `json:"actor_id"`
 	MaxItems    int    `json:"max_items_per_section"`
 }
 
@@ -241,7 +328,102 @@ func (a *adapter) getObjectiveContext(ctx context.Context, raw json.RawMessage) 
 	result.Questions = limitTo(result.Questions, limit)
 	result.Decisions = limitTo(result.Decisions, limit)
 	result.Approvals = limitTo(result.Approvals, limit)
-	return result, nil
+	eligible := make(map[string]struct{})
+	if in.ActorID != "" {
+		ready, err := a.service.ListReadyWorkForActor(ctx, in.ActorID)
+		if err != nil {
+			return nil, err
+		}
+		for _, candidate := range ready {
+			if candidate.Objective.ID == result.Objective.ID {
+				eligible[candidate.WorkItem.ID] = struct{}{}
+			}
+		}
+	}
+	items := make([]ports.WorkItemContext, 0)
+	for _, plan := range result.Plans {
+		for _, planned := range plan.Items {
+			if in.ActorID != "" {
+				if _, ok := eligible[planned.WorkItem.ID]; !ok {
+					continue
+				}
+			}
+			item, err := a.service.GetWorkItem(ctx, planned.WorkItem.ID)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, item)
+			if len(items) == limit {
+				break
+			}
+		}
+		if len(items) == limit {
+			break
+		}
+	}
+	return map[string]any{
+		"objective":              result.Objective,
+		"selected_context":       result.ContextRecords,
+		"plans":                  result.Plans,
+		"questions":              result.Questions,
+		"decisions":              result.Decisions,
+		"approvals":              result.Approvals,
+		"actor_relevant_work":    items,
+		"accepted_outputs":       collectAcceptedOutputs(items),
+		"authority_and_evidence": collectAuthority(items),
+		"artifacts":              collectArtifacts(items),
+		"recent_changes":         objectiveChanges(ctx, a.service, result.Objective.ID, items, limit),
+	}, nil
+}
+
+func collectAcceptedOutputs(items []ports.WorkItemContext) []ports.OutputRevisionDetail {
+	var result []ports.OutputRevisionDetail
+	for _, item := range items {
+		for _, revision := range item.OutputRevisions {
+			if revision.Revision.AcceptanceState == output.RevisionAccepted {
+				result = append(result, revision)
+			}
+		}
+	}
+	return result
+}
+
+func collectAuthority(items []ports.WorkItemContext) []ports.ExternalActionDetail {
+	var result []ports.ExternalActionDetail
+	for _, item := range items {
+		result = append(result, item.ExternalActions...)
+	}
+	return result
+}
+
+func collectArtifacts(items []ports.WorkItemContext) []output.Artifact {
+	var result []output.Artifact
+	for _, item := range items {
+		result = append(result, item.Artifacts...)
+	}
+	return result
+}
+
+func objectiveChanges(ctx context.Context, service *app.Service, objectiveID string, items []ports.WorkItemContext, limit int) []work.Activity {
+	changes, err := service.ListActivity(ctx, app.ActivityFilter{Limit: 100})
+	if err != nil {
+		return nil
+	}
+	itemIDs := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		itemIDs[item.WorkItem.ID] = struct{}{}
+	}
+	result := make([]work.Activity, 0, limit)
+	for _, change := range changes {
+		_, isItemChange := itemIDs[change.WorkItemID]
+		if (change.EntityKind == "objective" && change.EntityID == objectiveID) || isItemChange {
+			result = append(result, change)
+			if len(result) == limit {
+				break
+			}
+		}
+	}
+	return result
 }
 
 func limitTo[T any](items []T, limit int) []T {
@@ -297,6 +479,29 @@ func (a *adapter) listProfiles(ctx context.Context, raw json.RawMessage) (any, e
 	return a.service.ListOutputProfiles(ctx)
 }
 
+type outputProfileInput struct {
+	workspaceInput
+	Name    string `json:"profile_name"`
+	Version int    `json:"profile_version"`
+}
+
+func (a *adapter) getProfile(ctx context.Context, raw json.RawMessage) (any, error) {
+	var in outputProfileInput
+	if err := decode(raw, &in); err != nil {
+		return nil, err
+	}
+	profiles, err := a.service.ListOutputProfiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, profile := range profiles {
+		if profile.Name == in.Name && profile.Version == in.Version {
+			return profile, nil
+		}
+	}
+	return nil, ports.ErrNotFound
+}
+
 type outputsInput struct {
 	workspaceInput
 	ProfileName string `json:"profile_name"`
@@ -337,6 +542,7 @@ func (a *adapter) registerActor(ctx context.Context, raw json.RawMessage) (any, 
 type createObjectiveInput struct {
 	workspaceInput
 	ActorID        string              `json:"actor_id"`
+	IdempotencyKey string              `json:"idempotency_key"`
 	Key            string              `json:"key"`
 	Title          string              `json:"title"`
 	Description    string              `json:"description"`
@@ -349,7 +555,7 @@ func (a *adapter) createObjective(ctx context.Context, raw json.RawMessage) (any
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.CreateObjective(ctx, app.CreateObjectiveCommand{ActorID: in.ActorID, Key: in.Key, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome, Phase: in.Phase})
+	return a.service.CreateObjective(ctx, app.CreateObjectiveCommand{ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome, Phase: in.Phase})
 }
 
 type transitionObjectiveInput struct {
@@ -359,6 +565,7 @@ type transitionObjectiveInput struct {
 	Target          work.ObjectivePhase `json:"target_phase"`
 	Reason          string              `json:"reason"`
 	ExpectedVersion int                 `json:"expected_version"`
+	IdempotencyKey  string              `json:"idempotency_key"`
 }
 
 func (a *adapter) transitionObjective(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -366,7 +573,7 @@ func (a *adapter) transitionObjective(ctx context.Context, raw json.RawMessage) 
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: in.ObjectiveID, ActorID: in.ActorID, TargetPhase: in.Target, Reason: in.Reason, ExpectedVersion: in.ExpectedVersion})
+	return a.service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: in.ObjectiveID, ActorID: in.ActorID, TargetPhase: in.Target, Reason: in.Reason, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey})
 }
 
 type planInput struct {
@@ -420,6 +627,43 @@ func (a *adapter) claimItem(ctx context.Context, raw json.RawMessage) (any, erro
 		return nil, err
 	}
 	return a.service.ClaimWorkItem(ctx, app.ClaimWorkItemCommand{WorkItemID: in.ID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, LeaseDuration: time.Duration(in.LeaseSeconds) * time.Second, TransitionToInProgress: in.Transition})
+}
+
+type claimRenewInput struct {
+	workspaceInput
+	WorkItemID      string `json:"work_item_id"`
+	ClaimID         string `json:"claim_id"`
+	ActorID         string `json:"actor_id"`
+	ExpectedVersion int    `json:"expected_version"`
+	IdempotencyKey  string `json:"idempotency_key"`
+	LeaseSeconds    int    `json:"lease_seconds"`
+}
+
+func (a *adapter) renewClaim(ctx context.Context, raw json.RawMessage) (any, error) {
+	var in claimRenewInput
+	if err := decode(raw, &in); err != nil {
+		return nil, err
+	}
+	return a.service.RenewClaim(ctx, app.RenewClaimCommand{WorkItemID: in.WorkItemID, ClaimID: in.ClaimID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Extension: time.Duration(in.LeaseSeconds) * time.Second})
+}
+
+type claimReleaseInput struct {
+	workspaceInput
+	WorkItemID      string `json:"work_item_id"`
+	ClaimID         string `json:"claim_id"`
+	ActorID         string `json:"actor_id"`
+	ExpectedVersion int    `json:"expected_version"`
+	IdempotencyKey  string `json:"idempotency_key"`
+	Reason          string `json:"reason"`
+	ReturnToReady   bool   `json:"return_to_ready"`
+}
+
+func (a *adapter) releaseClaim(ctx context.Context, raw json.RawMessage) (any, error) {
+	var in claimReleaseInput
+	if err := decode(raw, &in); err != nil {
+		return nil, err
+	}
+	return a.service.ReleaseClaim(ctx, app.ReleaseClaimCommand{WorkItemID: in.WorkItemID, ClaimID: in.ClaimID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Reason: in.Reason, ReturnToReady: in.ReturnToReady})
 }
 
 type progressInput struct {
@@ -519,6 +763,45 @@ func (a *adapter) recordValidation(ctx context.Context, raw json.RawMessage) (an
 	return a.service.RecordValidation(ctx, app.RecordValidationCommand{OutputRevisionID: in.OutputRevisionID, CriterionRef: in.CriterionRef, ValidatorKind: in.ValidatorKind, Verdict: in.Verdict, VerifierActorID: in.ActorID, EvidenceArtifactID: in.EvidenceArtifactID, Details: in.Details})
 }
 
+type artifactInput struct {
+	workspaceInput
+	WorkItemID      string          `json:"work_item_id"`
+	ActorID         string          `json:"actor_id"`
+	ExpectedVersion int             `json:"expected_version"`
+	IdempotencyKey  string          `json:"idempotency_key"`
+	Kind            string          `json:"kind"`
+	URI             string          `json:"uri"`
+	Title           string          `json:"title"`
+	Metadata        json.RawMessage `json:"metadata"`
+}
+
+func (a *adapter) attachArtifact(ctx context.Context, raw json.RawMessage) (any, error) {
+	var in artifactInput
+	if err := decode(raw, &in); err != nil {
+		return nil, err
+	}
+	return a.service.AttachArtifact(ctx, app.AttachArtifactCommand{WorkItemID: in.WorkItemID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Kind: in.Kind, URI: in.URI, Title: in.Title, Metadata: in.Metadata})
+}
+
+type dependencyInput struct {
+	workspaceInput
+	WorkItemID          string              `json:"work_item_id"`
+	DependsOnWorkItemID string              `json:"depends_on_work_item_id"`
+	ActorID             string              `json:"actor_id"`
+	ExpectedVersion     int                 `json:"expected_version"`
+	IdempotencyKey      string              `json:"idempotency_key"`
+	Kind                work.DependencyKind `json:"kind"`
+	Note                string              `json:"note"`
+}
+
+func (a *adapter) linkDependency(ctx context.Context, raw json.RawMessage) (any, error) {
+	var in dependencyInput
+	if err := decode(raw, &in); err != nil {
+		return nil, err
+	}
+	return a.service.LinkDependency(ctx, app.LinkDependencyCommand{WorkItemID: in.WorkItemID, DependsOnWorkItemID: in.DependsOnWorkItemID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Kind: in.Kind, Note: in.Note})
+}
+
 type actionInput struct {
 	workspaceInput
 	WorkItemID      string          `json:"work_item_id"`
@@ -537,6 +820,24 @@ func (a *adapter) proposeAction(ctx context.Context, raw json.RawMessage) (any, 
 		return nil, err
 	}
 	return a.service.ProposeExternalAction(ctx, app.ProposeExternalActionCommand{WorkItemID: in.WorkItemID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Required: in.Required, Title: in.Title, Rationale: in.Rationale, Subject: in.Subject})
+}
+
+type reviseActionInput struct {
+	workspaceInput
+	ActionID                string          `json:"action_id"`
+	ActorID                 string          `json:"actor_id"`
+	ExpectedActionVersion   int             `json:"expected_action_version"`
+	ExpectedWorkItemVersion int             `json:"expected_work_item_version"`
+	IdempotencyKey          string          `json:"idempotency_key"`
+	Subject                 json.RawMessage `json:"authorization_subject"`
+}
+
+func (a *adapter) reviseAction(ctx context.Context, raw json.RawMessage) (any, error) {
+	var in reviseActionInput
+	if err := decode(raw, &in); err != nil {
+		return nil, err
+	}
+	return a.service.ReviseExternalAction(ctx, app.ReviseExternalActionCommand{ActionID: in.ActionID, ActorID: in.ActorID, ExpectedActionVersion: in.ExpectedActionVersion, ExpectedWorkItemVersion: in.ExpectedWorkItemVersion, IdempotencyKey: in.IdempotencyKey, Subject: in.Subject})
 }
 
 type requestActionApprovalInput struct {

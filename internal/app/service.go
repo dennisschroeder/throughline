@@ -27,6 +27,7 @@ func NewService(store ports.Store, ids ports.IDGenerator, clock ports.Clock) *Se
 
 type CreateObjectiveCommand struct {
 	ActorID        string
+	IdempotencyKey string
 	Key            string
 	Title          string
 	Description    string
@@ -50,13 +51,22 @@ func (s *Service) CreateObjective(ctx context.Context, command CreateObjectiveCo
 		return work.Objective{}, err
 	}
 	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
-		if err := repository.CreateObjective(ctx, objective); err != nil {
+		create := func() (work.Objective, error) {
+			if err := repository.CreateObjective(ctx, objective); err != nil {
+				return work.Objective{}, err
+			}
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "objective", EntityID: objective.ID, ActorID: command.ActorID, EventType: "objective.created", Summary: fmt.Sprintf("Objective %s created", objective.Key)}); err != nil {
+				return work.Objective{}, err
+			}
+			return objective, nil
+		}
+		if strings.TrimSpace(command.IdempotencyKey) == "" {
+			_, err := create()
 			return err
 		}
-		return s.recordActivity(ctx, repository, work.Activity{
-			EntityKind: "objective", EntityID: objective.ID, ActorID: command.ActorID,
-			EventType: "objective.created", Summary: fmt.Sprintf("Objective %s created", objective.Key),
-		})
+		created, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "create_objective", command, create)
+		objective = created
+		return err
 	}); err != nil {
 		return work.Objective{}, fmt.Errorf("create objective: %w", err)
 	}

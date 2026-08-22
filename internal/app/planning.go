@@ -32,6 +32,7 @@ type TransitionObjectiveCommand struct {
 	ActorID         string
 	Reason          string
 	ExpectedVersion int
+	IdempotencyKey  string
 }
 
 func (s *Service) TransitionObjective(ctx context.Context, command TransitionObjectiveCommand) (work.Objective, error) {
@@ -40,34 +41,47 @@ func (s *Service) TransitionObjective(ctx context.Context, command TransitionObj
 	}
 	var transitioned work.Objective
 	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
-		objective, err := repository.Objective(ctx, command.ObjectiveID)
-		if err != nil {
-			return err
-		}
-		if objective.Version != command.ExpectedVersion {
-			return ports.ErrVersionConflict
-		}
-		if command.TargetPhase == work.ObjectiveExecution {
-			approved, err := repository.HasApprovedPlan(ctx, objective.ID)
+		transition := func() (work.Objective, error) {
+			objective, err := repository.Objective(ctx, command.ObjectiveID)
 			if err != nil {
-				return err
+				return work.Objective{}, err
 			}
-			if !approved {
-				return errors.New("objective cannot enter execution without an approved plan")
+			if objective.Version != command.ExpectedVersion {
+				return work.Objective{}, ports.ErrVersionConflict
 			}
+			if command.TargetPhase == work.ObjectiveExecution {
+				approved, err := repository.HasApprovedPlan(ctx, objective.ID)
+				if err != nil {
+					return work.Objective{}, err
+				}
+				if !approved {
+					return work.Objective{}, errors.New("objective cannot enter execution without an approved plan")
+				}
+			}
+			transitioned, err = work.TransitionObjective(objective, command.TargetPhase, command.Reason, s.clock.Now())
+			if err != nil {
+				return work.Objective{}, err
+			}
+			transitioned.UpdatedBy = strings.TrimSpace(command.ActorID)
+			if err := repository.UpdateObjective(ctx, transitioned, command.ExpectedVersion); err != nil {
+				return work.Objective{}, err
+			}
+			if err := s.recordActivity(ctx, repository, work.Activity{
+				EntityKind: "objective", EntityID: transitioned.ID, ActorID: command.ActorID,
+				EventType: "objective.phase_changed", Summary: fmt.Sprintf("Objective moved from %s to %s", objective.Phase, transitioned.Phase),
+			}); err != nil {
+				return work.Objective{}, err
+			}
+			return transitioned, nil
 		}
-		transitioned, err = work.TransitionObjective(objective, command.TargetPhase, command.Reason, s.clock.Now())
-		if err != nil {
+		if strings.TrimSpace(command.IdempotencyKey) == "" {
+			var err error
+			transitioned, err = transition()
 			return err
 		}
-		transitioned.UpdatedBy = strings.TrimSpace(command.ActorID)
-		if err := repository.UpdateObjective(ctx, transitioned, command.ExpectedVersion); err != nil {
-			return err
-		}
-		return s.recordActivity(ctx, repository, work.Activity{
-			EntityKind: "objective", EntityID: transitioned.ID, ActorID: command.ActorID,
-			EventType: "objective.phase_changed", Summary: fmt.Sprintf("Objective moved from %s to %s", objective.Phase, transitioned.Phase),
-		})
+		var err error
+		transitioned, err = executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "transition_objective", command, transition)
+		return err
 	}); err != nil {
 		return work.Objective{}, fmt.Errorf("transition objective: %w", err)
 	}

@@ -17,6 +17,19 @@ type ExternalActionResult struct {
 	Revision authority.ExternalActionRevision
 }
 
+func (s *Service) GetExternalAction(ctx context.Context, id string) (authority.ExternalAction, error) {
+	var action authority.ExternalAction
+	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
+		var err error
+		action, err = repository.ExternalAction(ctx, id)
+		return err
+	})
+	if err != nil {
+		return authority.ExternalAction{}, fmt.Errorf("get external action: %w", err)
+	}
+	return action, nil
+}
+
 type ProposeExternalActionCommand struct {
 	WorkItemID      string
 	ActorID         string
