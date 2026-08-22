@@ -1043,10 +1043,17 @@ Implementation notes:
 
 ### Cross-cutting contract
 
-All tool inputs/outputs use JSON Schema (generated from runtime schemas where possible). State changing calls carry:
+All tool inputs/outputs use JSON Schema (generated from runtime schemas where possible). A
+multi-workspace server requires an allowlisted `workspace_id` on every call; a server with exactly
+one configured workspace may supply that workspace as the default. Responses always identify the
+resolved workspace. Arbitrary filesystem/database paths and mutable session-level workspace
+selection are forbidden; see ADR 0009.
+
+State changing calls carry:
 
 ```json
 {
+  "workspace_id": "research-project",
   "actor_id": "codex:run-2026-08-21-01",
   "idempotency_key": "unique-per-actor-operation-attempt",
   "expected_version": 7
@@ -1068,7 +1075,7 @@ Common error shape:
 }
 ```
 
-Recommended codes: `not_found`, `validation_failed`, `version_conflict`, `claim_conflict`, `claim_expired`, `transition_not_allowed`, `objective_phase_disallows_execution`, `plan_not_approved`, `approval_required`, `approval_stale`, `capability_mismatch`, `output_profile_inactive`, `output_contract_unsatisfied`, `output_revision_unaccepted`, `external_action_not_authorized`, `authority_grant_expired`, `authority_principal_mismatch`, `authorization_subject_mismatch`, `dependency_cycle`, `blocked`, `idempotency_key_reused_with_different_request`, `forbidden` (reserved for an authenticated future layer).
+Recommended codes: `workspace_required`, `workspace_not_found`, `not_found`, `validation_failed`, `version_conflict`, `claim_conflict`, `claim_expired`, `transition_not_allowed`, `objective_phase_disallows_execution`, `plan_not_approved`, `approval_required`, `approval_stale`, `capability_mismatch`, `output_profile_inactive`, `output_contract_unsatisfied`, `output_revision_unaccepted`, `external_action_not_authorized`, `authority_grant_expired`, `authority_principal_mismatch`, `authorization_subject_mismatch`, `dependency_cycle`, `blocked`, `idempotency_key_reused_with_different_request`, `forbidden` (reserved for an authenticated future layer).
 
 Set MCP tool annotations accurately as advisory host hints: read tools `readOnlyHint: true`; mutations `readOnlyHint: false`; only declare `idempotentHint: true` where the server’s idempotency design genuinely guarantees it. Do not mistake annotations for authorization or data integrity.
 
@@ -1876,7 +1883,7 @@ Rules:
 |---|---|---|
 | Language/runtime | Drives binary packaging, MCP integration, SQLite tooling | **Resolved for V1: Go** with official MCP SDK and CGo-free SQLite. Rust is the documented fallback only if a vertical slice proves a decisive advantage. |
 | License | Central to open-source USP | Select before public code: Apache-2.0 or MIT are simple permissive candidates; validate contributor/governance needs. |
-| Workspace model | V1 has one database per project; multi-workspace support affects every ID/tool | Start with one workspace per database and explicit configuration path. |
+| Workspace model | V1 has one database per project; multi-workspace support affects every ID/tool | Start with one workspace per database. Preserve ADR 0009's explicit per-call `workspace_id` routing contract so a later allowlisted multi-workspace server does not require hidden session state. |
 | Identity/auth | Local usage may only need actor strings; shared/network mode needs trust boundaries | Keep V1 local/trusted. Do not imply access control exists. |
 | Claim renewal | Leases must be practical for long work | **Resolved: explicit `renew_claim` is V1.** Specify maximum duration and heartbeat guidance before implementation. |
 | Status/claim coupling | Auto-transition on claim is convenient but may surprise users | Default to atomic `ready → in_progress`; expose option and document it. |

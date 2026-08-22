@@ -1,0 +1,1 @@
+{"action_type":"tool.install","arguments":[],"constraints":{"global_install":false},"credential_requirements":[],"permissions":["config.write:project","network.read"],"scope":{"environment":"project"},"target":{"package":"browser-mcp<&>\u2028\u2029","version":"2.1.0"}}

@@ -1,19 +1,68 @@
 # Workgraph
 
-Workgraph is a lean, local-first authoritative state layer for domain-neutral agentic work. Its
-target deployment is one Go binary and one SQLite database, with MCP as the primary agent interface
-and optional human projections.
+Workgraph is a lean, local-first authoritative state layer for domain-neutral agentic work. The
+current milestone provides one Go binary, one SQLite database, deterministic workspace
+initialization, governed planning, durable execution/output records, and safe multi-actor
+coordination.
 
-## Repository status
+## Build and verify
 
-The repository is prepared for the first dedicated implementation task. No product code has been
-implemented yet.
+Requires Go 1.26 or newer.
 
-- [`docs/implementation-handoff.md`](docs/implementation-handoff.md) is the canonical product and
-  architecture specification.
-- [`docs/implementation-kickoff.md`](docs/implementation-kickoff.md) is the bounded first coding
-  task and its exit criteria.
-- `AGENTS.md` contains the repository-wide working agreements.
+```bash
+go build ./...
+go vet ./...
+go test ./...
+go test ./internal/sqlite -run TestInitializationAndDomainNeutralVerticalSlice -count=1
+go test ./internal/sqlite -run TestIntentAndPlanningVerticalSlice -count=1
+go test ./internal/sqlite -run TestDurableExecutionGraphVerticalSlice -count=1
+go test ./internal/sqlite -run TestCoordinationAndAuthorityVerticalSlice -count=1
+go test ./internal/sqlite -run TestConcurrentAgentsCannotBothClaimWorkItem -count=20
+```
 
-The first Codex task should implement executable foundations and one domain-neutral vertical slice,
-verify the result, and stop before expanding into the full V1 tool surface.
+The SQLite driver is CGo-free; `CGO_ENABLED=0 go build ./...` is supported.
+
+## Initialize a workspace
+
+```bash
+go run ./cmd/workgraph init
+go run ./cmd/workgraph init --database data/workgraph.db /path/to/workspace
+go run ./cmd/workgraph ready /path/to/workspace
+go run ./cmd/workgraph show WORK_ITEM_ID /path/to/workspace
+```
+
+The default layout is:
+
+```text
+.workgraph/
+  config.toml
+  workgraph.db
+```
+
+A relative configured database path is resolved from `.workgraph/`. `init` can be rerun safely: it
+reopens the configured database, applies only unapplied embedded migrations, and does not duplicate
+seeded profiles.
+
+## Current architecture
+
+- `internal/domain`: transport- and persistence-independent work, output, and authority value types.
+- `internal/app`: transaction-scoped planning, coordination, leases, readiness, output production,
+  validation, authority recording, reuse, activity, and retrieval use cases.
+- `internal/ports`: repository, transaction, clock, and identifier boundaries.
+- `internal/sqlite`: authoritative storage, pragmas, migrations, seeds, and repository implementation.
+- `internal/config`: workspace discovery, TOML configuration, and database-path resolution.
+- `internal/cli` and `cmd/workgraph`: thin `init`, `ready`, and `show` adapters and binary entry point.
+
+The implemented scenario models research and agent-skill design. It requires no Git repository,
+branch, commit, pull request, build pipeline, CI system, or code-specific domain field.
+
+## Milestone boundary
+
+This is not the full V1. It intentionally excludes MCP, authenticated identity, a policy language,
+the complete transition/review policy, manual blockers, a web UI, and orchestration. Workgraph
+records external-action proposals, delegated authority, and observed execution evidence; it never
+performs an external effect.
+
+See [development and verification](docs/development.md), the canonical
+[implementation handoff](docs/implementation-handoff.md), the bounded
+[implementation kickoff](docs/implementation-kickoff.md), and [ADRs](docs/adr/).
