@@ -66,14 +66,14 @@ func TestReadyAndShowInspectExecutionGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 	objective, err := service.CreateObjective(ctx, app.CreateObjectiveCommand{
-		ActorID: "human:owner",
-		Key:     "OBJ-CLI", Title: "Inspect research work", DesiredOutcome: "Ready work is visible.", Phase: work.ObjectivePlanning,
+		ActorID: "human:owner", IdempotencyKey: "create-objective-cli",
+		Key: "OBJ-CLI", Title: "Inspect research work", DesiredOutcome: "Ready work is visible.", Phase: work.ObjectivePlanning,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	plan, err := service.ProposePlan(ctx, app.ProposePlanCommand{
-		ObjectiveID: objective.ID, ActorID: "agent:planner", Title: "Research plan", Revision: 1,
+		ObjectiveID: objective.ID, ActorID: "agent:planner", IdempotencyKey: "propose-plan-cli", Title: "Research plan", Revision: 1,
 		Items: []app.ProposedWorkItem{{
 			ClientRef: "research", Key: "WG-CLI", Title: "Prepare the research dossier", Kind: "research",
 			Priority: work.PriorityHigh, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
@@ -82,10 +82,10 @@ func TestReadyAndShowInspectExecutionGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: plan.Plan.ID, ReviewerActorID: "human:reviewer", Decision: work.PlanApproved, Reason: "Ready for execution.", ExpectedVersion: 1}); err != nil {
+	if _, err := service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: plan.Plan.ID, ReviewerActorID: "human:reviewer", IdempotencyKey: "review-plan-cli", Decision: work.PlanApproved, Reason: "Ready for execution.", ExpectedVersion: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: objective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:reviewer", Reason: "Begin work.", ExpectedVersion: 1}); err != nil {
+	if _, err := service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: objective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:reviewer", IdempotencyKey: "transition-objective-cli", Reason: "Begin work.", ExpectedVersion: 1}); err != nil {
 		t.Fatal(err)
 	}
 	itemContext, err := service.GetWorkItem(ctx, plan.Items[0].WorkItem.ID)

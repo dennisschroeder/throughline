@@ -109,7 +109,8 @@ func TestCoordinationAndAuthorityVerticalSlice(t *testing.T) {
 	item.Version++
 	approval, err := service.RequestExternalActionApproval(ctx, app.RequestExternalActionApprovalCommand{
 		ActionID: actionResult.Action.ID, ActorID: "agent:researcher", ExpectedActionVersion: actionResult.Action.Version,
-		IdempotencyKey: "request-publish", ApprovedForActorID: "agent:researcher", Constraints: json.RawMessage(`{"audience":"internal"}`),
+		ExpectedSubjectHash: actionResult.Revision.AuthorizationSubjectHash,
+		IdempotencyKey:      "request-publish", ApprovedForActorID: "agent:researcher", Constraints: json.RawMessage(`{"audience":"internal"}`),
 		ExpiresAt: ptrTime(time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)), Request: "Authorize this exact internal publication.",
 	})
 	if err != nil {
@@ -201,7 +202,7 @@ func TestCoordinationAndAuthorityVerticalSlice(t *testing.T) {
 		t.Fatal(err)
 	}
 	item.Version++
-	staleApproval, err := service.RequestExternalActionApproval(ctx, app.RequestExternalActionApprovalCommand{ActionID: staleAction.Action.ID, ActorID: "agent:researcher", ExpectedActionVersion: staleAction.Action.Version, IdempotencyKey: "request-stale-grant", ApprovedForActorID: "agent:researcher", Constraints: json.RawMessage(`{"audience":"internal"}`), Request: "Authorize this exact dossier publication."})
+	staleApproval, err := service.RequestExternalActionApproval(ctx, app.RequestExternalActionApprovalCommand{ActionID: staleAction.Action.ID, ActorID: "agent:researcher", ExpectedActionVersion: staleAction.Action.Version, ExpectedSubjectHash: staleAction.Revision.AuthorizationSubjectHash, IdempotencyKey: "request-stale-grant", ApprovedForActorID: "agent:researcher", Constraints: json.RawMessage(`{"audience":"internal"}`), Request: "Authorize this exact dossier publication."})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,13 +235,13 @@ func TestCoordinationAndAuthorityVerticalSlice(t *testing.T) {
 func createReadyResearchItem(t *testing.T, ctx context.Context, service *app.Service) work.WorkItem {
 	t.Helper()
 	objective, err := service.CreateObjective(ctx, app.CreateObjectiveCommand{
-		ActorID: "human:owner", Key: "OBJ-COORDINATION", Title: "Publish a research dossier", DesiredOutcome: "A reviewed, internally published dossier.", Phase: work.ObjectivePlanning,
+		ActorID: "human:owner", IdempotencyKey: "create-objective-coordination", Key: "OBJ-COORDINATION", Title: "Publish a research dossier", DesiredOutcome: "A reviewed, internally published dossier.", Phase: work.ObjectivePlanning,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	plan, err := service.ProposePlan(ctx, app.ProposePlanCommand{
-		ObjectiveID: objective.ID, ActorID: "agent:planner", Title: "Research and publish", Revision: 1,
+		ObjectiveID: objective.ID, ActorID: "agent:planner", IdempotencyKey: "propose-plan-coordination", Title: "Research and publish", Revision: 1,
 		Items: []app.ProposedWorkItem{{
 			ClientRef: "dossier", Key: "WG-COORDINATION", Title: "Research the dossier", Kind: "research", Priority: work.PriorityHigh,
 			EstimatedScope: work.ScopeMedium, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent, RequiredCapabilities: []string{"research"},
@@ -249,10 +250,10 @@ func createReadyResearchItem(t *testing.T, ctx context.Context, service *app.Ser
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: plan.Plan.ID, ReviewerActorID: "human:owner", Decision: work.PlanApproved, Reason: "The plan is ready.", ExpectedVersion: 1}); err != nil {
+	if _, err := service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: plan.Plan.ID, ReviewerActorID: "human:owner", IdempotencyKey: "review-plan-coordination", Decision: work.PlanApproved, Reason: "The plan is ready.", ExpectedVersion: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: objective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:owner", Reason: "Start the approved plan.", ExpectedVersion: 1}); err != nil {
+	if _, err := service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: objective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:owner", IdempotencyKey: "transition-objective-coordination", Reason: "Start the approved plan.", ExpectedVersion: 1}); err != nil {
 		t.Fatal(err)
 	}
 	item := plan.Items[0].WorkItem
@@ -398,7 +399,7 @@ func TestClaimRequiresNoOpenBlockerAndMatchingExecutionApproval(t *testing.T) {
 	if _, err := service.AssignActorCapability(ctx, app.AssignActorCapabilityCommand{ActorID: "agent:researcher", Capability: "research", Description: "Can conduct source research.", GrantedBy: "human:owner", IdempotencyKey: "gates-capability"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.AskQuestion(ctx, app.AskQuestionCommand{ObjectiveID: item.ObjectiveID, WorkItemID: item.ID, ActorID: "agent:researcher", Question: "Is the source scope complete?"}); err != nil {
+	if _, err := service.AskQuestion(ctx, app.AskQuestionCommand{ObjectiveID: item.ObjectiveID, WorkItemID: item.ID, ActorID: "agent:researcher", IdempotencyKey: "ask-question-coordination", Question: "Is the source scope complete?"}); err != nil {
 		t.Fatal(err)
 	}
 	_, err = service.ClaimWorkItem(ctx, app.ClaimWorkItemCommand{WorkItemID: item.ID, ActorID: "agent:researcher", ExpectedVersion: item.Version, IdempotencyKey: "claim-blocked", LeaseDuration: time.Hour, TransitionToInProgress: true})

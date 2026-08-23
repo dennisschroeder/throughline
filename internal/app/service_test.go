@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ func TestRepositoryIndependentSkillDesignSlice(t *testing.T) {
 
 	objective, err := service.CreateObjective(ctx, CreateObjectiveCommand{
 		ActorID:        "human:owner",
+		IdempotencyKey: "objective",
 		Key:            "OBJ-SKILL",
 		Title:          "Design a reusable interview-synthesis skill",
 		DesiredOutcome: "A reviewed skill package that turns interview notes into a source-linked synthesis.",
@@ -31,6 +33,7 @@ func TestRepositoryIndependentSkillDesignSlice(t *testing.T) {
 	}
 	plan, err := service.CreatePlan(ctx, CreatePlanCommand{
 		ActorID:         "human:owner",
+		IdempotencyKey:  "plan",
 		ObjectiveID:     objective.ID,
 		Title:           "Interview-synthesis skill plan",
 		Summary:         "Define the inputs, synthesis method, output contract, and evaluation rubric.",
@@ -42,6 +45,7 @@ func TestRepositoryIndependentSkillDesignSlice(t *testing.T) {
 	}
 	item, err := service.CreateWorkItem(ctx, CreateWorkItemCommand{
 		ActorID:           "human:owner",
+		IdempotencyKey:    "item",
 		Key:               "WG-1",
 		ObjectiveID:       objective.ID,
 		PlanID:            plan.ID,
@@ -92,6 +96,17 @@ func TestRepositoryIndependentSkillDesignSlice(t *testing.T) {
 	}
 }
 
+func TestServiceRequiresIdempotencyKey(t *testing.T) {
+	clock := fixedClock{value: time.Date(2026, 8, 21, 12, 30, 0, 0, time.UTC)}
+	service := NewService(newMemoryStore(clock.value), &sequenceIDs{}, clock)
+	_, err := service.CreateObjective(context.Background(), CreateObjectiveCommand{
+		ActorID: "human:owner", Key: "OBJ-KEY", Title: "Require durable mutation keys", DesiredOutcome: "No mutation bypass", Phase: work.ObjectiveIdea,
+	})
+	if err == nil || !strings.Contains(err.Error(), "idempotency key") {
+		t.Fatalf("expected missing idempotency key error, got %v", err)
+	}
+}
+
 func TestCreatePlanOnlyCreatesDrafts(t *testing.T) {
 	clock := fixedClock{value: time.Date(2026, 8, 21, 12, 30, 0, 0, time.UTC)}
 	store := newMemoryStore(clock.value)
@@ -99,6 +114,7 @@ func TestCreatePlanOnlyCreatesDrafts(t *testing.T) {
 	service := NewService(store, &sequenceIDs{}, clock)
 	_, err := service.CreatePlan(context.Background(), CreatePlanCommand{
 		ActorID:         "human:owner",
+		IdempotencyKey:  "premature-plan",
 		ObjectiveID:     "objective",
 		Title:           "Premature plan",
 		Revision:        1,
@@ -109,6 +125,32 @@ func TestCreatePlanOnlyCreatesDrafts(t *testing.T) {
 	}
 }
 
+func TestCreateWorkItemAcceptedReadyRequiresApprovedExecutionContext(t *testing.T) {
+	clock := fixedClock{value: time.Date(2026, 8, 21, 12, 30, 0, 0, time.UTC)}
+	store := newMemoryStore(clock.value)
+	store.objectives["objective"] = work.Objective{ID: "objective", Key: "OBJ", Title: "Objective", Phase: work.ObjectivePlanning, Version: 1}
+	store.plans["plan"] = work.Plan{ID: "plan", ObjectiveID: "objective", Title: "Plan", Revision: 1, CommitmentState: work.PlanApproved, Version: 1}
+	service := NewService(store, &sequenceIDs{}, clock)
+	command := CreateWorkItemCommand{
+		ActorID: "human:owner", IdempotencyKey: "accepted-ready", Key: "WG-READY", ObjectiveID: "objective", PlanID: "plan", Title: "Ready item", Kind: "research",
+		CommitmentState: work.ItemAccepted, ExecutionStatus: work.StatusReady, Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
+		ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny, AttentionState: work.AttentionNone,
+	}
+	if _, err := service.CreateWorkItem(context.Background(), command); err == nil {
+		t.Fatal("expected accepted ready work item outside execution to be rejected")
+	}
+	objective := store.objectives["objective"]
+	objective.Phase = work.ObjectiveExecution
+	store.objectives[objective.ID] = objective
+	item, err := service.CreateWorkItem(context.Background(), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.CommitmentState != work.ItemAccepted || item.ExecutionStatus != work.StatusReady {
+		t.Fatalf("item = %#v", item)
+	}
+}
+
 func TestCreateObjectiveCannotStartInExecution(t *testing.T) {
 	clock := fixedClock{value: time.Date(2026, 8, 21, 12, 30, 0, 0, time.UTC)}
 	store := newMemoryStore(clock.value)
@@ -116,6 +158,7 @@ func TestCreateObjectiveCannotStartInExecution(t *testing.T) {
 
 	_, err := service.CreateObjective(context.Background(), CreateObjectiveCommand{
 		ActorID:        "human:owner",
+		IdempotencyKey: "premature-objective",
 		Key:            "OBJ-PREMATURE",
 		Title:          "Premature objective",
 		DesiredOutcome: "Execution without an approved handoff",
@@ -126,6 +169,55 @@ func TestCreateObjectiveCannotStartInExecution(t *testing.T) {
 	}
 	if len(store.objectives) != 0 {
 		t.Fatal("rejected objective was persisted")
+	}
+}
+
+func TestRequestAttentionPersistsObjectiveScopedTargetAssociation(t *testing.T) {
+	clock := fixedClock{value: time.Date(2026, 8, 23, 12, 30, 0, 0, time.UTC)}
+	store := newMemoryStore(clock.value)
+	store.questions["question"] = work.Question{ID: "question", ObjectiveID: "objective", Text: "Which policy applies?", Status: work.QuestionOpen, Version: 1, CreatedBy: "agent:researcher"}
+	store.decisions["decision"] = work.Decision{ID: "decision", ObjectiveID: "objective", Title: "Use the local store", Outcome: "SQLite", Status: work.DecisionAccepted, DecidedBy: "human:owner"}
+	service := NewService(store, &sequenceIDs{}, clock)
+
+	question, err := service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "question", TargetID: "question", ActorID: "agent:researcher", IdempotencyKey: "question-attention", ExpectedVersion: 1, AttentionState: work.AttentionNeedsHumanDecision})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if question.Question == nil || question.WorkItem != nil || question.TargetKind != "question" || question.TargetID != "question" {
+		t.Fatalf("question attention result = %#v", question)
+	}
+	if updated := store.questions["question"]; !updated.RequiresHumanAttention || updated.Version != 2 {
+		t.Fatalf("question attention state = %#v", updated)
+	}
+
+	decision, err := service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "decision", TargetID: "decision", ActorID: "agent:researcher", IdempotencyKey: "decision-attention", ExpectedVersion: 1, AttentionState: work.AttentionNeedsHumanReview})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Decision == nil || decision.WorkItem != nil || decision.TargetKind != "decision" || decision.TargetID != "decision" {
+		t.Fatalf("decision attention result = %#v", decision)
+	}
+	intervention, err := service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "intervention", TargetID: "release-1", ActorID: "agent:researcher", IdempotencyKey: "intervention-attention", AttentionState: work.AttentionInterventionRequired})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intervention.TargetKind != "intervention" || intervention.TargetID != "release-1" || intervention.WorkItem != nil || intervention.Question != nil || intervention.Decision != nil {
+		t.Fatalf("intervention attention result = %#v", intervention)
+	}
+	if len(store.activities) != 3 {
+		t.Fatalf("attention activity count = %d", len(store.activities))
+	}
+	for _, activity := range store.activities {
+		var payload struct {
+			TargetKind string `json:"target_kind"`
+			TargetID   string `json:"target_id"`
+		}
+		if err := json.Unmarshal(activity.PayloadJSON, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if activity.EntityKind != payload.TargetKind || activity.EntityID != payload.TargetID || activity.WorkItemID != "" {
+			t.Fatalf("attention activity = %#v, payload = %#v", activity, payload)
+		}
 	}
 }
 
@@ -151,6 +243,7 @@ type memoryStore struct {
 	contexts   map[string]work.ContextRecord
 	questions  map[string]work.Question
 	decisions  map[string]work.Decision
+	activities []work.Activity
 	profiles   map[string]output.Profile
 	expected   []output.ExpectedOutput
 }
@@ -286,6 +379,16 @@ func (s *memoryStore) LatestApprovedPlanRevision(_ context.Context, objectiveID 
 	return latest, nil
 }
 
+func (s *memoryStore) LatestPlanRevision(_ context.Context, objectiveID string) (int, error) {
+	latest := 0
+	for _, plan := range s.plans {
+		if plan.ObjectiveID == objectiveID && plan.Revision > latest {
+			latest = plan.Revision
+		}
+	}
+	return latest, nil
+}
+
 func (s *memoryStore) SupersedeEarlierPlans(_ context.Context, objectiveID string, revision int, updatedAt time.Time) error {
 	for id, plan := range s.plans {
 		if plan.ObjectiveID == objectiveID && plan.Revision < revision && plan.CommitmentState == work.PlanApproved {
@@ -324,6 +427,10 @@ func (s *memoryStore) SetPlanItemsCommitment(_ context.Context, planID string, s
 }
 
 func (s *memoryStore) CreateApproval(context.Context, work.Approval) error { return nil }
+func (s *memoryStore) Approval(context.Context, string) (work.Approval, error) {
+	return work.Approval{}, ports.ErrNotFound
+}
+func (s *memoryStore) UpdateApproval(context.Context, work.Approval, int) error { return nil }
 
 func (s *memoryStore) CreateWorkItem(_ context.Context, item work.WorkItem) error {
 	s.items[item.ID] = item
@@ -339,6 +446,9 @@ func (s *memoryStore) WorkItem(_ context.Context, id string) (work.WorkItem, err
 }
 
 func (s *memoryStore) AddWorkItemCapability(context.Context, string, string) error { return nil }
+func (s *memoryStore) ReplaceWorkItemCapabilities(context.Context, string, []string) error {
+	return nil
+}
 
 func (s *memoryStore) CreateActor(context.Context, work.Actor) error { return nil }
 func (s *memoryStore) Actor(context.Context, string) (work.Actor, error) {
@@ -357,7 +467,12 @@ func (s *memoryStore) RequiredCapabilities(context.Context, string) ([]string, e
 func (s *memoryStore) PlanApprovedForWorkItem(context.Context, string) (bool, error) {
 	return true, nil
 }
-func (s *memoryStore) HasOpenBlocker(context.Context, string) (bool, error) { return false, nil }
+func (s *memoryStore) HasOpenBlocker(context.Context, string) (bool, error)          { return false, nil }
+func (s *memoryStore) CreateManualBlocker(context.Context, work.ManualBlocker) error { return nil }
+func (s *memoryStore) ManualBlocker(context.Context, string) (work.ManualBlocker, error) {
+	return work.ManualBlocker{}, ports.ErrNotFound
+}
+func (s *memoryStore) UpdateManualBlocker(context.Context, work.ManualBlocker) error { return nil }
 func (s *memoryStore) WorkItemApprovalSatisfied(context.Context, string, string, time.Time) (bool, error) {
 	return true, nil
 }
@@ -498,6 +613,10 @@ func (s *memoryStore) UpdateWorkItem(_ context.Context, item work.WorkItem, _ in
 	return nil
 }
 
+func (s *memoryStore) WorkItemParentCreatesCycle(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
 func (s *memoryStore) CreateAcceptanceCriterion(context.Context, work.AcceptanceCriterion) error {
 	return nil
 }
@@ -515,6 +634,9 @@ func (s *memoryStore) AcceptanceCriteriaSatisfied(context.Context, string) (bool
 }
 
 func (s *memoryStore) CreateDependency(context.Context, work.Dependency) error { return nil }
+func (s *memoryStore) DeleteDependency(context.Context, string, string, work.DependencyKind) error {
+	return nil
+}
 
 func (s *memoryStore) DependencyCreatesCycle(context.Context, string, string) (bool, error) {
 	return false, nil
@@ -524,7 +646,10 @@ func (s *memoryStore) HardDependenciesSatisfied(context.Context, string) (bool, 
 	return true, nil
 }
 
-func (s *memoryStore) CreateActivity(context.Context, work.Activity) error { return nil }
+func (s *memoryStore) CreateActivity(_ context.Context, activity work.Activity) error {
+	s.activities = append(s.activities, activity)
+	return nil
+}
 
 func (s *memoryStore) ExpectedOutput(_ context.Context, id string) (output.ExpectedOutput, error) {
 	for _, expected := range s.expected {
@@ -602,6 +727,26 @@ func (s *memoryStore) GetObjectiveContext(_ context.Context, id string) (ports.O
 		return ports.ObjectiveContext{}, ports.ErrNotFound
 	}
 	return ports.ObjectiveContext{Objective: objective}, nil
+}
+
+func (s *memoryStore) SelectObjectiveContext(ctx context.Context, query ports.ObjectiveContextSelectionQuery) (ports.ObjectiveContextSelection, error) {
+	context, err := s.GetObjectiveContext(ctx, query.ObjectiveID)
+	if err != nil {
+		return ports.ObjectiveContextSelection{}, err
+	}
+	return ports.ObjectiveContextSelection{Context: context}, nil
+}
+
+func (s *memoryStore) ListWorkItemContexts(ctx context.Context) ([]ports.WorkItemContext, error) {
+	result := make([]ports.WorkItemContext, 0, len(s.items))
+	for id := range s.items {
+		item, err := s.GetWorkItemContext(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, nil
 }
 
 func (s *memoryStore) ListOutputProfiles(context.Context) ([]output.Profile, error) {

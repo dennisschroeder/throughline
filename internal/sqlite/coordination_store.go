@@ -95,7 +95,40 @@ SELECT EXISTS(
 }
 
 func (r *transactionRepository) HasOpenBlocker(ctx context.Context, workItemID string) (bool, error) {
-	return queryBoolean(ctx, r.transaction, "SELECT EXISTS(SELECT 1 FROM questions WHERE work_item_id = ? AND status = 'open')", workItemID)
+	return queryBoolean(ctx, r.transaction, `SELECT EXISTS(SELECT 1 FROM questions WHERE work_item_id = ? AND status = 'open') OR EXISTS(SELECT 1 FROM manual_blockers WHERE work_item_id = ? AND status = 'active')`, workItemID, workItemID)
+}
+
+func (r *transactionRepository) CreateManualBlocker(ctx context.Context, blocker work.ManualBlocker) error {
+	_, err := r.transaction.ExecContext(ctx, `INSERT INTO manual_blockers (id, work_item_id, reason, status, created_by, created_at, resolved_by, resolved_at, resolution) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, blocker.ID, blocker.WorkItemID, blocker.Reason, blocker.Status, blocker.CreatedBy, formatTime(blocker.CreatedAt), nullableString(blocker.ResolvedBy), nullableTime(blocker.ResolvedAt), blocker.Resolution)
+	return err
+}
+
+func (r *transactionRepository) ManualBlocker(ctx context.Context, id string) (work.ManualBlocker, error) {
+	var blocker work.ManualBlocker
+	var createdAt, resolvedAt string
+	err := r.transaction.QueryRowContext(ctx, `SELECT id, work_item_id, reason, status, created_by, created_at, COALESCE(resolved_by, ''), COALESCE(resolved_at, ''), resolution FROM manual_blockers WHERE id = ?`, id).Scan(&blocker.ID, &blocker.WorkItemID, &blocker.Reason, &blocker.Status, &blocker.CreatedBy, &createdAt, &blocker.ResolvedBy, &resolvedAt, &blocker.Resolution)
+	if err != nil {
+		return work.ManualBlocker{}, mapNotFound(err)
+	}
+	blocker.CreatedAt, err = parseTime(createdAt)
+	if err != nil {
+		return work.ManualBlocker{}, err
+	}
+	if resolvedAt != "" {
+		blocker.ResolvedAt, err = parseTime(resolvedAt)
+		if err != nil {
+			return work.ManualBlocker{}, err
+		}
+	}
+	return blocker, nil
+}
+
+func (r *transactionRepository) UpdateManualBlocker(ctx context.Context, blocker work.ManualBlocker) error {
+	result, err := r.transaction.ExecContext(ctx, `UPDATE manual_blockers SET status = ?, resolved_by = ?, resolved_at = ?, resolution = ? WHERE id = ? AND status = 'active'`, blocker.Status, blocker.ResolvedBy, formatTime(blocker.ResolvedAt), blocker.Resolution, blocker.ID)
+	if err != nil {
+		return err
+	}
+	return requireChanged(result)
 }
 
 func (r *transactionRepository) WorkItemApprovalSatisfied(ctx context.Context, workItemID, actorID string, now time.Time) (bool, error) {
@@ -328,6 +361,18 @@ VALUES (?, ?, ?, ?, ?, ?)`, record.ActorID, record.Key, record.Operation, record
 		return fmt.Errorf("insert idempotency record: %w", err)
 	}
 	return nil
+}
+
+func (r *transactionRepository) LatestActivitySequence(ctx context.Context) (int64, error) {
+	var sequence int64
+	if err := r.transaction.QueryRowContext(ctx, "SELECT COALESCE(MAX(sequence), 0) FROM activity").Scan(&sequence); err != nil {
+		return 0, fmt.Errorf("latest activity sequence: %w", err)
+	}
+	return sequence, nil
+}
+
+func (s *Store) IdempotencyRecord(ctx context.Context, actorID, key string) (ports.IdempotencyRecord, error) {
+	return scanIdempotencyRecord(s.db.QueryRowContext(ctx, `SELECT actor_id, key, operation, request_hash, response_json, created_at FROM idempotency_records WHERE actor_id = ? AND key = ?`, actorID, key))
 }
 
 func scanActor(row scanner) (work.Actor, error) {

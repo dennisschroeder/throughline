@@ -24,6 +24,7 @@ type Profile struct {
 	ID               string
 	Name             string
 	Version          int
+	StateVersion     int
 	Description      string
 	LifecycleState   ProfileState
 	Structure        json.RawMessage
@@ -58,6 +59,7 @@ func NewProfileProposal(profile Profile, now time.Time) (Profile, error) {
 		}
 	}
 	profile.LifecycleState = ProfileProposed
+	profile.StateVersion = 1
 	profile.BuiltIn = false
 	profile.ProposedAt = now.UTC()
 	profile.CreatedAt = now.UTC()

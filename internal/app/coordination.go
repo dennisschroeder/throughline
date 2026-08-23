@@ -70,6 +70,11 @@ type ApproveWorkItemExecutionCommand struct {
 }
 
 func (s *Service) ApproveWorkItemExecution(ctx context.Context, command ApproveWorkItemExecutionCommand) (work.ExecutionApproval, error) {
+	if replay, found, err := replayIdempotently[work.ExecutionApproval](ctx, s, command.ActorID, command.IdempotencyKey, "approve_work_item_execution", command); err != nil {
+		return work.ExecutionApproval{}, err
+	} else if found {
+		return replay, nil
+	}
 	id, err := s.ids.New()
 	if err != nil {
 		return work.ExecutionApproval{}, fmt.Errorf("generate work item approval id: %w", err)
@@ -178,6 +183,11 @@ type ClaimGateError struct {
 func (e ClaimGateError) Error() string { return "work item cannot be claimed" }
 
 func (s *Service) ClaimWorkItem(ctx context.Context, command ClaimWorkItemCommand) (ClaimResult, error) {
+	if replay, found, err := replayIdempotently[ClaimResult](ctx, s, command.ActorID, command.IdempotencyKey, "claim_work_item", command); err != nil {
+		return ClaimResult{}, err
+	} else if found {
+		return replay, nil
+	}
 	claimID, err := s.ids.New()
 	if err != nil {
 		return ClaimResult{}, fmt.Errorf("generate claim id: %w", err)
@@ -467,6 +477,11 @@ type ProgressResult struct {
 }
 
 func (s *Service) AppendProgress(ctx context.Context, command AppendProgressCommand) (ProgressResult, error) {
+	if replay, found, err := replayIdempotently[ProgressResult](ctx, s, command.ActorID, command.IdempotencyKey, "append_progress", command); err != nil {
+		return ProgressResult{}, err
+	} else if found {
+		return replay, nil
+	}
 	id, err := s.ids.New()
 	if err != nil {
 		return ProgressResult{}, fmt.Errorf("generate progress id: %w", err)
@@ -532,6 +547,11 @@ type ArtifactResult struct {
 }
 
 func (s *Service) AttachArtifact(ctx context.Context, command AttachArtifactCommand) (ArtifactResult, error) {
+	if replay, found, err := replayIdempotently[ArtifactResult](ctx, s, command.ActorID, command.IdempotencyKey, "attach_artifact", command); err != nil {
+		return ArtifactResult{}, err
+	} else if found {
+		return replay, nil
+	}
 	id, err := s.ids.New()
 	if err != nil {
 		return ArtifactResult{}, fmt.Errorf("generate artifact id: %w", err)

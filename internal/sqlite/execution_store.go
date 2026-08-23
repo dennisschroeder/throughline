@@ -15,12 +15,38 @@ import (
 
 func (r *transactionRepository) UpdateWorkItem(ctx context.Context, item work.WorkItem, expectedVersion int) error {
 	result, err := r.transaction.ExecContext(ctx, `
-UPDATE work_items SET execution_status = ?, version = ?, updated_at = ?
-WHERE id = ? AND version = ?`, item.ExecutionStatus, item.Version, formatTime(item.UpdatedAt), item.ID, expectedVersion)
+UPDATE work_items SET title = ?, description = ?, parent_id = ?, priority = ?, estimated_scope = ?,
+    execution_policy = ?, required_actor_kind = ?, attention_state = ?, execution_status = ?, version = ?, updated_at = ?
+WHERE id = ? AND version = ?`, item.Title, item.Description, nullableString(item.ParentID), item.Priority, item.EstimatedScope,
+		item.ExecutionPolicy, item.RequiredActorKind, item.AttentionState, item.ExecutionStatus, item.Version, formatTime(item.UpdatedAt), item.ID, expectedVersion)
 	if err != nil {
 		return fmt.Errorf("update work item: %w", err)
 	}
 	return requireChanged(result)
+}
+
+func (r *transactionRepository) WorkItemParentCreatesCycle(ctx context.Context, workItemID, parentID string) (bool, error) {
+	return queryBoolean(ctx, r.transaction, `
+WITH RECURSIVE ancestors(id) AS (
+  SELECT parent_id FROM work_items WHERE id = ? AND parent_id IS NOT NULL
+  UNION
+  SELECT item.parent_id
+  FROM work_items item JOIN ancestors ON item.id = ancestors.id
+  WHERE item.parent_id IS NOT NULL
+)
+SELECT EXISTS(SELECT 1 FROM ancestors WHERE id = ?)`, parentID, workItemID)
+}
+
+func (r *transactionRepository) ReplaceWorkItemCapabilities(ctx context.Context, workItemID string, capabilities []string) error {
+	if _, err := r.transaction.ExecContext(ctx, "DELETE FROM work_item_capabilities WHERE work_item_id = ?", workItemID); err != nil {
+		return fmt.Errorf("clear work item capabilities: %w", err)
+	}
+	for _, capability := range capabilities {
+		if err := r.AddWorkItemCapability(ctx, workItemID, capability); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *transactionRepository) CreateAcceptanceCriterion(ctx context.Context, criterion work.AcceptanceCriterion) error {
@@ -69,6 +95,14 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`, dependency.ID, dependency.WorkItemID, dependency.
 		return fmt.Errorf("insert dependency: %w", err)
 	}
 	return nil
+}
+
+func (r *transactionRepository) DeleteDependency(ctx context.Context, workItemID, dependsOnItemID string, kind work.DependencyKind) error {
+	result, err := r.transaction.ExecContext(ctx, "DELETE FROM dependencies WHERE work_item_id = ? AND depends_on_item_id = ? AND kind = ?", workItemID, dependsOnItemID, kind)
+	if err != nil {
+		return fmt.Errorf("delete dependency: %w", err)
+	}
+	return requireChanged(result)
 }
 
 func (r *transactionRepository) DependencyCreatesCycle(ctx context.Context, workItemID, dependsOnItemID string) (bool, error) {
@@ -237,7 +271,13 @@ SELECT NOT EXISTS(
 }
 
 func (s *Store) ListReadyWork(ctx context.Context) ([]ports.ReadyWorkItem, error) {
-	return s.listReadyWork(ctx, "")
+	var result []ports.ReadyWorkItem
+	err := s.withinReadTransaction(ctx, func(reader sqlReader) error {
+		var err error
+		result, err = s.listReadyWork(ctx, reader, "")
+		return err
+	})
+	return result, err
 }
 
 func (s *Store) ListReadyWorkForActor(ctx context.Context, actorID string) ([]ports.ReadyWorkItem, error) {
@@ -245,14 +285,21 @@ func (s *Store) ListReadyWorkForActor(ctx context.Context, actorID string) ([]po
 	if actorID == "" {
 		return nil, errors.New("ready work actor is required")
 	}
-	return s.listReadyWork(ctx, actorID)
+	var result []ports.ReadyWorkItem
+	err := s.withinReadTransaction(ctx, func(reader sqlReader) error {
+		var err error
+		result, err = s.listReadyWork(ctx, reader, actorID)
+		return err
+	})
+	return result, err
 }
 
-func (s *Store) listReadyWork(ctx context.Context, actorID string) ([]ports.ReadyWorkItem, error) {
+func (s *Store) listReadyWork(ctx context.Context, reader sqlReader, actorID string) ([]ports.ReadyWorkItem, error) {
 	arguments := []any{}
 	actorJoin := ""
 	actorFilters := ""
 	claimActorFilter := ""
+	statusFilter := "item.execution_status = 'ready'"
 	if actorID != "" {
 		actorJoin = " JOIN actors actor ON actor.id = ?"
 		arguments = append(arguments, actorID)
@@ -275,20 +322,33 @@ func (s *Store) listReadyWork(ctx context.Context, actorID string) ([]ports.Read
       )
   )`
 		claimActorFilter = " AND claim.actor_id <> actor.id"
+		statusFilter = `(
+    item.execution_status = 'ready'
+    OR (
+      item.execution_status = 'in_progress' AND EXISTS (
+        SELECT 1 FROM claims own_claim
+        WHERE own_claim.work_item_id = item.id AND own_claim.actor_id = ?
+          AND own_claim.released_at IS NULL AND own_claim.expires_at > ?
+      )
+    )
+  )`
 	}
 	now := formatTime(time.Now().UTC())
+	if actorID != "" {
+		arguments = append(arguments, actorID, now)
+	}
 	arguments = append(arguments, now)
 	if actorID != "" {
 		arguments = append(arguments, now)
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := reader.QueryContext(ctx, `
 SELECT `+prefixedObjectiveColumns("objective")+`, `+prefixedWorkItemColumns("item")+`
 FROM work_items item
 JOIN objectives objective ON objective.id = item.objective_id
 `+actorJoin+`
 WHERE objective.phase = 'execution'
   AND item.commitment_state = 'accepted'
-  AND item.execution_status = 'ready'
+  AND `+statusFilter+`
   AND EXISTS (
     SELECT 1 FROM plans plan WHERE plan.id = item.plan_id AND plan.commitment_state = 'approved'
   )
@@ -300,6 +360,9 @@ WHERE objective.phase = 'execution'
   AND NOT EXISTS (
     SELECT 1 FROM questions question WHERE question.work_item_id = item.id AND question.status = 'open'
   )
+	  AND NOT EXISTS (
+	    SELECT 1 FROM manual_blockers blocker WHERE blocker.work_item_id = item.id AND blocker.status = 'active'
+	  )
 	  AND NOT EXISTS (
 	    SELECT 1 FROM claims claim
 	    WHERE claim.work_item_id = item.id AND claim.released_at IS NULL AND claim.expires_at > ?`+claimActorFilter+`
@@ -323,6 +386,16 @@ ORDER BY CASE item.priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'medium
 }
 
 func (s *Store) ListActivity(ctx context.Context, filter ports.ActivityFilter) ([]work.Activity, error) {
+	var result []work.Activity
+	err := s.withinReadTransaction(ctx, func(reader sqlReader) error {
+		var err error
+		result, err = s.listActivity(ctx, reader, filter)
+		return err
+	})
+	return result, err
+}
+
+func (s *Store) listActivity(ctx context.Context, reader sqlReader, filter ports.ActivityFilter) ([]work.Activity, error) {
 	limit := filter.Limit
 	if limit <= 0 || limit > 500 {
 		limit = 100
@@ -333,9 +406,17 @@ func (s *Store) ListActivity(ctx context.Context, filter ports.ActivityFilter) (
 		query += " AND work_item_id = ?"
 		arguments = append(arguments, strings.TrimSpace(filter.WorkItemID))
 	}
+	if strings.TrimSpace(filter.ObjectiveID) != "" {
+		query += ` AND (
+  (entity_kind = 'objective' AND entity_id = ?)
+  OR EXISTS (SELECT 1 FROM work_items item WHERE item.id = activity.work_item_id AND item.objective_id = ?)
+)`
+		objectiveID := strings.TrimSpace(filter.ObjectiveID)
+		arguments = append(arguments, objectiveID, objectiveID)
+	}
 	query += " ORDER BY sequence LIMIT ?"
 	arguments = append(arguments, limit)
-	rows, err := s.db.QueryContext(ctx, query, arguments...)
+	rows, err := reader.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("query activity: %w", err)
 	}

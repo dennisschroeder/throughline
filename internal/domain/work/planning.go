@@ -314,21 +314,80 @@ func SupersedeDecision(decision Decision) (Decision, error) {
 type ApprovalStatus string
 
 const (
-	ApprovalApproved ApprovalStatus = "approved"
-	ApprovalRejected ApprovalStatus = "rejected"
+	ApprovalRequested ApprovalStatus = "requested"
+	ApprovalApproved  ApprovalStatus = "approved"
+	ApprovalRejected  ApprovalStatus = "rejected"
+	ApprovalRevoked   ApprovalStatus = "revoked"
 )
 
 type Approval struct {
-	ID          string
-	ObjectiveID string
-	PlanID      string
-	Request     string
-	Status      ApprovalStatus
-	RequestedBy string
-	RequestedAt time.Time
-	ResolvedBy  string
-	ResolvedAt  time.Time
-	Rationale   string
+	ID               string
+	ObjectiveID      string
+	PlanID           string
+	WorkItemID       string
+	OutputProfileID  string
+	OutputRevisionID string
+	Request          string
+	Status           ApprovalStatus
+	Version          int
+	RequestedBy      string
+	RequestedAt      time.Time
+	ResolvedBy       string
+	ResolvedAt       time.Time
+	Rationale        string
+}
+
+func NewApprovalRequest(approval Approval, now time.Time) (Approval, error) {
+	approval.ID = strings.TrimSpace(approval.ID)
+	approval.ObjectiveID = strings.TrimSpace(approval.ObjectiveID)
+	approval.PlanID = strings.TrimSpace(approval.PlanID)
+	approval.WorkItemID = strings.TrimSpace(approval.WorkItemID)
+	approval.OutputProfileID = strings.TrimSpace(approval.OutputProfileID)
+	approval.OutputRevisionID = strings.TrimSpace(approval.OutputRevisionID)
+	approval.Request = strings.TrimSpace(approval.Request)
+	approval.RequestedBy = strings.TrimSpace(approval.RequestedBy)
+	if approval.ID == "" || approval.Request == "" || approval.RequestedBy == "" {
+		return Approval{}, errors.New("approval request requires id, request, and requester")
+	}
+	targets := 0
+	for _, target := range []string{approval.PlanID, approval.WorkItemID, approval.OutputProfileID, approval.OutputRevisionID} {
+		if target != "" {
+			targets++
+		}
+	}
+	if targets != 1 {
+		return Approval{}, errors.New("approval request requires exactly one target")
+	}
+	approval.Status = ApprovalRequested
+	approval.Version = 1
+	approval.RequestedAt = now.UTC()
+	approval.ResolvedBy = ""
+	approval.ResolvedAt = time.Time{}
+	approval.Rationale = ""
+	return approval, nil
+}
+
+func ResolveApproval(approval Approval, decision ApprovalStatus, actor, rationale string, now time.Time) (Approval, error) {
+	actor = strings.TrimSpace(actor)
+	rationale = strings.TrimSpace(rationale)
+	if approval.Status == ApprovalRequested && decision != ApprovalApproved && decision != ApprovalRejected {
+		return Approval{}, errors.New("requested approval must be approved or rejected")
+	}
+	if approval.Status == ApprovalApproved && decision != ApprovalRevoked {
+		return Approval{}, errors.New("approved approval can only be revoked")
+	}
+	if approval.Status != ApprovalRequested && approval.Status != ApprovalApproved {
+		return Approval{}, errors.New("approval is already resolved")
+	}
+	if actor == "" || rationale == "" {
+		return Approval{}, errors.New("approval resolution requires actor and rationale")
+	}
+	approval.Status = decision
+	approval.Version++
+	approval.ResolvedBy = actor
+	approval.ResolvedAt = now.UTC()
+	approval.Rationale = rationale
+	return approval, nil
 }
 
 func NewPlanApproval(id string, plan Plan) (Approval, error) {
@@ -351,6 +410,7 @@ func NewPlanApproval(id string, plan Plan) (Approval, error) {
 		PlanID:      plan.ID,
 		Request:     "Review plan revision",
 		Status:      status,
+		Version:     1,
 		RequestedBy: plan.ProposedBy,
 		RequestedAt: plan.ProposedAt,
 		ResolvedBy:  plan.ResolvedBy,

@@ -253,7 +253,7 @@ func (w WorkItem) Validate() error {
 	if !validActorKind(w.RequiredActorKind) {
 		return fmt.Errorf("work item: invalid required actor kind %q", w.RequiredActorKind)
 	}
-	if !validAttentionState(w.AttentionState) {
+	if !ValidAttentionState(w.AttentionState) {
 		return fmt.Errorf("work item: invalid attention state %q", w.AttentionState)
 	}
 	return nil
@@ -298,7 +298,7 @@ func validActorKind(value ActorKind) bool {
 	return oneOf(value, ActorAny, ActorHuman, ActorAgent)
 }
 
-func validAttentionState(value AttentionState) bool {
+func ValidAttentionState(value AttentionState) bool {
 	return oneOf(value, AttentionNone, AttentionNeedsHumanDecision, AttentionNeedsHumanReview, AttentionNeedsClarification, AttentionInterventionRequired)
 }
 

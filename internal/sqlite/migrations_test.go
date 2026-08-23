@@ -107,6 +107,46 @@ func TestMigrateUpgradesEverySupportedPrefix(t *testing.T) {
 	}
 }
 
+func TestMigrationNinePreservesIdempotencyRecordsAndRemovesActorForeignKey(t *testing.T) {
+	ctx := context.Background()
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "idempotency-upgrade.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.ensureMigrationTable(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, migration := range migrations[:8] {
+		if err := database.applyMigration(ctx, migration); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := database.db.ExecContext(ctx, "INSERT INTO actors (id, kind, display_name, created_at) VALUES ('agent:legacy', 'agent', 'Legacy', '2026-08-23T00:00:00.000000000Z')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.db.ExecContext(ctx, "INSERT INTO idempotency_records (actor_id, key, operation, request_hash, response_json, created_at) VALUES ('agent:legacy', 'retry', 'create_objective', 'hash', '{\"result\":{}}', '2026-08-23T00:00:00.000000000Z')"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.applyMigration(ctx, migrations[8]); err != nil {
+		t.Fatal(err)
+	}
+	var operation, hash, response string
+	if err := database.db.QueryRowContext(ctx, "SELECT operation, request_hash, response_json FROM idempotency_records WHERE actor_id = 'agent:legacy' AND key = 'retry'").Scan(&operation, &hash, &response); err != nil {
+		t.Fatal(err)
+	}
+	if operation != "create_objective" || hash != "hash" || response != `{"result":{}}` {
+		t.Fatalf("preserved idempotency record = %q, %q, %q", operation, hash, response)
+	}
+	if _, err := database.db.ExecContext(ctx, "INSERT INTO idempotency_records (actor_id, key, operation, request_hash, response_json, created_at) VALUES ('agent:unregistered', 'retry', 'create_objective', 'hash', '{\"result\":{}}', '2026-08-23T00:00:00.000000000Z')"); err != nil {
+		t.Fatalf("unregistered actor idempotency record rejected: %v", err)
+	}
+}
+
 func TestMigrateRejectsIncompatibleHistory(t *testing.T) {
 	for _, test := range []struct {
 		name        string

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/dennisschroeder/workgraph/internal/domain/output"
@@ -69,6 +70,142 @@ func (s *Store) GetWorkItemContext(ctx context.Context, id string) (ports.WorkIt
 	return result, nil
 }
 
+func (s *Store) SelectObjectiveContext(ctx context.Context, query ports.ObjectiveContextSelectionQuery) (ports.ObjectiveContextSelection, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	var result ports.ObjectiveContextSelection
+	err := s.withinReadTransaction(ctx, func(reader sqlReader) error {
+		context, err := s.getObjectiveContext(ctx, reader, query.ObjectiveID)
+		if err != nil {
+			return err
+		}
+		result.Context = context
+		itemIDs := make([]string, 0)
+		ready, err := s.listReadyWork(ctx, reader, query.ActorID)
+		if err != nil {
+			return err
+		}
+		for _, item := range ready {
+			if item.Objective.ID == context.Objective.ID {
+				itemIDs = append(itemIDs, item.WorkItem.ID)
+			}
+		}
+		if query.ActorID != "" {
+			claimedRows, err := reader.QueryContext(ctx, `
+SELECT item.id
+FROM claims claim
+JOIN work_items item ON item.id = claim.work_item_id
+WHERE claim.actor_id = ? AND claim.released_at IS NULL AND claim.expires_at > ?
+  AND item.objective_id = ?
+ORDER BY item.updated_at, item.id`, query.ActorID, formatTime(time.Now().UTC()), context.Objective.ID)
+			if err != nil {
+				return fmt.Errorf("query actor claimed work: %w", err)
+			}
+			for claimedRows.Next() {
+				var id string
+				if err := claimedRows.Scan(&id); err != nil {
+					_ = claimedRows.Close()
+					return err
+				}
+				itemIDs = append(itemIDs, id)
+			}
+			if err := claimedRows.Err(); err != nil {
+				_ = claimedRows.Close()
+				return err
+			}
+			if err := claimedRows.Close(); err != nil {
+				return err
+			}
+		}
+		selected := make(map[string]bool, len(itemIDs))
+		for _, id := range itemIDs {
+			if selected[id] {
+				continue
+			}
+			if len(result.WorkItems) == limit {
+				break
+			}
+			item, err := s.getWorkItemContext(ctx, reader, id)
+			if err != nil {
+				return err
+			}
+			result.WorkItems = append(result.WorkItems, item)
+			selected[id] = true
+		}
+		changes, err := s.listRecentActivity(ctx, reader, context.Objective.ID, selected, limit*2)
+		if err != nil {
+			return err
+		}
+		for _, change := range changes {
+			if change.EntityID == context.Objective.ID || selected[change.WorkItemID] {
+				result.RecentChanges = append(result.RecentChanges, change)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return ports.ObjectiveContextSelection{}, err
+	}
+	return result, nil
+}
+
+func (s *Store) listRecentActivity(ctx context.Context, reader sqlReader, objectiveID string, workItemIDs map[string]bool, limit int) ([]work.Activity, error) {
+	conditions := []string{"entity_kind = 'objective' AND entity_id = ?"}
+	arguments := []any{objectiveID}
+	if len(workItemIDs) > 0 {
+		placeholders := make([]string, 0, len(workItemIDs))
+		for workItemID := range workItemIDs {
+			placeholders = append(placeholders, "?")
+			arguments = append(arguments, workItemID)
+		}
+		conditions = append(conditions, "work_item_id IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	arguments = append(arguments, limit)
+	rows, err := reader.QueryContext(ctx, activitySelect+" WHERE ("+strings.Join(conditions, " OR ")+") ORDER BY sequence DESC LIMIT ?", arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("query recent activity: %w", err)
+	}
+	defer rows.Close()
+	result := make([]work.Activity, 0, limit)
+	for rows.Next() {
+		activity, err := scanActivity(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, activity)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) ListWorkItemContexts(ctx context.Context) ([]ports.WorkItemContext, error) {
+	var result []ports.WorkItemContext
+	err := s.withinReadTransaction(ctx, func(reader sqlReader) error {
+		rows, err := reader.QueryContext(ctx, "SELECT id FROM work_items ORDER BY updated_at DESC, id")
+		if err != nil {
+			return fmt.Errorf("list work item ids: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			item, err := s.getWorkItemContext(ctx, reader, id)
+			if err != nil {
+				return err
+			}
+			result = append(result, item)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (s *Store) getWorkItemContext(ctx context.Context, reader sqlReader, id string) (ports.WorkItemContext, error) {
 	item, err := scanWorkItem(reader.QueryRowContext(ctx, workItemSelect+" WHERE id = ?", id))
 	if err != nil {
@@ -87,6 +224,10 @@ func (s *Store) getWorkItemContext(ctx context.Context, reader sqlReader, id str
 		plan = &loadedPlan
 	}
 	expectedOutputs, err := s.listExpectedOutputs(ctx, reader, item.ID)
+	if err != nil {
+		return ports.WorkItemContext{}, err
+	}
+	capabilities, err := s.listCapabilities(ctx, reader, item.ID)
 	if err != nil {
 		return ports.WorkItemContext{}, err
 	}
@@ -123,18 +264,19 @@ func (s *Store) getWorkItemContext(ctx context.Context, reader sqlReader, id str
 		return ports.WorkItemContext{}, err
 	}
 	return ports.WorkItemContext{
-		Objective:          objective,
-		Plan:               plan,
-		WorkItem:           item,
-		ExpectedOutputs:    expectedOutputs,
-		AcceptanceCriteria: criteria,
-		Dependencies:       dependencies,
-		OutputRequirements: requirements,
-		OutputRevisions:    revisions,
-		Claims:             claims,
-		Progress:           progress,
-		Artifacts:          artifacts,
-		ExternalActions:    externalActions,
+		Objective:            objective,
+		Plan:                 plan,
+		WorkItem:             item,
+		RequiredCapabilities: capabilities,
+		ExpectedOutputs:      expectedOutputs,
+		AcceptanceCriteria:   criteria,
+		Dependencies:         dependencies,
+		OutputRequirements:   requirements,
+		OutputRevisions:      revisions,
+		Claims:               claims,
+		Progress:             progress,
+		Artifacts:            artifacts,
+		ExternalActions:      externalActions,
 	}, nil
 }
 
@@ -280,7 +422,7 @@ SELECT id, key, objective_id, plan_id, parent_id, title, description, kind, comm
 FROM work_items`
 
 const profileSelect = `
-SELECT id, name, version, description, lifecycle_state, structure_json, semantics_json,
+SELECT id, name, version, state_version, description, lifecycle_state, structure_json, semantics_json,
        validation_json, built_in, supersedes_id, proposed_by, proposed_at,
        resolved_by, resolved_at, resolution_reason, created_at
 FROM output_profiles`
@@ -410,6 +552,7 @@ func scanProfile(row scanner) (output.Profile, error) {
 		&profile.ID,
 		&profile.Name,
 		&profile.Version,
+		&profile.StateVersion,
 		&profile.Description,
 		&profile.LifecycleState,
 		&structure,

@@ -237,6 +237,38 @@ type ProgressEntry struct {
 	CreatedAt  time.Time
 }
 
+type ManualBlocker struct {
+	ID         string
+	WorkItemID string
+	Reason     string
+	Status     string
+	CreatedBy  string
+	CreatedAt  time.Time
+	ResolvedBy string
+	ResolvedAt time.Time
+	Resolution string
+}
+
+func NewManualBlocker(id, workItemID, reason, actor string, now time.Time) (ManualBlocker, error) {
+	blocker := ManualBlocker{ID: strings.TrimSpace(id), WorkItemID: strings.TrimSpace(workItemID), Reason: strings.TrimSpace(reason), Status: "active", CreatedBy: strings.TrimSpace(actor), CreatedAt: now.UTC()}
+	if blocker.ID == "" || blocker.WorkItemID == "" || blocker.Reason == "" || blocker.CreatedBy == "" {
+		return ManualBlocker{}, errors.New("manual blocker requires id, work item, reason, and actor")
+	}
+	return blocker, nil
+}
+
+func ResolveManualBlocker(blocker ManualBlocker, actor, resolution string, now time.Time) (ManualBlocker, error) {
+	if blocker.Status != "active" {
+		return ManualBlocker{}, errors.New("only active manual blockers can be resolved")
+	}
+	actor, resolution = strings.TrimSpace(actor), strings.TrimSpace(resolution)
+	if actor == "" || resolution == "" {
+		return ManualBlocker{}, errors.New("manual blocker resolution requires an actor and resolution")
+	}
+	blocker.Status, blocker.ResolvedBy, blocker.Resolution, blocker.ResolvedAt = "resolved", actor, resolution, now.UTC()
+	return blocker, nil
+}
+
 func NewProgressEntry(entry ProgressEntry, now time.Time) (ProgressEntry, error) {
 	entry.ID = strings.TrimSpace(entry.ID)
 	entry.WorkItemID = strings.TrimSpace(entry.WorkItemID)

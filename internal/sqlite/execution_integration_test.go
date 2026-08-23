@@ -35,15 +35,15 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	}
 
 	producerObjective, err := service.CreateObjective(ctx, app.CreateObjectiveCommand{
-		ActorID: "human:sponsor",
-		Key:     "OBJ-DOSSIER", Title: "Produce a reusable research dossier",
+		ActorID: "human:sponsor", IdempotencyKey: "create-producer-objective",
+		Key: "OBJ-DOSSIER", Title: "Produce a reusable research dossier",
 		DesiredOutcome: "A validated source-auditing dossier can be reused exactly.", Phase: work.ObjectivePlanning,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	plan, err := service.ProposePlan(ctx, app.ProposePlanCommand{
-		ObjectiveID: producerObjective.ID, ActorID: "agent:planner", Title: "Research and synthesize", Revision: 1,
+		ObjectiveID: producerObjective.ID, ActorID: "agent:planner", IdempotencyKey: "propose-producer-plan", Title: "Research and synthesize", Revision: 1,
 		Items: []app.ProposedWorkItem{
 			{
 				ClientRef: "research", Key: "WG-DOSSIER", Title: "Research source-auditing methods", Kind: "research",
@@ -63,10 +63,10 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: plan.Plan.ID, ReviewerActorID: "human:sponsor", Decision: work.PlanApproved, Reason: "The contracts are explicit.", ExpectedVersion: 1}); err != nil {
+	if _, err := service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: plan.Plan.ID, ReviewerActorID: "human:sponsor", IdempotencyKey: "review-producer-plan", Decision: work.PlanApproved, Reason: "The contracts are explicit.", ExpectedVersion: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: producerObjective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:sponsor", Reason: "Begin approved work.", ExpectedVersion: 1}); err != nil {
+	if _, err := service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: producerObjective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:sponsor", IdempotencyKey: "transition-producer-objective", Reason: "Begin approved work.", ExpectedVersion: 1}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -99,7 +99,7 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	}
 	expected := producerContext.ExpectedOutputs[0].ExpectedOutput
 	revision, err := service.CreateOutputRevision(ctx, app.CreateOutputRevisionCommand{
-		ExpectedOutputID: expected.ID, ActorID: "agent:researcher", ContentDigest: "sha256:dossier-v1",
+		ExpectedOutputID: expected.ID, ActorID: "agent:researcher", IdempotencyKey: "create-producer-revision", ContentDigest: "sha256:dossier-v1",
 		Artifacts: []app.OutputArtifactInput{{Kind: "document", URI: "file:///tmp/source-auditing-dossier.md", Title: "Source-auditing dossier", Role: "primary"}},
 	})
 	if err != nil {
@@ -107,14 +107,14 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	}
 
 	consumerObjective, err := service.CreateObjective(ctx, app.CreateObjectiveCommand{
-		ActorID: "human:sponsor",
-		Key:     "OBJ-REUSE", Title: "Reuse the accepted dossier", DesiredOutcome: "A second objective consumes the exact reviewed result.", Phase: work.ObjectivePlanning,
+		ActorID: "human:sponsor", IdempotencyKey: "create-consumer-objective",
+		Key: "OBJ-REUSE", Title: "Reuse the accepted dossier", DesiredOutcome: "A second objective consumes the exact reviewed result.", Phase: work.ObjectivePlanning,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	consumerPlan, err := service.ProposePlan(ctx, app.ProposePlanCommand{
-		ObjectiveID: consumerObjective.ID, ActorID: "agent:planner", Title: "Apply the dossier", Revision: 1,
+		ObjectiveID: consumerObjective.ID, ActorID: "agent:planner", IdempotencyKey: "propose-consumer-plan", Title: "Apply the dossier", Revision: 1,
 		Items: []app.ProposedWorkItem{{
 			ClientRef: "apply", Key: "WG-APPLY", Title: "Apply the reviewed source-auditing method", Kind: "workflow_design",
 			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
@@ -123,10 +123,10 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: consumerPlan.Plan.ID, ReviewerActorID: "human:sponsor", Decision: work.PlanApproved, Reason: "Reuse is explicit.", ExpectedVersion: 1}); err != nil {
+	if _, err := service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: consumerPlan.Plan.ID, ReviewerActorID: "human:sponsor", IdempotencyKey: "review-consumer-plan", Decision: work.PlanApproved, Reason: "Reuse is explicit.", ExpectedVersion: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: consumerObjective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:sponsor", Reason: "Begin reuse.", ExpectedVersion: 1}); err != nil {
+	if _, err := service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: consumerObjective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:sponsor", IdempotencyKey: "transition-consumer-objective", Reason: "Begin reuse.", ExpectedVersion: 1}); err != nil {
 		t.Fatal(err)
 	}
 	consumer := consumerPlan.Items[0].WorkItem
@@ -160,7 +160,8 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 		{OutputRevisionID: revision.ID, CriterionRef: "human_review", ValidatorKind: output.ValidatorHumanReview, Verdict: output.VerdictPassed, VerifierActorID: "human:reviewer", Details: json.RawMessage(`{"rationale":"Evidence and uncertainty are clearly separated."}`)},
 		{OutputRevisionID: revision.ID, CriterionRef: "minimum_sources", ValidatorKind: output.ValidatorEvaluation, Verdict: output.VerdictPassed, VerifierActorID: "human:reviewer", Details: json.RawMessage(`{"summary":"At least three independent sources are present."}`)},
 	}
-	for _, command := range validations {
+	for index, command := range validations {
+		command.IdempotencyKey = "record-validation-" + string(rune('a'+index))
 		revision, err = service.RecordValidation(ctx, command)
 		if err != nil {
 			t.Fatal(err)
@@ -171,7 +172,7 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	}
 	revision, err = service.RecordValidation(ctx, app.RecordValidationCommand{
 		OutputRevisionID: revision.ID, CriterionRef: "consumer-readiness", ValidatorKind: output.ValidatorSuccessorUse,
-		Verdict: output.VerdictPassed, VerifierActorID: "agent:consumer", Details: json.RawMessage(`{"summary":"The accepted dossier is usable by its declared consumer."}`),
+		Verdict: output.VerdictPassed, VerifierActorID: "agent:consumer", IdempotencyKey: "record-consumer-readiness", Details: json.RawMessage(`{"summary":"The accepted dossier is usable by its declared consumer."}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -181,13 +182,13 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	}
 	if _, err := service.RecordValidation(ctx, app.RecordValidationCommand{
 		OutputRevisionID: revision.ID, CriterionRef: "structure", ValidatorKind: output.ValidatorStructure,
-		Verdict: output.VerdictFailed, VerifierActorID: "agent:validator", Details: json.RawMessage(`{"summary":"Late contradictory verdict."}`),
+		Verdict: output.VerdictFailed, VerifierActorID: "agent:validator", IdempotencyKey: "record-late-contradiction", Details: json.RawMessage(`{"summary":"Late contradictory verdict."}`),
 	}); err == nil {
 		t.Fatal("expected contract validation to be closed after acceptance")
 	}
 	if _, err := service.RecordValidation(ctx, app.RecordValidationCommand{
 		OutputRevisionID: revision.ID, CriterionRef: "structure", ValidatorKind: output.ValidatorSuccessorUse,
-		Verdict: output.VerdictPassed, VerifierActorID: "agent:consumer", Details: json.RawMessage(`{"summary":"Attempted criterion shadowing."}`),
+		Verdict: output.VerdictPassed, VerifierActorID: "agent:consumer", IdempotencyKey: "record-shadowed-criterion", Details: json.RawMessage(`{"summary":"Attempted criterion shadowing."}`),
 	}); err == nil {
 		t.Fatal("expected successor-use evidence to reject an acceptance criterion reference")
 	}
@@ -237,7 +238,7 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 		t.Fatalf("structured producer output context = %#v", reloadedProducer.OutputRevisions)
 	}
 	revision2, err := service.CreateOutputRevision(ctx, app.CreateOutputRevisionCommand{
-		ExpectedOutputID: expected.ID, ActorID: "agent:researcher", ContentDigest: "sha256:dossier-v2",
+		ExpectedOutputID: expected.ID, ActorID: "agent:researcher", IdempotencyKey: "create-producer-revision-v2", ContentDigest: "sha256:dossier-v2",
 		Artifacts: []app.OutputArtifactInput{{Kind: "document", URI: "file:///tmp/source-auditing-dossier.md", Title: "Updated source-auditing dossier", Role: "primary"}},
 	})
 	if err != nil {

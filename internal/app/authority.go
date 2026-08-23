@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/dennisschroeder/workgraph/internal/domain/authority"
@@ -30,6 +31,39 @@ func (s *Service) GetExternalAction(ctx context.Context, id string) (authority.E
 	return action, nil
 }
 
+func (s *Service) GetCurrentExternalActionRevision(ctx context.Context, actionID string) (authority.ExternalActionRevision, error) {
+	var revision authority.ExternalActionRevision
+	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
+		var err error
+		revision, err = repository.CurrentExternalActionRevision(ctx, actionID)
+		return err
+	})
+	if err != nil {
+		return authority.ExternalActionRevision{}, fmt.Errorf("get current external action revision: %w", err)
+	}
+	return revision, nil
+}
+
+func (s *Service) GetExternalActionExecution(ctx context.Context, id string) (authority.ExternalActionExecution, error) {
+	var execution authority.ExternalActionExecution
+	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
+		var err error
+		execution, err = repository.ExternalActionExecution(ctx, id)
+		return err
+	})
+	return execution, err
+}
+
+func (s *Service) GetActionApproval(ctx context.Context, id string) (authority.ActionApproval, error) {
+	var approval authority.ActionApproval
+	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
+		var err error
+		approval, err = repository.ActionApproval(ctx, id)
+		return err
+	})
+	return approval, err
+}
+
 type ProposeExternalActionCommand struct {
 	WorkItemID      string
 	ActorID         string
@@ -42,6 +76,11 @@ type ProposeExternalActionCommand struct {
 }
 
 func (s *Service) ProposeExternalAction(ctx context.Context, command ProposeExternalActionCommand) (ExternalActionResult, error) {
+	if replay, found, err := replayIdempotently[ExternalActionResult](ctx, s, command.ActorID, command.IdempotencyKey, "propose_external_action", command); err != nil {
+		return ExternalActionResult{}, err
+	} else if found {
+		return replay, nil
+	}
 	id, err := s.ids.New()
 	if err != nil {
 		return ExternalActionResult{}, fmt.Errorf("generate external action id: %w", err)
@@ -163,8 +202,8 @@ type PatchExternalActionMetadataCommand struct {
 	ActorID               string
 	ExpectedActionVersion int
 	IdempotencyKey        string
-	Title                 string
-	Rationale             string
+	Title                 *string
+	Rationale             *string
 }
 
 func (s *Service) PatchExternalActionMetadata(ctx context.Context, command PatchExternalActionMetadataCommand) (authority.ExternalAction, error) {
@@ -182,7 +221,14 @@ func (s *Service) PatchExternalActionMetadata(ctx context.Context, command Patch
 			if action.Version != command.ExpectedActionVersion {
 				return authority.ExternalAction{}, ports.ErrVersionConflict
 			}
-			action, err = authority.UpdateExternalActionMetadata(action, command.Title, command.Rationale, command.ActorID, s.clock.Now())
+			title, rationale := action.Title, action.Rationale
+			if command.Title != nil {
+				title = *command.Title
+			}
+			if command.Rationale != nil {
+				rationale = *command.Rationale
+			}
+			action, err = authority.UpdateExternalActionMetadata(action, title, rationale, command.ActorID, s.clock.Now())
 			if err != nil {
 				return authority.ExternalAction{}, err
 			}
@@ -209,6 +255,7 @@ type RequestExternalActionApprovalCommand struct {
 	ActionID              string
 	ActorID               string
 	ExpectedActionVersion int
+	ExpectedSubjectHash   string
 	IdempotencyKey        string
 	ApprovedForActorID    string
 	Constraints           json.RawMessage
@@ -217,6 +264,11 @@ type RequestExternalActionApprovalCommand struct {
 }
 
 func (s *Service) RequestExternalActionApproval(ctx context.Context, command RequestExternalActionApprovalCommand) (authority.ActionApproval, error) {
+	if replay, found, err := replayIdempotently[authority.ActionApproval](ctx, s, command.ActorID, command.IdempotencyKey, "request_external_action_approval", command); err != nil {
+		return authority.ActionApproval{}, err
+	} else if found {
+		return replay, nil
+	}
 	id, err := s.ids.New()
 	if err != nil {
 		return authority.ActionApproval{}, fmt.Errorf("generate action approval id: %w", err)
@@ -240,6 +292,9 @@ func (s *Service) RequestExternalActionApproval(ctx context.Context, command Req
 			revision, err := repository.CurrentExternalActionRevision(ctx, action.ID)
 			if err != nil {
 				return authority.ActionApproval{}, err
+			}
+			if strings.TrimSpace(command.ExpectedSubjectHash) == "" || revision.AuthorizationSubjectHash != command.ExpectedSubjectHash {
+				return authority.ActionApproval{}, errors.New("approval_stale")
 			}
 			approval, err := authority.NewActionApproval(authority.ActionApproval{
 				ID: id, ApprovedForActorID: command.ApprovedForActorID, Constraints: command.Constraints,
@@ -283,6 +338,11 @@ type ApprovalResolutionResult struct {
 }
 
 func (s *Service) ResolveExternalActionApproval(ctx context.Context, command ResolveExternalActionApprovalCommand) (ApprovalResolutionResult, error) {
+	if replay, found, err := replayIdempotently[ApprovalResolutionResult](ctx, s, command.ActorID, command.IdempotencyKey, "resolve_external_action_approval", command); err != nil {
+		return ApprovalResolutionResult{}, err
+	} else if found {
+		return replay, nil
+	}
 	grantID, err := s.ids.New()
 	if err != nil {
 		return ApprovalResolutionResult{}, fmt.Errorf("generate authority grant id: %w", err)
@@ -491,6 +551,11 @@ type ExternalActionExecutionResult struct {
 }
 
 func (s *Service) StartExternalActionExecution(ctx context.Context, command StartExternalActionExecutionCommand) (ExternalActionExecutionResult, error) {
+	if replay, found, err := replayIdempotently[ExternalActionExecutionResult](ctx, s, command.ActorID, command.IdempotencyKey, "start_external_action_execution", command); err != nil {
+		return ExternalActionExecutionResult{}, err
+	} else if found {
+		return replay, nil
+	}
 	id, err := s.ids.New()
 	if err != nil {
 		return ExternalActionExecutionResult{}, fmt.Errorf("generate external action execution id: %w", err)

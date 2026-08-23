@@ -38,12 +38,57 @@ type CanonicalAuthorizationSubject struct {
 }
 
 func NewCanonicalAuthorizationSubject(raw []byte) (CanonicalAuthorizationSubject, error) {
+	if err := validateAuthorizationSubject(raw); err != nil {
+		return CanonicalAuthorizationSubject{}, err
+	}
 	canonical, err := CanonicalizeSubject(raw)
 	if err != nil {
 		return CanonicalAuthorizationSubject{}, err
 	}
 	digest := sha256.Sum256(canonical)
 	return CanonicalAuthorizationSubject{JSON: append(json.RawMessage(nil), canonical...), Hash: fmt.Sprintf("%x", digest)}, nil
+}
+
+func validateAuthorizationSubject(raw []byte) error {
+	var subject struct {
+		ActionType             string            `json:"action_type"`
+		Target                 json.RawMessage   `json:"target"`
+		Arguments              []json.RawMessage `json:"arguments"`
+		Scope                  json.RawMessage   `json:"scope"`
+		Permissions            []string          `json:"permissions"`
+		CredentialRequirements []string          `json:"credential_requirements"`
+		Constraints            json.RawMessage   `json:"constraints"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&subject); err != nil {
+		return fmt.Errorf("authorization subject: %w", err)
+	}
+	if err := requireEOF(decoder); err != nil {
+		return fmt.Errorf("authorization subject: %w", err)
+	}
+	if strings.TrimSpace(subject.ActionType) == "" {
+		return errors.New("authorization subject requires action_type")
+	}
+	if subject.Arguments == nil || subject.Permissions == nil || subject.CredentialRequirements == nil {
+		return errors.New("authorization subject requires arguments, permissions, and credential_requirements")
+	}
+	for name, value := range map[string]json.RawMessage{"target": subject.Target, "scope": subject.Scope, "constraints": subject.Constraints} {
+		if _, err := canonicalJSONObject(value); err != nil {
+			return fmt.Errorf("authorization subject %s: %w", name, err)
+		}
+	}
+	for _, permission := range subject.Permissions {
+		if strings.TrimSpace(permission) == "" {
+			return errors.New("authorization subject permissions cannot contain empty values")
+		}
+	}
+	for _, credential := range subject.CredentialRequirements {
+		if strings.TrimSpace(credential) == "" {
+			return errors.New("authorization subject credential requirements cannot contain empty values")
+		}
+	}
+	return nil
 }
 
 type ExternalAction struct {

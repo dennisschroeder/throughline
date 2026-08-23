@@ -26,9 +26,9 @@ SELECT EXISTS(
 func (r *transactionRepository) UpdateObjective(ctx context.Context, objective work.Objective, expectedVersion int) error {
 	result, err := r.transaction.ExecContext(ctx, `
 UPDATE objectives
-SET phase = ?, prior_phase = ?, updated_by = ?, version = ?, updated_at = ?
+SET title = ?, description = ?, desired_outcome = ?, phase = ?, prior_phase = ?, updated_by = ?, version = ?, updated_at = ?
 WHERE id = ? AND version = ?`,
-		objective.Phase, nullableString(string(objective.PriorPhase)), nullableString(objective.UpdatedBy),
+		objective.Title, objective.Description, objective.DesiredOutcome, objective.Phase, nullableString(string(objective.PriorPhase)), nullableString(objective.UpdatedBy),
 		objective.Version, formatTime(objective.UpdatedAt), objective.ID, expectedVersion,
 	)
 	if err != nil {
@@ -171,6 +171,16 @@ func (r *transactionRepository) LatestApprovedPlanRevision(ctx context.Context, 
 	return revision, nil
 }
 
+func (r *transactionRepository) LatestPlanRevision(ctx context.Context, objectiveID string) (int, error) {
+	var revision int
+	if err := r.transaction.QueryRowContext(ctx,
+		"SELECT COALESCE(MAX(revision), 0) FROM plans WHERE objective_id = ?", objectiveID,
+	).Scan(&revision); err != nil {
+		return 0, fmt.Errorf("query latest plan revision: %w", err)
+	}
+	return revision, nil
+}
+
 func (r *transactionRepository) SupersedeEarlierPlans(ctx context.Context, objectiveID string, revision int, updatedAt time.Time) error {
 	if _, err := r.transaction.ExecContext(ctx, `
 UPDATE work_items
@@ -207,17 +217,32 @@ WHERE plan_id = ? AND commitment_state = ?`, state, formatTime(updatedAt), planI
 func (r *transactionRepository) CreateApproval(ctx context.Context, approval work.Approval) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO approvals
-  (id, objective_id, plan_id, request, status, requested_by, requested_at,
-   resolved_by, resolved_at, rationale)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		approval.ID, approval.ObjectiveID, approval.PlanID, approval.Request, approval.Status,
-		approval.RequestedBy, formatTime(approval.RequestedAt), approval.ResolvedBy,
-		formatTime(approval.ResolvedAt), approval.Rationale,
+  (id, objective_id, plan_id, work_item_id, output_profile_id, output_revision_id,
+   request, status, version, requested_by, requested_at, resolved_by, resolved_at, rationale)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		approval.ID, nullableString(approval.ObjectiveID), nullableString(approval.PlanID), nullableString(approval.WorkItemID), nullableString(approval.OutputProfileID), nullableString(approval.OutputRevisionID),
+		approval.Request, approval.Status, approval.Version, approval.RequestedBy, formatTime(approval.RequestedAt), nullableString(approval.ResolvedBy), nullableTime(approval.ResolvedAt), approval.Rationale,
 	)
 	if err != nil {
 		return fmt.Errorf("insert approval: %w", err)
 	}
 	return nil
+}
+
+func (r *transactionRepository) Approval(ctx context.Context, id string) (work.Approval, error) {
+	approval, err := scanApproval(r.transaction.QueryRowContext(ctx, approvalSelect+" WHERE id = ?", id))
+	return approval, mapNotFound(err)
+}
+
+func (r *transactionRepository) UpdateApproval(ctx context.Context, approval work.Approval, expectedVersion int) error {
+	result, err := r.transaction.ExecContext(ctx, `
+UPDATE approvals
+SET status = ?, version = ?, resolved_by = ?, resolved_at = ?, rationale = ?
+WHERE id = ? AND version = ?`, approval.Status, approval.Version, nullableString(approval.ResolvedBy), nullableTime(approval.ResolvedAt), approval.Rationale, approval.ID, expectedVersion)
+	if err != nil {
+		return fmt.Errorf("update approval: %w", err)
+	}
+	return requireChanged(result)
 }
 
 func (r *transactionRepository) AddWorkItemCapability(ctx context.Context, workItemID, capability string) error {
@@ -251,11 +276,11 @@ func (r *transactionRepository) LatestOutputProfileVersion(ctx context.Context, 
 func (r *transactionRepository) CreateOutputProfile(ctx context.Context, profile output.Profile) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO output_profiles
-  (id, name, version, description, lifecycle_state, structure_json, semantics_json,
+  (id, name, version, state_version, description, lifecycle_state, structure_json, semantics_json,
    validation_json, built_in, supersedes_id, proposed_by, proposed_at, resolved_by,
    resolved_at, resolution_reason, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		profile.ID, profile.Name, profile.Version, profile.Description, profile.LifecycleState,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		profile.ID, profile.Name, profile.Version, profile.StateVersion, profile.Description, profile.LifecycleState,
 		string(profile.Structure), string(profile.Semantics), string(profile.Validation), boolInt(profile.BuiltIn),
 		nullableString(profile.SupersedesID), nullableString(profile.ProposedBy), nullableTime(profile.ProposedAt),
 		nullableString(profile.ResolvedBy), nullableTime(profile.ResolvedAt), profile.ResolutionReason,
@@ -270,10 +295,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 func (r *transactionRepository) UpdateOutputProfile(ctx context.Context, profile output.Profile) error {
 	result, err := r.transaction.ExecContext(ctx, `
 UPDATE output_profiles
-SET lifecycle_state = ?, resolved_by = ?, resolved_at = ?, resolution_reason = ?
-WHERE id = ? AND lifecycle_state = ?`,
-		profile.LifecycleState, nullableString(profile.ResolvedBy), nullableTime(profile.ResolvedAt),
-		profile.ResolutionReason, profile.ID, output.ProfileProposed,
+SET lifecycle_state = ?, state_version = ?, resolved_by = ?, resolved_at = ?, resolution_reason = ?
+WHERE id = ? AND lifecycle_state = ? AND state_version = ?`,
+		profile.LifecycleState, profile.StateVersion, nullableString(profile.ResolvedBy), nullableTime(profile.ResolvedAt),
+		profile.ResolutionReason, profile.ID, output.ProfileProposed, profile.StateVersion-1,
 	)
 	if err != nil {
 		return fmt.Errorf("update output profile review: %w", err)
@@ -284,7 +309,7 @@ WHERE id = ? AND lifecycle_state = ?`,
 func (r *transactionRepository) SupersedeOutputProfile(ctx context.Context, id string) error {
 	result, err := r.transaction.ExecContext(ctx, `
 UPDATE output_profiles
-SET lifecycle_state = ?
+SET lifecycle_state = ?, state_version = state_version + 1
 WHERE id = ? AND lifecycle_state = ?`, output.ProfileSuperseded, id, output.ProfileActive)
 	if err != nil {
 		return fmt.Errorf("supersede output profile: %w", err)
@@ -464,7 +489,7 @@ func (s *Store) listExpectedOutputs(ctx context.Context, reader sqlReader, workI
 SELECT
   e.id, e.work_item_id, e.name, e.output_profile_id, e.contract_json,
   e.destination_hint, e.required, e.ordinal,
-  p.id, p.name, p.version, p.description, p.lifecycle_state,
+  p.id, p.name, p.version, p.state_version, p.description, p.lifecycle_state,
   p.structure_json, p.semantics_json, p.validation_json, p.built_in,
   p.supersedes_id, p.proposed_by, p.proposed_at, p.resolved_by, p.resolved_at,
   p.resolution_reason, p.created_at
@@ -496,7 +521,7 @@ func scanExpectedOutputDetail(row scanner) (output.ExpectedOutputDetail, error) 
 		&detail.ExpectedOutput.ID, &detail.ExpectedOutput.WorkItemID, &detail.ExpectedOutput.Name,
 		&detail.ExpectedOutput.OutputProfileID, &contract, &detail.ExpectedOutput.DestinationHint,
 		&required, &detail.ExpectedOutput.Ordinal, &detail.Profile.ID, &detail.Profile.Name,
-		&detail.Profile.Version, &detail.Profile.Description, &detail.Profile.LifecycleState,
+		&detail.Profile.Version, &detail.Profile.StateVersion, &detail.Profile.Description, &detail.Profile.LifecycleState,
 		&structure, &semantics, &validation, &builtIn, &supersedesID, &proposedBy,
 		&proposedAt, &resolvedBy, &resolvedAt, &detail.Profile.ResolutionReason, &profileCreatedAt,
 	); err != nil {
@@ -595,8 +620,8 @@ SELECT id, objective_id, work_item_id, title, decision, rationale, alternatives_
 FROM decisions`
 
 const approvalSelect = `
-SELECT id, objective_id, plan_id, request, status, requested_by, requested_at,
-       resolved_by, resolved_at, rationale
+SELECT id, objective_id, plan_id, work_item_id, output_profile_id, output_revision_id,
+       request, status, version, requested_by, requested_at, resolved_by, resolved_at, rationale
 FROM approvals`
 
 func scanContextRecord(row scanner) (work.ContextRecord, error) {
@@ -675,18 +700,27 @@ func scanDecision(row scanner) (work.Decision, error) {
 
 func scanApproval(row scanner) (work.Approval, error) {
 	var approval work.Approval
-	var requestedAt, resolvedAt string
+	var requestedAt string
+	var objectiveID, planID, workItemID, profileID, revisionID, resolvedBy, resolvedAt sql.NullString
 	if err := row.Scan(
-		&approval.ID, &approval.ObjectiveID, &approval.PlanID, &approval.Request, &approval.Status,
-		&approval.RequestedBy, &requestedAt, &approval.ResolvedBy, &resolvedAt, &approval.Rationale,
+		&approval.ID, &objectiveID, &planID, &workItemID, &profileID, &revisionID,
+		&approval.Request, &approval.Status, &approval.Version, &approval.RequestedBy, &requestedAt, &resolvedBy, &resolvedAt, &approval.Rationale,
 	); err != nil {
 		return work.Approval{}, err
 	}
+	approval.ObjectiveID = objectiveID.String
+	approval.PlanID = planID.String
+	approval.WorkItemID = workItemID.String
+	approval.OutputProfileID = profileID.String
+	approval.OutputRevisionID = revisionID.String
+	approval.ResolvedBy = resolvedBy.String
 	var err error
 	approval.RequestedAt, err = parseTime(requestedAt)
 	if err != nil {
 		return work.Approval{}, err
 	}
-	approval.ResolvedAt, err = parseTime(resolvedAt)
+	if resolvedAt.Valid {
+		approval.ResolvedAt, err = parseTime(resolvedAt.String)
+	}
 	return approval, err
 }
