@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/dennisschroeder/workgraph/internal/cli"
+	"github.com/dennisschroeder/throughline/internal/cli"
 )
 
 func main() {

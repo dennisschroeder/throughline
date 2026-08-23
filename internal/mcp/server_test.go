@@ -11,14 +11,14 @@ import (
 
 	protocol "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dennisschroeder/workgraph/internal/app"
-	"github.com/dennisschroeder/workgraph/internal/domain/authority"
-	workgraphsqlite "github.com/dennisschroeder/workgraph/internal/sqlite"
+	"github.com/dennisschroeder/throughline/internal/app"
+	"github.com/dennisschroeder/throughline/internal/domain/authority"
+	throughlinesqlite "github.com/dennisschroeder/throughline/internal/sqlite"
 )
 
 func TestToolsExposeStableErrorsAndReadAnnotations(t *testing.T) {
 	ctx := context.Background()
-	database, err := workgraphsqlite.Open(ctx, filepath.Join(t.TempDir(), "workgraph.db"))
+	database, err := throughlinesqlite.Open(ctx, filepath.Join(t.TempDir(), "throughline.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestProposePlanUsesStrictSnakeCaseNestedInput(t *testing.T) {
 		t.Fatalf("register actor = %#v", payload)
 	}
 	objective := call("create_objective", map[string]any{"actor_id": "agent:planner", "idempotency_key": "objective", "key": "OBJ-1", "title": "Objective", "desired_outcome": "Outcome", "phase": "planning"})["result"].(map[string]any)
-	payload := call("propose_plan", map[string]any{"objective_id": objective["id"], "actor_id": "agent:planner", "idempotency_key": "plan", "title": "Plan", "revision": 1, "items": []any{map[string]any{"client_ref": "one", "key": "WG-1", "title": "One", "kind": "research", "priority": "medium", "estimated_scope": "small", "execution_policy": "autonomous_with_report", "required_actor_kind": "agent", "unexpected": true}}})
+	payload := call("propose_plan", map[string]any{"objective_id": objective["id"], "actor_id": "agent:planner", "idempotency_key": "plan", "title": "Plan", "revision": 1, "items": []any{map[string]any{"client_ref": "one", "key": "TH-1", "title": "One", "kind": "research", "priority": "medium", "estimated_scope": "small", "execution_policy": "autonomous_with_report", "required_actor_kind": "agent", "unexpected": true}}})
 	if payload["error"] == nil {
 		t.Fatalf("nested unknown field accepted: %#v", payload)
 	}
@@ -251,7 +251,7 @@ func TestRuntimeValidationRejectsUnknownFlattenedActionArgumentField(t *testing.
 	ctx, session := newSession(t)
 	result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: "propose_plan", Arguments: map[string]any{
 		"objective_id": "missing", "actor_id": "agent:writer", "idempotency_key": "plan", "title": "Plan", "items": []any{map[string]any{
-			"client_ref": "one", "key": "WG-1", "title": "One", "kind": "research", "external_actions": []any{map[string]any{
+			"client_ref": "one", "key": "TH-1", "title": "One", "kind": "research", "external_actions": []any{map[string]any{
 				"title": "External work", "action_type": "tool.install", "target": map[string]any{}, "arguments": []any{map[string]any{"unexpected": true}}, "scope": map[string]any{}, "permissions": []any{}, "credential_requirements": []any{}, "constraints": map[string]any{},
 			}},
 		}},
@@ -267,7 +267,7 @@ func TestRuntimeValidationRejectsUnknownFlattenedActionArgumentField(t *testing.
 func newSession(t *testing.T) (context.Context, *protocol.ClientSession) {
 	t.Helper()
 	ctx := context.Background()
-	database, err := workgraphsqlite.Open(ctx, filepath.Join(t.TempDir(), "workgraph.db"))
+	database, err := throughlinesqlite.Open(ctx, filepath.Join(t.TempDir(), "throughline.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,8 +404,8 @@ func TestOmittedMutationsReplayAndRejectChangedRequests(t *testing.T) {
 func TestStdioTwoClientNonCodeWorkflowSmoke(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	binary := filepath.Join(t.TempDir(), "workgraph")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/workgraph")
+	binary := filepath.Join(t.TempDir(), "throughline")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/throughline")
 	build.Dir = filepath.Join("..", "..")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build server: %v\n%s", err, output)

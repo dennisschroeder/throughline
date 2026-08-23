@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dennisschroeder/workgraph/internal/app"
-	"github.com/dennisschroeder/workgraph/internal/domain/output"
-	"github.com/dennisschroeder/workgraph/internal/domain/work"
+	"github.com/dennisschroeder/throughline/internal/app"
+	"github.com/dennisschroeder/throughline/internal/domain/output"
+	"github.com/dennisschroeder/throughline/internal/domain/work"
 )
 
 func TestIntentAndPlanningVerticalSlice(t *testing.T) {
@@ -130,7 +130,7 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 		Title:    "Premature profile use",
 		Revision: 1,
 		Items: []app.ProposedWorkItem{{
-			ClientRef: "premature", Key: "WG-PREMATURE", Title: "Use an unreviewed vocabulary", Kind: "research",
+			ClientRef: "premature", Key: "TH-PREMATURE", Title: "Use an unreviewed vocabulary", Kind: "research",
 			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 			ExpectedOutputs: []app.ProposedExpectedOutput{{Name: "Evidence map", ProfileName: "evidence_map", ProfileVersion: 1, Required: true, Ordinal: 1}},
 		}},
@@ -199,7 +199,7 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 	if _, err := service.ProposePlan(ctx, app.ProposePlanCommand{
 		ObjectiveID: objective.ID, ActorID: "agent:planner", Title: "Stale profile plan", Revision: 1,
 		Items: []app.ProposedWorkItem{{
-			ClientRef: "stale", Key: "WG-STALE", Title: "Use the superseded profile", Kind: "research",
+			ClientRef: "stale", Key: "TH-STALE", Title: "Use the superseded profile", Kind: "research",
 			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 			ExpectedOutputs: []app.ProposedExpectedOutput{{Name: "Evidence map", ProfileName: "evidence_map", ProfileVersion: 1, Required: true, Ordinal: 1}},
 		}},
@@ -215,23 +215,23 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 		Revision: 1,
 		Items: []app.ProposedWorkItem{
 			{
-				ClientRef: "skill", ParentRef: "research", Key: "WG-SKILL", Title: "Design the reusable source-auditing skill", Kind: "skill_design",
+				ClientRef: "skill", ParentRef: "research", Key: "TH-SKILL", Title: "Design the reusable source-auditing skill", Kind: "skill_design",
 				Priority: work.PriorityHigh, EstimatedScope: work.ScopeMedium, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 				RequiredCapabilities: []string{"skill_design"},
 				ExpectedOutputs:      []app.ProposedExpectedOutput{{Name: "Skill package", ProfileName: "skill_package", ProfileVersion: 1, Required: true, Ordinal: 1}, {Name: "Evidence map", ProfileName: "evidence_map", ProfileVersion: 2, Required: true, Ordinal: 2}},
 			},
 			{
-				ClientRef: "research", Key: "WG-RESEARCH", Title: "Research source-auditing methods", Kind: "research",
+				ClientRef: "research", Key: "TH-RESEARCH", Title: "Research source-auditing methods", Kind: "research",
 				Priority: work.PriorityHigh, EstimatedScope: work.ScopeMedium, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 				RequiredCapabilities: []string{"web_research", "document_reading"},
 				ExpectedOutputs:      []app.ProposedExpectedOutput{{Name: "Method dossier", ProfileName: "research_dossier", ProfileVersion: 1, Required: true, Ordinal: 1}},
 			},
 			{
-				ClientRef: "installation", Key: "WG-INSTALL", Title: "Prepare the reviewed installation procedure", Kind: "tool_installation",
+				ClientRef: "installation", Key: "TH-INSTALL", Title: "Prepare the reviewed installation procedure", Kind: "tool_installation",
 				Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyApprovalRequired, RequiredActorKind: work.ActorHuman,
 				RequiredCapabilities: []string{"mcp_installation"},
 				ExpectedOutputs:      []app.ProposedExpectedOutput{{Name: "Installation procedure", ProfileName: "tool_installation", ProfileVersion: 1, Required: true, Ordinal: 1}},
-				ExternalActions:      []app.ProposedExternalAction{{Required: true, Title: "Install the reviewed skill", Rationale: "Installation is an externally authorized effect.", AuthorizationSubject: json.RawMessage(`{"action_type":"tool.install","target":{"tool":"workgraph"},"arguments":[],"scope":{},"permissions":["filesystem.write"],"credential_requirements":[],"constraints":{}}`)}},
+				ExternalActions:      []app.ProposedExternalAction{{Required: true, Title: "Install the reviewed skill", Rationale: "Installation is an externally authorized effect.", AuthorizationSubject: json.RawMessage(`{"action_type":"tool.install","target":{"tool":"throughline"},"arguments":[],"scope":{},"permissions":["filesystem.write"],"credential_requirements":[],"constraints":{}}`)}},
 			},
 		},
 	})
@@ -296,12 +296,12 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 		itemIDs[item.WorkItem.Key] = item.WorkItem.ID
 		parentIDs[item.WorkItem.Key] = item.WorkItem.ParentID
 	}
-	if installation := itemIDs["WG-INSTALL"]; installation == "" {
+	if installation := itemIDs["TH-INSTALL"]; installation == "" {
 		t.Fatal("installation work item is missing")
 	} else if context, err := service.GetWorkItem(ctx, installation); err != nil || len(context.ExternalActions) != 1 {
 		t.Fatalf("atomic planned external action = %#v, %v", context.ExternalActions, err)
 	}
-	if len(items) != 3 || parentIDs["WG-SKILL"] != itemIDs["WG-RESEARCH"] {
+	if len(items) != 3 || parentIDs["TH-SKILL"] != itemIDs["TH-RESEARCH"] {
 		t.Fatalf("recursive item hierarchy was not recovered: %#v", items)
 	}
 	for _, item := range items {
@@ -335,7 +335,7 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 	replacement, err := service.ProposePlan(ctx, app.ProposePlanCommand{
 		ObjectiveID: objective.ID, ActorID: "agent:planner", IdempotencyKey: "propose-replacement-plan", Title: "Source-auditing skill plan v2", Summary: "Refine the approved plan.", Revision: 2,
 		Items: []app.ProposedWorkItem{{
-			ClientRef: "refine", Key: "WG-REFINE", Title: "Refine the source-auditing skill", Kind: "skill_design",
+			ClientRef: "refine", Key: "TH-REFINE", Title: "Refine the source-auditing skill", Kind: "skill_design",
 			Priority: work.PriorityHigh, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 			RequiredCapabilities: []string{"skill_design"},
 			ExpectedOutputs:      []app.ProposedExpectedOutput{{Name: "Refined skill", ProfileName: "skill_package", ProfileVersion: 1, Required: true, Ordinal: 1}},
@@ -372,18 +372,18 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := service.RecordContext(ctx, app.RecordContextCommand{
-		ObjectiveID: otherObjective.ID, WorkItemID: itemIDs["WG-SKILL"], ActorID: "agent:planner", IdempotencyKey: "invalid-cross-objective-context",
+		ObjectiveID: otherObjective.ID, WorkItemID: itemIDs["TH-SKILL"], ActorID: "agent:planner", IdempotencyKey: "invalid-cross-objective-context",
 		Kind: work.ContextFinding, Title: "Cross-objective context", Status: work.ContextRecorded,
 	}); err == nil {
 		t.Fatal("expected cross-objective context record to be rejected")
 	}
 	if _, err := service.AskQuestion(ctx, app.AskQuestionCommand{
-		ObjectiveID: otherObjective.ID, WorkItemID: itemIDs["WG-SKILL"], ActorID: "agent:planner", IdempotencyKey: "invalid-cross-objective-question", Question: "Cross-objective question?",
+		ObjectiveID: otherObjective.ID, WorkItemID: itemIDs["TH-SKILL"], ActorID: "agent:planner", IdempotencyKey: "invalid-cross-objective-question", Question: "Cross-objective question?",
 	}); err == nil {
 		t.Fatal("expected cross-objective question to be rejected")
 	}
 	if _, err := service.RecordDecision(ctx, app.RecordDecisionCommand{
-		ObjectiveID: otherObjective.ID, WorkItemID: itemIDs["WG-SKILL"], ActorID: "human:sponsor", IdempotencyKey: "invalid-cross-objective-decision", Title: "Cross-objective decision", Decision: "Reject the invalid edge.",
+		ObjectiveID: otherObjective.ID, WorkItemID: itemIDs["TH-SKILL"], ActorID: "human:sponsor", IdempotencyKey: "invalid-cross-objective-decision", Title: "Cross-objective decision", Decision: "Reject the invalid edge.",
 	}); err == nil {
 		t.Fatal("expected cross-objective decision to be rejected")
 	}

@@ -1,24 +1,27 @@
-# Workgraph — implementation handoff
+# Throughline — implementation handoff
 
-**Status:** canonical V1 product and technical brief; revised after full-history, domain-neutral output, and delegated-authority audits  
+**Status:** architectural north star and technical brief; the bounded `v0.1.0` release contract is [Product Decision 0001](product/0001-market-testable-v0.1.md)
+
 **Audience:** a fresh coding/design session  
-**Working name:** `workgraph`  
+
+**Product name:** `Throughline`; executable/module slug: `throughline`
+
 **One-line thesis:** A lean, local-first, open-source authoritative state layer for domain-neutral agentic work, backed by SQLite and exposed primarily through MCP—deterministic from intent to accepted output and authorized external effect.
 
 ### Revision decision: non-code work is first-class
 
-Workgraph is domain-neutral. Its reference scenarios must include research, writing, operational and creative knowledge work, skill and agent design, tool/MCP/CLI installation, workflow design, structured deliverable production, evaluation, and human approvals—not only software implementation.
+Throughline is domain-neutral. Its reference scenarios must include research, writing, operational and creative knowledge work, skill and agent design, tool/MCP/CLI installation, workflow design, structured deliverable production, evaluation, and human approvals—not only software implementation.
 
-This scope matches the broader agentic-work pattern rather than a coding board: official OpenAI examples span automation, integrations, knowledge work, research, reports, dashboards, workflow audits, reusable skills, and CLI/tool creation ([ChatGPT/Codex use cases](https://learn.chatgpt.com/use-cases)). Workgraph supplies durable state for such work; it does not replicate the runtime that performs it.
+This scope matches the broader agentic-work pattern rather than a coding board: official OpenAI examples span automation, integrations, knowledge work, research, reports, dashboards, workflow audits, reusable skills, and CLI/tool creation ([ChatGPT/Codex use cases](https://learn.chatgpt.com/use-cases)). Throughline supplies durable state for such work; it does not replicate the runtime that performs it.
 
 The full-history and follow-up domain audits changed six earlier assumptions:
 
 1. The original `backlog → ready → in_progress → review → done` state machine is retained only as the **execution lifecycle**. It is insufficient as the lifecycle of an objective or plan.
 2. Planning context requires first-class requirements, constraints, assumptions, findings/evidence, questions, decisions, approvals, plans, expected outputs, and objective phases.
 3. The original MCP surface is the execution kernel, but it needs a small objective/context/plan surface in V1; otherwise the named domain concepts are read-only or forced into comments.
-4. Designing a skill, subagent, MCP integration, CLI toolchain, research method, or output package is valid work. Workgraph stores the authoritative plan, context, policies, checkpoints, and artifacts. The external agent runtime still performs the work and launches agents/tools.
-5. “A task is done and a file is attached” is too weak. Workgraph needs governed, immutable `OutputProfile` versions, immutable produced `OutputRevision`s, append-only `ValidationRecord`s, and reusable `OutputRequirement`s.
-6. Capability is not authority. Any concrete effect outside Workgraph is an `ExternalAction`; authorization binds an exact canonical action payload to a specific principal, scope, constraints, and lifetime. Workgraph records the authority chain and result evidence but does not execute the action.
+4. Designing a skill, subagent, MCP integration, CLI toolchain, research method, or output package is valid work. Throughline stores the authoritative plan, context, policies, checkpoints, and artifacts. The external agent runtime still performs the work and launches agents/tools.
+5. “A task is done and a file is attached” is too weak. Throughline needs governed, immutable `OutputProfile` versions, immutable produced `OutputRevision`s, append-only `ValidationRecord`s, and reusable `OutputRequirement`s.
+6. Capability is not authority. Any concrete effect outside Throughline is an `ExternalAction`; authorization binds an exact canonical action payload to a specific principal, scope, constraints, and lifetime. Throughline records the authority chain and result evidence but does not execute the action.
 
 ## 1. Read this first
 
@@ -41,7 +44,7 @@ The project must remain:
 - **Deterministic:** transactions, constraints, valid state transitions, optimistic concurrency, idempotency, and explicit leases protect shared state.
 - **LLM-efficient:** query small summaries and deltas first; retrieve deep context only when needed.
 
-The product is not “an AI app.” An LLM must not be required to use the state through the CLI or UI. Conversely, “not an orchestrator” does not mean “coding only”: Workgraph can represent and coordinate the creation of workflows, skills, agents, research systems, tools, structured output packages, and explicit external actions while leaving their actual execution to the connected human/agent runtime.
+The product is not “an AI app.” An LLM must not be required to use the state through the CLI or UI. Conversely, “not an orchestrator” does not mean “coding only”: Throughline can represent and coordinate the creation of workflows, skills, agents, research systems, tools, structured output packages, and explicit external actions while leaving their actual execution to the connected human/agent runtime.
 
 ## 2. Product rationale and positioning
 
@@ -49,7 +52,7 @@ The product is not “an AI app.” An LLM must not be required to use the state
 
 Agents and people repeatedly lose work context between sessions and tools. Chat transcripts are not a reliable shared source of truth, and a visual board alone is too weak for agents: it does not make executable work, dependencies, acceptance conditions, ownership, changes, or decisions queryable and enforceable.
 
-Workgraph makes the shared board/context the authoritative coordination state:
+Throughline makes the shared board/context the authoritative coordination state:
 
 ```text
                      authoritative shared state
@@ -85,7 +88,7 @@ The semantic differentiation must be equally concrete:
 
 The useful shorthand is: **less Jira/Plane for agents; more SQLite/Postgres-like coordination state for agentic work.**
 
-An additional shorthand for the semantic direction is: **Workgraph models work and delegated intent, not software-development tickets.**
+An additional shorthand for the semantic direction is: **Throughline models work and delegated intent, not software-development tickets.**
 
 ### Competitive research snapshot
 
@@ -94,7 +97,7 @@ This is positioning context, not an implementation dependency. Revalidate licens
 | Project | Relevant overlap | Positioning implication |
 |---|---|---|
 | Plane | Broad canonical work graph for humans and agents; open-source community edition with commercial layers | Do not chase its full workspace/project-management scope. |
-| Asana / Asana MCP | Existing commercial Work Graph exposed to agents through MCP | Workgraph is local, open, and not tied to a SaaS subscription. |
+| Asana / Asana MCP | Existing commercial Work Graph exposed to agents through MCP | Throughline is local, open, and not tied to a SaaS subscription. |
 | Muster | OSS human-agent collaboration platform with board/specs/agent visibility | Avoid building a broad collaboration suite. |
 | Agent Kanban / kanban-mcp | Agents pull/claim work over MCP; Kanban persistence/UI | Differentiate through SQLite simplicity, strong deterministic semantics, and headless work graph. |
 | Handoff | Proprietary hosted shared context graph/workspace | Local-first and open-source are material differences. |
@@ -135,15 +138,15 @@ Do not claim “non-code work” alone as unique. Asana and Plane already own br
 - No semantic/vector search in V1. SQLite FTS5 is a later optional enhancement; structured query remains canonical.
 - No attempt to define a new distributed multi-principal protocol in V1. Keep concurrency rules concrete and testable.
 
-### Boundary: skills/harnesses versus Workgraph
+### Boundary: skills/harnesses versus Throughline
 
 Use this rule for every proposed feature:
 
-> It belongs in Workgraph only if it is authoritative shared state or a deterministic operation over that state. Behavior, methodology, prompting, planning technique, and model-specific execution belong in skills or agent harnesses.
+> It belongs in Throughline only if it is authoritative shared state or a deterministic operation over that state. Behavior, methodology, prompting, planning technique, and model-specific execution belong in skills or agent harnesses.
 
 Examples:
 
-| Belongs in a skill/harness | Belongs in Workgraph |
+| Belongs in a skill/harness | Belongs in Throughline |
 |---|---|
 | How to decompose a research project | A work item depends on another item and is not executable yet |
 | How a coding agent writes tests | Acceptance criterion state and a completion gate |
@@ -187,9 +190,9 @@ Use these names consistently in code, tool contracts, UI, and documentation.
 | **Activity** | Append-only audit event recording a material state change or user/agent action. |
 | **Actor** | A human, agent, or service identity, represented as a stable string plus optional type/display metadata. An Actor is called a **principal** when it is the subject of delegated authority. V1 does not authenticate these identities. |
 | **Attention** | An orthogonal need for human review, a decision, clarification, or intervention. It is not a status column. |
-| **Capability** | A vendor-neutral ability required or offered, such as `web_research`, `document_authoring`, `filesystem_write`, `mcp_installation`, or `human_approval`. Workgraph records capability facts but does not select or launch the actor. |
+| **Capability** | A vendor-neutral ability required or offered, such as `web_research`, `document_authoring`, `filesystem_write`, `mcp_installation`, or `human_approval`. Throughline records capability facts but does not select or launch the actor. |
 | **ExecutionPolicy** | The autonomy gate for claiming/executing a WorkItem: `human_only`, `agent_may_propose`, `approval_required`, or `autonomous_with_report`. It never grants authority for an ExternalAction and is enforced only within trusted-local V1 identity. |
-| **ExternalAction** | A versioned proposal for an observable side effect outside Workgraph, such as install, publish, message, purchase, deletion, configuration change, deployment, permission grant, or external API call. It is not a WorkItem kind and Workgraph never executes it. |
+| **ExternalAction** | A versioned proposal for an observable side effect outside Throughline, such as install, publish, message, purchase, deletion, configuration change, deployment, permission grant, or external API call. It is not a WorkItem kind and Throughline never executes it. |
 | **AuthorizationSubject** | The canonical authorization-relevant subset of one ExternalAction revision: action type, target, arguments, scope, permissions, credential requirements, and declared constraints. Descriptive metadata and progress are excluded. |
 | **AuthorityGrant** | A least-authority record stating that one principal may perform one exact AuthorizationSubject within constraints and an optional expiry. V1 produces it from an explicit approval; a future deterministic policy layer may produce the same record. It is invalid when the subject hash, principal, constraints, or lifetime no longer match. |
 
@@ -264,25 +267,25 @@ MCP stdio / streamable transport          CLI                 optional local web
                                            │
                          repositories + transaction boundary
                                            │
-                                   SQLite (.workgraph/workgraph.db)
+                                   SQLite (.throughline/throughline.db)
 ```
 
 ### Local installation concept
 
 ```bash
-brew install workgraph              # distribution target, not a V1 requirement
+brew install throughline            # distribution target, not a v0.1 requirement
 cd my-project
-workgraph init                      # creates .workgraph/workgraph.db + config.toml
-workgraph mcp                       # starts the MCP server for configured transport
-workgraph ui                        # later: starts/opens a local human projection
+throughline init                    # creates .throughline/throughline.db + config.toml
+throughline mcp                     # starts the MCP server for configured transport
+throughline ui                      # later: starts/opens a local human projection
 ```
 
 Suggested generated layout:
 
 ```text
-.workgraph/
+.throughline/
   config.toml
-  workgraph.db
+  throughline.db
 ```
 
 `config.toml` should contain only local configuration such as schema version, item-key prefix, UI binding, and optional database path. Do not require secrets in V1.
@@ -308,7 +311,7 @@ Plan
 
 WorkItem
   id                  stable UUID/ULID internal ID
-  key                 readable identifier, e.g. WG-42 (unique within workspace)
+  key                 readable identifier, e.g. TH-42 (unique within workspace)
   objective_id        required objective
   plan_id             optional plan revision that proposed/committed the item
   parent_id           optional recursive decomposition parent
@@ -398,7 +401,7 @@ milestone
 
 Do not use a database `CHECK` for `kind`; keep reserved built-ins documented while allowing namespaced extensions such as `acme:legal_review`. Decision, question, assumption, finding, and requirement remain typed context records, not overloaded work-item kinds, although a work item may be created to resolve or produce one.
 
-Seed these initial active OutputProfile definitions during `workgraph init`:
+Seed these initial active OutputProfile definitions during `throughline init`:
 
 ```text
 structured_document/v1
@@ -411,7 +414,7 @@ workflow_definition/v1
 generic_artifact/v1
 ```
 
-They are ordinary persisted profile rows, not branches such as `if kind == research_dossier`. Agents may freely reference active profiles. Creating a definition is governed: propose a new immutable version, review/activate it, and supersede it only with another version. A profile describes structure, semantics, validation expectations, and acceptance expressions; Workgraph evaluates recorded facts against that contract but does not itself perform research, run skill evaluations, or install tools.
+They are ordinary persisted profile rows, not branches such as `if kind == research_dossier`. Agents may freely reference active profiles. Creating a definition is governed: propose a new immutable version, review/activate it, and supersede it only with another version. A profile describes structure, semantics, validation expectations, and acceptance expressions; Throughline evaluates recorded facts against that contract but does not itself perform research, run skill evaluations, or install tools.
 
 The four state axes are orthogonal:
 
@@ -485,7 +488,7 @@ The server identifies executable candidates; it does **not** choose the one an a
 15. Decisions and approval decisions are immutable records once resolved; corrections create a superseding record. Revocation/supersession must be visible to dependent work and grants.
 16. Expected outputs are satisfied only by an accepted immutable OutputRevision with all required ValidationRecords passed or explicitly waived. A file path, URL, or Artifact alone is not completion evidence.
 17. `execution_policy` gates claims/transitions. In local V1, identity is trusted rather than authenticated, so policy enforcement is a deterministic workflow safeguard, not a security boundary.
-18. Capability matching is declarative. Workgraph may filter readiness for an actor but never launches or chooses the actor/runtime.
+18. Capability matching is declarative. Throughline may filter readiness for an actor but never launches or chooses the actor/runtime.
 19. An active OutputProfile version is immutable. Any structure, semantics, validation, or acceptance change creates a proposed new version; existing OutputRevisions remain bound to the old version.
 20. Instance-specific ExpectedOutput constraints may narrow but never weaken the referenced OutputProfile contract.
 21. An OutputRevision is immutable. Materially changed content or artifact bindings create the next revision; validation of revision N never applies to revision N+1.
@@ -495,7 +498,7 @@ The server identifies executable candidates; it does **not** choose the one an a
 25. Authorization applies to the canonical AuthorizationSubject only. Metadata such as title, rationale, progress, and UI labels is excluded; action type, target, arguments, scope, permissions, credential requirements, and declared constraints are included.
 26. The same canonical serialization and hash algorithm must be used for proposal, grant, authorization check, and audit. Any authorization-relevant change creates a new action revision and makes earlier grants stale.
 27. A valid AuthorityGrant matches the exact action revision/subject hash, executing principal, constraints, and lifetime. Capability without a matching grant is denied; a grant never transfers to another principal implicitly.
-28. Workgraph never executes an ExternalAction. An external actor/harness records `executing` and a terminal result plus evidence. `succeeded` without authorization and result evidence is invalid.
+28. Throughline never executes an ExternalAction. An external actor/harness records `executing` and a terminal result plus evidence. `succeeded` without authorization and result evidence is invalid.
 29. Local V1 must not market these checks as an isolation or security boundary because actor identity is trusted. Preserve the model so authenticated network deployments can enforce it later.
 
 ### State model
@@ -1068,8 +1071,8 @@ Common error shape:
 {
   "error": {
     "code": "version_conflict",
-    "message": "WG-42 changed after version 7 was read.",
-    "current": { "id": "WG-42", "version": 8, "status": "review" },
+    "message": "TH-42 changed after version 7 was read.",
+    "current": { "id": "TH-42", "version": 8, "status": "review" },
     "requirements": []
   }
 }
@@ -1250,7 +1253,7 @@ Create and govern the shared vocabulary of finished work. A proposal supplies a 
 }
 ```
 
-This governed proposal/activation path prevents profile-name drift while retaining extension without Workgraph code changes.
+This governed proposal/activation path prevents profile-name drift while retaining extension without Throughline code changes.
 
 #### `define_expected_output`
 
@@ -1262,9 +1265,9 @@ Bind one or more attached Artifacts to a new immutable OutputRevision. The reque
 
 #### `record_validation`
 
-Record an externally produced validation verdict against one exact OutputRevision and criterion. Workgraph verifies the record shape and deterministically reevaluates the profile acceptance expression. It does not run the research, evaluation, shell probe, or human judgment itself. When all mandatory validations exist and pass (or are explicitly waived by authorized policy), the same transaction may mark the revision accepted and emit activity.
+Record an externally produced validation verdict against one exact OutputRevision and criterion. Throughline verifies the record shape and deterministically reevaluates the profile acceptance expression. It does not run the research, evaluation, shell probe, or human judgment itself. When all mandatory validations exist and pass (or are explicitly waived by authorized policy), the same transaction may mark the revision accepted and emit activity.
 
-Supported V1 validator kinds are `structure`, `schema`, `evaluation`, `provenance`, `human_review`, `policy`, `probe`, and `successor_use`. Human review must name the reviewer and immutable rubric/criterion; probe records include the external result and evidence rather than asking Workgraph to execute a command.
+Supported V1 validator kinds are `structure`, `schema`, `evaluation`, `provenance`, `human_review`, `policy`, `probe`, and `successor_use`. Human review must name the reviewer and immutable rubric/criterion; probe records include the external result and evidence rather than asking Throughline to execute a command.
 
 #### `list_outputs`
 
@@ -1274,11 +1277,11 @@ Discover bounded accepted outputs for reuse by `profile_name`, version constrain
 
 #### `propose_external_action`, `revise_external_action`
 
-Create the explicit boundary object for an effect outside Workgraph. `metadata` contains title/rationale and does not affect authorization. `authorization_subject` contains action type, target, arguments, scope, permissions, credential requirements, and constraints; the service canonicalizes and hashes it. `revise_external_action` creates an immutable next revision. It never mutates a subject already reviewed or executed.
+Create the explicit boundary object for an effect outside Throughline. `metadata` contains title/rationale and does not affect authorization. `authorization_subject` contains action type, target, arguments, scope, permissions, credential requirements, and constraints; the service canonicalizes and hashes it. `revise_external_action` creates an immutable next revision. It never mutates a subject already reviewed or executed.
 
 ```json
 {
-  "work_item_id": "WG-83",
+  "work_item_id": "TH-83",
   "actor_id": "agent:researcher-07",
   "idempotency_key": "install-browser-mcp-r1",
   "metadata": {
@@ -1307,7 +1310,7 @@ This is least-authority bookkeeping, not a security boundary in trusted-local V1
 
 #### `record_external_action_execution`
 
-Record `start`, `succeed`, or `fail` for one exact action revision, principal, and AuthorityGrant. `start` rechecks authorization. Terminal records include structured result and required evidence; success may reference the installed version, message ID, issue URL, deployment ID, or other observed effect. Workgraph never performs the effect.
+Record `start`, `succeed`, or `fail` for one exact action revision, principal, and AuthorityGrant. `start` rechecks authorization. Terminal records include structured result and required evidence; success may reference the installed version, message ID, issue URL, deployment ID, or other observed effect. Throughline never performs the effect.
 
 ### Read tools
 
@@ -1328,10 +1331,10 @@ Record `start`, `succeed`, or `fail` for one exact action revision, principal, a
   "external_actions_needing_authority": 2,
   "counts": { "backlog": 8, "ready": 3, "in_progress": 2, "review": 1, "blocked": 2, "done": 34 },
   "ready_high_priority": [
-    { "id": "WG-42", "title": "Add optimistic locking", "priority": "high", "estimated_scope": "small" }
+    { "id": "TH-42", "title": "Add optimistic locking", "priority": "high", "estimated_scope": "small" }
   ],
   "needs_human_attention": [
-    { "id": "WG-51", "attention_state": "needs_human_decision", "title": "Choose persistence policy" }
+    { "id": "TH-51", "attention_state": "needs_human_decision", "title": "Choose persistence policy" }
   ]
 }
 ```
@@ -1351,7 +1354,7 @@ Input supports `objective_id`, `objective_phase[]`, `plan_id`, `commitment_state
 ```json
 // output item
 {
-  "id": "WG-42",
+  "id": "TH-42",
   "title": "Add optimistic locking",
   "kind": "action",
   "commitment_state": "accepted",
@@ -1374,7 +1377,7 @@ Accept actor ID so an agent’s own unexpired claim can remain visible. Exclude 
 ```json
 // input
 {
-  "id": "WG-42",
+  "id": "TH-42",
   "include": ["description", "plan", "context", "acceptance_criteria", "expected_outputs", "output_revisions", "validations", "required_outputs", "capabilities", "external_actions", "authority_grants", "dependencies", "claims", "progress", "decisions", "questions", "approvals", "artifacts", "activity"],
   "activity_limit": 20
 }
@@ -1408,8 +1411,8 @@ V1 is selection-based and size-bounded, not semantically generated: return objec
 // output
 {
   "changes": [
-    { "sequence": 143, "item_id": "WG-42", "event_type": "status_changed", "summary": "Moved to review", "created_at": "..." },
-    { "sequence": 144, "item_id": "WG-51", "event_type": "attention_requested", "summary": "Human decision needed", "created_at": "..." }
+    { "sequence": 143, "item_id": "TH-42", "event_type": "status_changed", "summary": "Moved to review", "created_at": "..." },
+    { "sequence": 144, "item_id": "TH-51", "event_type": "attention_requested", "summary": "Human decision needed", "created_at": "..." }
   ],
   "next_cursor": "144",
   "has_more": false
@@ -1450,7 +1453,7 @@ Atomically checks objective phase, plan commitment, dependencies/blockers, requi
 
 ```json
 {
-  "id": "WG-42",
+  "id": "TH-42",
   "actor_id": "agent:coding-01",
   "expected_version": 17,
   "idempotency_key": "run-821-claim-wg42",
@@ -1481,7 +1484,7 @@ The only ordinary way to change workflow status. Input: id, target enum, expecte
 
 ```json
 {
-  "id": "WG-42",
+  "id": "TH-42",
   "to": "done",
   "expected_version": 19,
   "actor_id": "agent:review-01",
@@ -1498,7 +1501,7 @@ Creates a concise checkpoint, without overwriting old progress.
 
 ```json
 {
-  "id": "WG-42",
+  "id": "TH-42",
   "expected_version": 18,
   "actor_id": "agent:coding-01",
   "idempotency_key": "run-821-progress-2",
@@ -1598,7 +1601,7 @@ Objective → approved Plan → WorkItem
                                 → execution result → evidence
 ```
 
-The expected outputs might be an installable skill directory, an agent definition, MCP/CLI configuration, a source-linked research dossier, an evaluation result, and an operator guide. The accepted skill/output may be consumed by a later objective without copying its facts into chat. The connected runtime creates files, installs tools, delegates subagents, and performs external actions; Workgraph records what should happen, what is allowed, and what actually happened but never performs the side effects.
+The expected outputs might be an installable skill directory, an agent definition, MCP/CLI configuration, a source-linked research dossier, an evaluation result, and an operator guide. The accepted skill/output may be consumed by a later objective without copying its facts into chat. The connected runtime creates files, installs tools, delegates subagents, and performs external actions; Throughline records what should happen, what is allowed, and what actually happened but never performs the side effects.
 
 This workflow must run in a temporary directory with no Git repository and no coding artifact types. That is a mandatory architecture/acceptance test, not a demo preference.
 
@@ -1612,7 +1615,7 @@ Server instructions should teach this workflow concisely:
 4. Call `claim_item` before doing shared work.
 5. Inspect ExpectedOutput profiles, required reusable outputs, and any ExternalActions before acting.
 6. For an outside effect, propose the exact action, obtain/verify a matching grant for this principal, and call `check_action_authorization` immediately before the harness acts.
-7. Do the external work in the appropriate harness/tooling; record ExternalAction start/result/evidence without implying Workgraph performed it.
+7. Do the external work in the appropriate harness/tooling; record ExternalAction start/result/evidence without implying Throughline performed it.
 8. Call `append_progress` after meaningful checkpoints, discoveries, or a blocker.
 9. Attach relevant artifacts, create immutable OutputRevisions, and record required validations.
 10. Update criteria and use `transition_item`; never bypass the gates.
@@ -1669,14 +1672,14 @@ Blocked and human attention are badges/filters or dedicated queues, not permanen
 ## 10. Recommended repository structure
 
 ```text
-workgraph/
+throughline/
   go.mod
   go.sum
   README.md
   LICENSE
   CONTRIBUTING.md
   cmd/
-    workgraph/
+    throughline/
       main.go
   internal/
     domain/
@@ -1726,7 +1729,7 @@ Rules:
 - `internal/sqlite` implements ports and owns embedded migrations/SQL queries.
 - MCP and CLI are thin adapters around use cases.
 - MCP request/response structs belong at the adapter boundary and map to application commands/queries; contract tests prevent JSON Schema drift from runtime validation.
-- Introduce a workspace configuration/locator module rather than scattering `.workgraph` filesystem logic.
+- Introduce a workspace configuration/locator module rather than scattering `.throughline` filesystem logic.
 
 ## 11. V1 delivery plan
 
@@ -1734,12 +1737,12 @@ Rules:
 
 - Use Go; pin toolchain/dependencies, select the license, and configure formatting, static analysis, vulnerability checks, and tests.
 - Create the repository structure and CI that runs format, lint, type checks, unit tests, integration tests.
-- Implement `workgraph init`, configuration parsing, database creation, migrations, SQLite pragmas, and a seeded local actor strategy.
+- Implement `throughline init`, configuration parsing, database creation, migrations, SQLite pragmas, and a seeded local actor strategy.
 - Write ADRs for authoritative SQLite, graph-first domain, concurrency/idempotency, immutable output contracts, and exact-payload delegated authority.
 - Specify and test the canonical AuthorizationSubject serialization/hash before adapter work.
 - Revalidate a competitor matrix against the actual primitives (headless/local, context records, plan approval, leases, concurrency, outputs, handoffs, context projection) and review MPAC/multi-principal coordination literature before claiming novel protocol semantics.
 
-**Exit criterion:** `workgraph init` reliably creates a valid, migration-tracked `.workgraph/workgraph.db`, seeds the generic active OutputProfiles as data, and can reopen it without profile-name branches in domain code.
+**Exit criterion:** `throughline init` reliably creates a valid, migration-tracked `.throughline/throughline.db`, seeds the generic active OutputProfiles as data, and can reopen it without profile-name branches in domain code.
 
 ### Milestone 1 — intent and planning vertical slice
 
@@ -1922,7 +1925,7 @@ Rules:
 
 ## 15. Definition of V1 success
 
-Workgraph V1 succeeds if a person can initialize one local workspace and two different MCP-capable agents can safely carry a domain-neutral objective from exploration through approved execution, accepted/reusable output, and authorized external effects across sessions:
+Throughline's architectural destination succeeds if a person can initialize one local workspace and two different MCP-capable agents can safely carry a domain-neutral objective from exploration through approved execution, accepted/reusable output, and authorized external effects across sessions. The bounded `v0.1.0` release criteria are defined separately in Product Decision 0001:
 
 - the objective preserves desired outcome, requirements, constraints, success metrics, assumptions, findings, decisions, questions, and approvals;
 - agents can propose a plan for research, writing, workflow/skill/subagent design, tool installation/configuration, evaluation, and structured outputs without prematurely executing it;
@@ -1930,7 +1933,7 @@ Workgraph V1 succeeds if a person can initialize one local workspace and two dif
 - produced work is represented by immutable OutputRevisions, append-only validation evidence, deterministic acceptance, and reusable OutputRequirements—not merely attached files;
 - human approval converts a plan proposal into shared commitment, while each outside effect remains separately represented as an exact ExternalAction;
 - capability never implies authority: a valid grant binds one principal, action revision/subject hash, constraints, and lifetime, and payload/principal drift is denied;
-- Workgraph records action execution results/evidence and can reconstruct why/what/who/may/did, while the connected harness performs the effect;
+- Throughline records action execution results/evidence and can reconstruct why/what/who/may/did, while the connected harness performs the effect;
 - each agent can efficiently find genuine ready work;
 - only one agent can actively hold a work lease;
 - dependencies, criteria, blockers, decisions, plans, OutputProfiles, ExpectedOutputs, OutputRevisions, validations, reusable requirements, ExternalActions, grants, artifacts, and progress survive restarts;
@@ -1940,7 +1943,7 @@ Workgraph V1 succeeds if a person can initialize one local workspace and two dif
 - at least one mandatory end-to-end workflow completes and reuses an accepted output without a repository, Git operation, code artifact, automated test, build system, CI system, or pull request;
 - all of this works from a single local SQLite file without Docker, Postgres, Redis, a vendor account, or a mandatory web UI.
 
-If a proposed feature does not make this workflow safer, clearer, or more composable, it probably belongs in a skill, harness, or later product layer—not in V1 Workgraph.
+If a proposed feature does not make this workflow safer, clearer, or more composable, it probably belongs in a skill, harness, or later product layer—not in Throughline's core.
 
 ## 16. Full-history audit record
 
@@ -1966,13 +1969,13 @@ The source conversation was reread turn by turn, not only from its cached previe
 | Finished work needs a contract, revision, evidence, and reuse—not only an attachment | Added as persisted governed OutputProfiles, ExpectedOutputs, immutable OutputRevisions, append-only ValidationRecords, and OutputRequirements. |
 | Output vocabulary can evolve without profile-name branches | Added: active profile versions are immutable persisted rows; agents propose and authorized actors activate new versions through shared domain services/MCP/CLI/UI. |
 | Capability does not imply authority | Added as a core invariant and tested denial path. |
-| External side effects are independent domain objects | Added as versioned ExternalActions rather than WorkItem kinds; Workgraph records but does not execute them. |
+| External side effects are independent domain objects | Added as versioned ExternalActions rather than WorkItem kinds; Throughline records but does not execute them. |
 | Approval binds the exact operation and principal | Added as canonical AuthorizationSubject hash + principal + constraints + expiry, materialized as an AuthorityGrant; payload drift invalidates authority. |
 | Intent, decision, execution, output-lineage, and authority memory | Added as explicit explainable projections. |
 | Context compiler/`continue_work` | Basic deterministic objective context is V1; token-budgeted/semantic compilation remains later. |
 | Skills teach behavior; MCP owns durable shared state and invariants | Preserved and clarified for skill/subagent/tooling creation. |
 | SQLite is the source of truth; MCP/CLI/UI are interfaces | Preserved. |
-| Lean local install: `workgraph init`, `workgraph mcp`, `workgraph ui` | Preserved. |
+| Lean local install: `throughline init`, `throughline mcp`, `throughline ui` | Preserved. |
 | Open-source, headless, vendor-neutral, no Docker/Postgres/Redis/account required | Preserved. |
 | Do not become another Plane/Jira or an agent orchestrator | Preserved; modeling agentic workflow design/coordination does not authorize launching agents or executing external side effects. |
 

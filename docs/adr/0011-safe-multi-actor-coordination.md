@@ -35,7 +35,7 @@ expression evaluator. Authorization is derived at read/start time from the curre
 principal, capability facts, grant state, and expiry; the action's lifecycle state is not treated as
 the authorization decision. Revocation is append-only state, never deletion.
 
-Workgraph records but never performs external effects. Starting an execution rechecks authorization
+Throughline records but never performs external effects. Starting an execution rechecks authorization
 in the same write transaction. A terminal result must bind that started attempt; success also
 requires result evidence. A later revocation or expiry does not prevent recording the historical
 terminal result of an already authorized start.

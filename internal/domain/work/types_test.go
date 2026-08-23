@@ -8,7 +8,7 @@ import (
 func TestWorkItemKindIsDomainNeutralAndExtensible(t *testing.T) {
 	item, err := NewWorkItem(WorkItem{
 		ID:                "018f0000-0000-7000-8000-000000000001",
-		Key:               "WG-1",
+		Key:               "TH-1",
 		ObjectiveID:       "objective",
 		PlanID:            "plan",
 		Title:             "Synthesize interview evidence",

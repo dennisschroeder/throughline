@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dennisschroeder/workgraph/internal/domain/output"
-	"github.com/dennisschroeder/workgraph/internal/domain/work"
-	"github.com/dennisschroeder/workgraph/internal/ports"
+	"github.com/dennisschroeder/throughline/internal/domain/output"
+	"github.com/dennisschroeder/throughline/internal/domain/work"
+	"github.com/dennisschroeder/throughline/internal/ports"
 )
 
 func (r *transactionRepository) UpdateWorkItem(ctx context.Context, item work.WorkItem, expectedVersion int) error {

@@ -1,4 +1,4 @@
-// Package mcp exposes Workgraph's application services over MCP stdio.
+// Package mcp exposes Throughline's application services over MCP stdio.
 package mcp
 
 import (
@@ -18,11 +18,11 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dennisschroeder/workgraph/internal/app"
-	"github.com/dennisschroeder/workgraph/internal/domain/authority"
-	"github.com/dennisschroeder/workgraph/internal/domain/output"
-	"github.com/dennisschroeder/workgraph/internal/domain/work"
-	"github.com/dennisschroeder/workgraph/internal/ports"
+	"github.com/dennisschroeder/throughline/internal/app"
+	"github.com/dennisschroeder/throughline/internal/domain/authority"
+	"github.com/dennisschroeder/throughline/internal/domain/output"
+	"github.com/dennisschroeder/throughline/internal/domain/work"
+	"github.com/dennisschroeder/throughline/internal/ports"
 )
 
 const workspaceID = "local"
@@ -35,8 +35,8 @@ func Run(ctx context.Context, service *app.Service) error {
 // NewServer constructs the single-workspace MCP adapter for embedding and tests.
 func NewServer(service *app.Service) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{
-		Name:        "workgraph",
-		Title:       "Workgraph",
+		Name:        "throughline",
+		Title:       "Throughline",
 		Version:     "v1",
 		Description: "Authoritative local coordination state. Start with board_overview, then list_ready_items and get_item before claiming work.",
 	}, &mcp.ServerOptions{Instructions: serverInstructions})
@@ -45,7 +45,7 @@ func NewServer(service *app.Service) *mcp.Server {
 	return server
 }
 
-const serverInstructions = `Use Workgraph as durable shared coordination state, not as an execution harness. Start with board_overview, list_ready_items, and get_item. Claim an item before shared work and pass the returned version to every mutation. Inspect output contracts and external actions before acting. Workgraph records external action proposals, grants, starts, results, and evidence; it never performs external effects. Use get_changes and get_objective_context to resume without hidden session state.`
+const serverInstructions = `Use Throughline as durable shared coordination state, not as an execution harness. Start with board_overview, list_ready_items, and get_item. Claim an item before shared work and pass the returned version to every mutation. Inspect output contracts and external actions before acting. Throughline records external action proposals, grants, starts, results, and evidence; it never performs external effects. Use get_changes and get_objective_context to resume without hidden session state.`
 
 type adapter struct{ service *app.Service }
 

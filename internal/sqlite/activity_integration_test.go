@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dennisschroeder/workgraph/internal/app"
-	"github.com/dennisschroeder/workgraph/internal/domain/work"
+	"github.com/dennisschroeder/throughline/internal/app"
+	"github.com/dennisschroeder/throughline/internal/domain/work"
 )
 
 func TestMutationRollsBackWhenActivityCannotBeRecorded(t *testing.T) {

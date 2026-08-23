@@ -1,6 +1,6 @@
 # First implementation task
 
-Implement Workgraph's executable foundation milestone and one thin domain-neutral vertical slice.
+Implement Throughline's executable foundation milestone and one thin domain-neutral vertical slice.
 
 ## Source of truth
 
@@ -14,9 +14,9 @@ Do not attempt the entire V1 in this task.
 
 1. Inspect the repository and write a short implementation plan.
 2. Scaffold the Go module and the smallest useful form of the recommended repository structure.
-3. Produce one `workgraph` binary.
+3. Produce one `throughline` binary.
 4. Implement:
-   - `workgraph init`;
+   - `throughline init`;
    - workspace configuration and database-path resolution;
    - SQLite connection setup and required pragmas;
    - embedded, versioned, transactional migrations;
@@ -51,7 +51,7 @@ Do not attempt the entire V1 in this task.
 - Do not hardcode behavior based on OutputProfile names. Profiles are governed, versioned database
   entities.
 - Preserve capability versus authority as separate concepts.
-- Workgraph does not orchestrate agents or execute external actions.
+- Throughline does not orchestrate agents or execute external actions.
 - Keep external-action persistence and execution outside this milestone, except for the canonical
   authorization-subject specification and fixtures required by the handoff.
 - Avoid speculative abstractions and unused directories.
@@ -60,7 +60,7 @@ Do not attempt the entire V1 in this task.
 
 - Format all Go code.
 - Run static checks, build all packages, and run the complete test suite.
-- Verify `workgraph init` creates a usable database and is safe to run again.
+- Verify `throughline init` creates a usable database and is safe to run again.
 - Verify migrations and seeded profiles are deterministic and idempotent.
 - Verify no domain behavior branches on profile names.
 - Verify the vertical slice with a non-code scenario such as producing a research dossier or

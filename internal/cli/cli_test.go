@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dennisschroeder/workgraph/internal/app"
-	"github.com/dennisschroeder/workgraph/internal/config"
-	"github.com/dennisschroeder/workgraph/internal/domain/work"
-	workgraphsqlite "github.com/dennisschroeder/workgraph/internal/sqlite"
+	"github.com/dennisschroeder/throughline/internal/app"
+	"github.com/dennisschroeder/throughline/internal/config"
+	"github.com/dennisschroeder/throughline/internal/domain/work"
+	throughlinesqlite "github.com/dennisschroeder/throughline/internal/sqlite"
 )
 
 func TestInitCanRunTwice(t *testing.T) {
@@ -23,7 +23,7 @@ func TestInitCanRunTwice(t *testing.T) {
 	if code := Run(context.Background(), []string{"init", root}, &stdout, &stderr); code != 0 {
 		t.Fatalf("first init exited %d: %s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "initialized Workgraph workspace") {
+	if !strings.Contains(stdout.String(), "initialized Throughline workspace") {
 		t.Fatalf("first init output = %q", stdout.String())
 	}
 	stdout.Reset()
@@ -31,7 +31,7 @@ func TestInitCanRunTwice(t *testing.T) {
 	if code := Run(context.Background(), []string{"init", root}, &stdout, &stderr); code != 0 {
 		t.Fatalf("second init exited %d: %s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "reopened Workgraph workspace") {
+	if !strings.Contains(stdout.String(), "reopened Throughline workspace") {
 		t.Fatalf("second init output = %q", stdout.String())
 	}
 
@@ -57,7 +57,7 @@ func TestReadyAndShowInspectExecutionGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	database, err := workgraphsqlite.Open(ctx, workspace.DatabasePath)
+	database, err := throughlinesqlite.Open(ctx, workspace.DatabasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestReadyAndShowInspectExecutionGraph(t *testing.T) {
 	plan, err := service.ProposePlan(ctx, app.ProposePlanCommand{
 		ObjectiveID: objective.ID, ActorID: "agent:planner", IdempotencyKey: "propose-plan-cli", Title: "Research plan", Revision: 1,
 		Items: []app.ProposedWorkItem{{
-			ClientRef: "research", Key: "WG-CLI", Title: "Prepare the research dossier", Kind: "research",
+			ClientRef: "research", Key: "TH-CLI", Title: "Prepare the research dossier", Kind: "research",
 			Priority: work.PriorityHigh, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 		}},
 	})
@@ -107,7 +107,7 @@ func TestReadyAndShowInspectExecutionGraph(t *testing.T) {
 	if code := Run(ctx, []string{"ready", root}, &stdout, &stderr); code != 0 {
 		t.Fatalf("ready exited %d: %s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "WG-CLI\tPrepare the research dossier") {
+	if !strings.Contains(stdout.String(), "TH-CLI\tPrepare the research dossier") {
 		t.Fatalf("ready output = %q", stdout.String())
 	}
 	stdout.Reset()
@@ -115,7 +115,7 @@ func TestReadyAndShowInspectExecutionGraph(t *testing.T) {
 	if code := Run(ctx, []string{"show", item.ID, root}, &stdout, &stderr); code != 0 {
 		t.Fatalf("show exited %d: %s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), `"Key": "WG-CLI"`) || !strings.Contains(stdout.String(), `"ExecutionStatus": "ready"`) {
+	if !strings.Contains(stdout.String(), `"Key": "TH-CLI"`) || !strings.Contains(stdout.String(), `"ExecutionStatus": "ready"`) {
 		t.Fatalf("show output = %q", stdout.String())
 	}
 }

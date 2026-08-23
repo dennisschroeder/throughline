@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	DirectoryName       = ".workgraph"
+	DirectoryName       = ".throughline"
 	ConfigFileName      = "config.toml"
-	DefaultDatabasePath = "workgraph.db"
+	DefaultDatabasePath = "throughline.db"
 	CurrentSchema       = 1
 )
 
@@ -69,7 +69,7 @@ func Initialize(root, databasePath string) (Workspace, bool, error) {
 	workspaceConfig := Config{
 		SchemaVersion: CurrentSchema,
 		DatabasePath:  databasePath,
-		ItemKeyPrefix: "WG",
+		ItemKeyPrefix: "TH",
 	}
 	encoded, err := toml.Marshal(workspaceConfig)
 	if err != nil {
@@ -108,7 +108,7 @@ func Find(start string) (Workspace, error) {
 		}
 		parent := filepath.Dir(current)
 		if parent == current {
-			return Workspace{}, errors.New("no Workgraph workspace found")
+			return Workspace{}, errors.New("no Throughline workspace found")
 		}
 		current = parent
 	}

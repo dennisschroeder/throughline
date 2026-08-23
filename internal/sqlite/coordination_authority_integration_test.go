@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dennisschroeder/workgraph/internal/app"
-	"github.com/dennisschroeder/workgraph/internal/domain/authority"
-	"github.com/dennisschroeder/workgraph/internal/domain/work"
-	"github.com/dennisschroeder/workgraph/internal/ports"
+	"github.com/dennisschroeder/throughline/internal/app"
+	"github.com/dennisschroeder/throughline/internal/domain/authority"
+	"github.com/dennisschroeder/throughline/internal/domain/work"
+	"github.com/dennisschroeder/throughline/internal/ports"
 )
 
 func TestCoordinationAndAuthorityVerticalSlice(t *testing.T) {
@@ -91,7 +91,7 @@ func TestCoordinationAndAuthorityVerticalSlice(t *testing.T) {
 	item = progress.WorkItem
 	evidence, err := service.AttachArtifact(ctx, app.AttachArtifactCommand{
 		WorkItemID: item.ID, ActorID: "agent:researcher", ExpectedVersion: item.Version, IdempotencyKey: "attach-evidence",
-		Kind: "document", URI: "workgraph://research/evidence-dossier", Title: "Evidence dossier", Metadata: json.RawMessage(`{"format":"markdown"}`),
+		Kind: "document", URI: "throughline://research/evidence-dossier", Title: "Evidence dossier", Metadata: json.RawMessage(`{"format":"markdown"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -243,7 +243,7 @@ func createReadyResearchItem(t *testing.T, ctx context.Context, service *app.Ser
 	plan, err := service.ProposePlan(ctx, app.ProposePlanCommand{
 		ObjectiveID: objective.ID, ActorID: "agent:planner", IdempotencyKey: "propose-plan-coordination", Title: "Research and publish", Revision: 1,
 		Items: []app.ProposedWorkItem{{
-			ClientRef: "dossier", Key: "WG-COORDINATION", Title: "Research the dossier", Kind: "research", Priority: work.PriorityHigh,
+			ClientRef: "dossier", Key: "TH-COORDINATION", Title: "Research the dossier", Kind: "research", Priority: work.PriorityHigh,
 			EstimatedScope: work.ScopeMedium, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent, RequiredCapabilities: []string{"research"},
 		}},
 	})

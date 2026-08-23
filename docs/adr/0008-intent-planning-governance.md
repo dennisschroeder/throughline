@@ -20,7 +20,7 @@ approved no-plan execution exception is not yet implemented.
 
 A planned installation is represented by a domain-neutral `tool_installation` WorkItem with an
 execution policy, capability requirements, and ExpectedOutput. Exact ExternalAction revisions,
-principal-bound grants, and execution evidence remain outside this milestone; Workgraph performs no
+principal-bound grants, and execution evidence remain outside this milestone; Throughline performs no
 installation or other external effect.
 
 ## Consequences

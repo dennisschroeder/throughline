@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dennisschroeder/workgraph/internal/ports"
+	"github.com/dennisschroeder/throughline/internal/ports"
 )
 
 func executeIdempotently[T any](ctx context.Context, service *Service, repository ports.Repository, actorID, key, operation string, request any, execute func() (T, error)) (T, error) {

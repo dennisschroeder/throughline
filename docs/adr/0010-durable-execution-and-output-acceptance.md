@@ -35,7 +35,7 @@ recording a new revision digest and a newly finalized binding set.
 Work-item execution transitions implement only the lifecycle and completion gates needed by this
 milestone. Claims, actor capability matching, idempotency, the complete transition policy, manual
 blockers, external actions, and delegated authority remain later milestones. Actor identifiers are
-still trusted local audit strings; Workgraph records actions and never executes external effects.
+still trusted local audit strings; Throughline records actions and never executes external effects.
 
 ## Consequences
 

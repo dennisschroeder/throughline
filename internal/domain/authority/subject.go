@@ -11,7 +11,7 @@ import (
 	"sort"
 )
 
-// CanonicalizeSubject implements Workgraph Canonical JSON v1 for an AuthorizationSubject.
+// CanonicalizeSubject implements Throughline Canonical JSON v1 for an AuthorizationSubject.
 func CanonicalizeSubject(raw []byte) ([]byte, error) {
 	if err := rejectDuplicateKeys(raw); err != nil {
 		return nil, err

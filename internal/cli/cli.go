@@ -10,10 +10,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/dennisschroeder/workgraph/internal/app"
-	"github.com/dennisschroeder/workgraph/internal/config"
-	workgraphmcp "github.com/dennisschroeder/workgraph/internal/mcp"
-	workgraphsqlite "github.com/dennisschroeder/workgraph/internal/sqlite"
+	"github.com/dennisschroeder/throughline/internal/app"
+	"github.com/dennisschroeder/throughline/internal/config"
+	throughlinemcp "github.com/dennisschroeder/throughline/internal/mcp"
+	throughlinesqlite "github.com/dennisschroeder/throughline/internal/sqlite"
 )
 
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -24,25 +24,25 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "init":
 		if err := runInit(ctx, args[1:], stdout, stderr); err != nil {
-			fmt.Fprintf(stderr, "workgraph init: %v\n", err)
+			fmt.Fprintf(stderr, "throughline init: %v\n", err)
 			return 1
 		}
 		return 0
 	case "ready":
 		if err := runReady(ctx, args[1:], stdout, stderr); err != nil {
-			fmt.Fprintf(stderr, "workgraph ready: %v\n", err)
+			fmt.Fprintf(stderr, "throughline ready: %v\n", err)
 			return 1
 		}
 		return 0
 	case "show":
 		if err := runShow(ctx, args[1:], stdout, stderr); err != nil {
-			fmt.Fprintf(stderr, "workgraph show: %v\n", err)
+			fmt.Fprintf(stderr, "throughline show: %v\n", err)
 			return 1
 		}
 		return 0
 	case "mcp":
 		if err := runMCP(ctx, args[1:], stderr); err != nil {
-			fmt.Fprintf(stderr, "workgraph mcp: %v\n", err)
+			fmt.Fprintf(stderr, "throughline mcp: %v\n", err)
 			return 1
 		}
 		return 0
@@ -70,7 +70,7 @@ func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
 		return err
 	}
 	defer closeDatabase()
-	return workgraphmcp.Run(ctx, service)
+	return throughlinemcp.Run(ctx, service)
 }
 
 func runReady(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -132,7 +132,7 @@ func workspaceService(ctx context.Context, directory string) (*app.Service, func
 	if err != nil {
 		return nil, nil, err
 	}
-	database, err := workgraphsqlite.Open(ctx, workspace.DatabasePath)
+	database, err := throughlinesqlite.Open(ctx, workspace.DatabasePath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -153,7 +153,7 @@ func optionalDirectory(args []string) string {
 func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	databasePath := flags.String("database", "", "database path, absolute or relative to .workgraph")
+	databasePath := flags.String("database", "", "database path, absolute or relative to .throughline")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -177,7 +177,7 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	if err := os.MkdirAll(filepath.Dir(workspace.DatabasePath), 0o755); err != nil {
 		return fmt.Errorf("create database directory: %w", err)
 	}
-	database, err := workgraphsqlite.Open(ctx, workspace.DatabasePath)
+	database, err := throughlinesqlite.Open(ctx, workspace.DatabasePath)
 	if err != nil {
 		return err
 	}
@@ -189,10 +189,10 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	if created {
 		verb = "initialized"
 	}
-	fmt.Fprintf(stdout, "%s Workgraph workspace at %s\ndatabase: %s\n", verb, workspace.Root, workspace.DatabasePath)
+	fmt.Fprintf(stdout, "%s Throughline workspace at %s\ndatabase: %s\n", verb, workspace.Root, workspace.DatabasePath)
 	return nil
 }
 
 func writeUsage(writer io.Writer) {
-	fmt.Fprintln(writer, "usage: workgraph <init|ready|show|mcp> [arguments]")
+	fmt.Fprintln(writer, "usage: throughline <init|ready|show|mcp> [arguments]")
 }

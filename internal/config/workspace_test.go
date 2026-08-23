@@ -15,6 +15,15 @@ func TestInitializeIsIdempotentAndFindsWorkspaceFromDescendant(t *testing.T) {
 	if !created {
 		t.Fatal("first initialization should create the workspace")
 	}
+	if filepath.Base(first.Directory) != ".throughline" {
+		t.Fatalf("workspace directory = %q", first.Directory)
+	}
+	if filepath.Base(first.DatabasePath) != "throughline.db" {
+		t.Fatalf("database path = %q", first.DatabasePath)
+	}
+	if first.Config.ItemKeyPrefix != "TH" {
+		t.Fatalf("item key prefix = %q", first.Config.ItemKeyPrefix)
+	}
 	second, created, err := Initialize(root, "")
 	if err != nil {
 		t.Fatal(err)

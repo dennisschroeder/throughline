@@ -28,7 +28,7 @@ real MCP client/server session and verifies tool discovery, read-only annotation
 explicitly, choose an output path outside the working tree:
 
 ```bash
-go build -o /tmp/workgraph ./cmd/workgraph
+go build -o /tmp/throughline ./cmd/throughline
 ```
 
 ## Initialization smoke test
@@ -37,9 +37,9 @@ Run this in an ordinary empty directory; Git is neither inspected nor required:
 
 ```bash
 tmpdir="$(mktemp -d)"
-go run ./cmd/workgraph init "$tmpdir"
-go run ./cmd/workgraph init "$tmpdir"
-find "$tmpdir/.workgraph" -maxdepth 1 -type f -print
+go run ./cmd/throughline init "$tmpdir"
+go run ./cmd/throughline init "$tmpdir"
+find "$tmpdir/.throughline" -maxdepth 1 -type f -print
 ```
 
 The first command reports `initialized`; the second reports `reopened`. The SQLite integration test
@@ -48,11 +48,11 @@ WAL mode on, and a 5000 ms busy timeout.
 
 ## Database and configuration
 
-`.workgraph/config.toml` currently contains a configuration schema version, the database path, and
-the item-key prefix. Relative database paths resolve from `.workgraph/`; absolute paths remain
+`.throughline/config.toml` currently contains a configuration schema version, the database path, and
+the item-key prefix. Relative database paths resolve from `.throughline/`; absolute paths remain
 absolute. Workspace discovery walks from a starting directory toward the filesystem root.
 
-The database is authoritative. Do not edit it while Workgraph is running or place the WAL database
+The database is authoritative. Do not edit it while Throughline is running or place the WAL database
 on an ordinary network filesystem. For this milestone, each process uses one long-lived SQLite
 connection, so writes are serialized and all operations share the required pragmas.
 
@@ -80,7 +80,7 @@ OutputProfile behavior is data-driven. The application checks persisted lifecycl
 version; it never branches on profile names. Proposed profile versions are unavailable to plans
 until an explicit review activates them.
 
-`workgraph ready [DIRECTORY]` lists derived ready work. `workgraph show WORK_ITEM_ID [DIRECTORY]`
+`throughline ready [DIRECTORY]` lists derived ready work. `throughline show WORK_ITEM_ID [DIRECTORY]`
 returns its structured objective, plan, output, criterion, dependency, validation, reuse,
 coordination, and authority context. The application layer also offers actor-filtered ready work;
 MCP/CLI exposure of claims and authority operations is intentionally deferred.

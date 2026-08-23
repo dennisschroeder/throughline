@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dennisschroeder/workgraph/internal/domain/authority"
-	"github.com/dennisschroeder/workgraph/internal/domain/output"
-	"github.com/dennisschroeder/workgraph/internal/domain/work"
-	"github.com/dennisschroeder/workgraph/internal/ports"
+	"github.com/dennisschroeder/throughline/internal/domain/authority"
+	"github.com/dennisschroeder/throughline/internal/domain/output"
+	"github.com/dennisschroeder/throughline/internal/domain/work"
+	"github.com/dennisschroeder/throughline/internal/ports"
 )
 
 func TestRepositoryIndependentSkillDesignSlice(t *testing.T) {
@@ -46,7 +46,7 @@ func TestRepositoryIndependentSkillDesignSlice(t *testing.T) {
 	item, err := service.CreateWorkItem(ctx, CreateWorkItemCommand{
 		ActorID:           "human:owner",
 		IdempotencyKey:    "item",
-		Key:               "WG-1",
+		Key:               "TH-1",
 		ObjectiveID:       objective.ID,
 		PlanID:            plan.ID,
 		Title:             "Design the interview-synthesis skill",
@@ -132,7 +132,7 @@ func TestCreateWorkItemAcceptedReadyRequiresApprovedExecutionContext(t *testing.
 	store.plans["plan"] = work.Plan{ID: "plan", ObjectiveID: "objective", Title: "Plan", Revision: 1, CommitmentState: work.PlanApproved, Version: 1}
 	service := NewService(store, &sequenceIDs{}, clock)
 	command := CreateWorkItemCommand{
-		ActorID: "human:owner", IdempotencyKey: "accepted-ready", Key: "WG-READY", ObjectiveID: "objective", PlanID: "plan", Title: "Ready item", Kind: "research",
+		ActorID: "human:owner", IdempotencyKey: "accepted-ready", Key: "TH-READY", ObjectiveID: "objective", PlanID: "plan", Title: "Ready item", Kind: "research",
 		CommitmentState: work.ItemAccepted, ExecutionStatus: work.StatusReady, Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
 		ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny, AttentionState: work.AttentionNone,
 	}

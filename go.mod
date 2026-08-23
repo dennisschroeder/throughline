@@ -1,4 +1,4 @@
-module github.com/dennisschroeder/workgraph
+module github.com/dennisschroeder/throughline
 
 go 1.26.0
 

@@ -5,7 +5,7 @@
 
 ## Context
 
-One MCP server may eventually expose multiple independent Workgraph workspaces. Routing by the
+One MCP server may eventually expose multiple independent Throughline workspaces. Routing by the
 server process's current directory or mutable MCP-session state would make tool calls difficult to
 audit and could send a mutation to the wrong authoritative SQLite database. Accepting arbitrary
 filesystem or database paths from tool inputs would also let a client escape the server's intended
@@ -14,7 +14,7 @@ scope.
 ## Decision
 
 An MCP server has an explicit allowlist mapping stable `workspace_id` values to configured
-Workgraph roots. Tool calls routed through a multi-workspace server require `workspace_id`; the
+Throughline roots. Tool calls routed through a multi-workspace server require `workspace_id`; the
 server resolves it before invoking the shared application layer. Tool calls never accept an
 arbitrary workspace or database path.
 

@@ -10,15 +10,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dennisschroeder/workgraph/internal/app"
-	"github.com/dennisschroeder/workgraph/internal/domain/output"
-	"github.com/dennisschroeder/workgraph/internal/domain/work"
-	"github.com/dennisschroeder/workgraph/internal/ports"
+	"github.com/dennisschroeder/throughline/internal/app"
+	"github.com/dennisschroeder/throughline/internal/domain/output"
+	"github.com/dennisschroeder/throughline/internal/domain/work"
+	"github.com/dennisschroeder/throughline/internal/ports"
 )
 
 func TestInitializationAndDomainNeutralVerticalSlice(t *testing.T) {
 	ctx := context.Background()
-	databasePath := filepath.Join(t.TempDir(), "workgraph.db")
+	databasePath := filepath.Join(t.TempDir(), "throughline.db")
 	database, err := Open(ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestInitializationAndDomainNeutralVerticalSlice(t *testing.T) {
 	item, err := service.CreateWorkItem(ctx, app.CreateWorkItemCommand{
 		ActorID:           "human:owner",
 		IdempotencyKey:    "create-work-item-integration",
-		Key:               "WG-1",
+		Key:               "TH-1",
 		ObjectiveID:       objective.ID,
 		PlanID:            plan.ID,
 		Title:             "Synthesize the policy evidence",
@@ -167,7 +167,7 @@ func TestCreateWorkItemPersistsInitialExecutionGraphAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := service.ProposePlan(ctx, app.ProposePlanCommand{ObjectiveID: objective.ID, ActorID: "human:owner", IdempotencyKey: "propose-compound-plan", Title: "Execution graph plan", Revision: 1, Items: []app.ProposedWorkItem{{ClientRef: "seed", Key: "WG-SEED", Title: "Seed the approved plan", Kind: "research", Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny}}})
+	plan, err := service.ProposePlan(ctx, app.ProposePlanCommand{ObjectiveID: objective.ID, ActorID: "human:owner", IdempotencyKey: "propose-compound-plan", Title: "Execution graph plan", Revision: 1, Items: []app.ProposedWorkItem{{ClientRef: "seed", Key: "TH-SEED", Title: "Seed the approved plan", Kind: "research", Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestCreateWorkItemPersistsInitialExecutionGraphAtomically(t *testing.T) {
 	}
 
 	command := app.CreateWorkItemCommand{
-		ActorID: "human:owner", IdempotencyKey: "create-compound-item", Key: "WG-COMPOUND", ObjectiveID: objective.ID, PlanID: plan.Plan.ID,
+		ActorID: "human:owner", IdempotencyKey: "create-compound-item", Key: "TH-COMPOUND", ObjectiveID: objective.ID, PlanID: plan.Plan.ID,
 		Title: "Create a fully specified item", Description: "Persist every initial graph edge in one transaction.", Kind: "research",
 		CommitmentState: work.ItemAccepted, ExecutionStatus: work.StatusReady, Priority: work.PriorityHigh, EstimatedScope: work.ScopeMedium,
 		ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorHuman, AttentionState: work.AttentionNone,
@@ -234,11 +234,11 @@ func TestPatchWorkItemPersistsNonWorkflowGraphFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent, err := service.CreateWorkItem(ctx, app.CreateWorkItemCommand{ActorID: "human:owner", IdempotencyKey: "create-patch-parent", Key: "WG-PATCH-PARENT", ObjectiveID: objective.ID, Title: "Parent", Kind: "research", CommitmentState: work.ItemProposed, ExecutionStatus: work.StatusBacklog, Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny, AttentionState: work.AttentionNone})
+	parent, err := service.CreateWorkItem(ctx, app.CreateWorkItemCommand{ActorID: "human:owner", IdempotencyKey: "create-patch-parent", Key: "TH-PATCH-PARENT", ObjectiveID: objective.ID, Title: "Parent", Kind: "research", CommitmentState: work.ItemProposed, ExecutionStatus: work.StatusBacklog, Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny, AttentionState: work.AttentionNone})
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err := service.CreateWorkItem(ctx, app.CreateWorkItemCommand{ActorID: "human:owner", IdempotencyKey: "create-patch-child", Key: "WG-PATCH-CHILD", ObjectiveID: objective.ID, Title: "Child", Kind: "research", CommitmentState: work.ItemProposed, ExecutionStatus: work.StatusBacklog, Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny, AttentionState: work.AttentionNone, RequiredCapabilities: []string{"initial_capability"}, AcceptanceCriteria: []app.ProposedAcceptanceCriterion{{Text: "The update is recovered from SQLite.", Required: true, Ordinal: 1}}})
+	child, err := service.CreateWorkItem(ctx, app.CreateWorkItemCommand{ActorID: "human:owner", IdempotencyKey: "create-patch-child", Key: "TH-PATCH-CHILD", ObjectiveID: objective.ID, Title: "Child", Kind: "research", CommitmentState: work.ItemProposed, ExecutionStatus: work.StatusBacklog, Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny, AttentionState: work.AttentionNone, RequiredCapabilities: []string{"initial_capability"}, AcceptanceCriteria: []app.ProposedAcceptanceCriterion{{Text: "The update is recovered from SQLite.", Required: true, Ordinal: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}

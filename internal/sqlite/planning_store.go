@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dennisschroeder/workgraph/internal/domain/output"
-	"github.com/dennisschroeder/workgraph/internal/domain/work"
-	"github.com/dennisschroeder/workgraph/internal/ports"
+	"github.com/dennisschroeder/throughline/internal/domain/output"
+	"github.com/dennisschroeder/throughline/internal/domain/work"
+	"github.com/dennisschroeder/throughline/internal/ports"
 )
 
 func (r *transactionRepository) HasApprovedPlan(ctx context.Context, objectiveID string) (bool, error) {

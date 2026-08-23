@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dennisschroeder/workgraph/internal/domain/authority"
-	"github.com/dennisschroeder/workgraph/internal/ports"
+	"github.com/dennisschroeder/throughline/internal/domain/authority"
+	"github.com/dennisschroeder/throughline/internal/ports"
 )
 
 func (r *transactionRepository) RequiredExternalActionsSatisfied(ctx context.Context, workItemID string) (bool, error) {

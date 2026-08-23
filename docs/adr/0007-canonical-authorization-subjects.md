@@ -7,13 +7,13 @@
 
 Capability and authority are independent. A future AuthorityGrant will bind one principal to the
 SHA-256 digest of one exact ExternalAction revision's AuthorizationSubject plus constraints and
-lifetime. Workgraph records this chain but never executes the effect.
+lifetime. Throughline records this chain but never executes the effect.
 
 AuthorizationSubject fields are exactly `action_type`, `target`, `arguments`, `scope`,
 `permissions`, `credential_requirements`, and `constraints`. Titles, rationale, progress, and UI
 metadata are excluded. Unknown or duplicate object keys are rejected.
 
-Workgraph Canonical JSON v1:
+Throughline Canonical JSON v1:
 
 1. All seven fields are required; target, scope, and constraints are objects and arguments is an
    ordered array.

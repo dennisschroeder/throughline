@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dennisschroeder/workgraph/internal/app"
-	"github.com/dennisschroeder/workgraph/internal/domain/output"
-	"github.com/dennisschroeder/workgraph/internal/domain/work"
-	"github.com/dennisschroeder/workgraph/internal/ports"
+	"github.com/dennisschroeder/throughline/internal/app"
+	"github.com/dennisschroeder/throughline/internal/domain/output"
+	"github.com/dennisschroeder/throughline/internal/domain/work"
+	"github.com/dennisschroeder/throughline/internal/ports"
 )
 
 func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
@@ -46,7 +46,7 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 		ObjectiveID: producerObjective.ID, ActorID: "agent:planner", IdempotencyKey: "propose-producer-plan", Title: "Research and synthesize", Revision: 1,
 		Items: []app.ProposedWorkItem{
 			{
-				ClientRef: "research", Key: "WG-DOSSIER", Title: "Research source-auditing methods", Kind: "research",
+				ClientRef: "research", Key: "TH-DOSSIER", Title: "Research source-auditing methods", Kind: "research",
 				Priority: work.PriorityHigh, EstimatedScope: work.ScopeMedium, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 				AcceptanceCriteria: []app.ProposedAcceptanceCriterion{{Text: "The dossier distinguishes evidence from uncertainty.", Required: true, Ordinal: 1}},
 				ExpectedOutputs: []app.ProposedExpectedOutput{{
@@ -55,7 +55,7 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 				}},
 			},
 			{
-				ClientRef: "skill", Key: "WG-SKILL", Title: "Design a skill from the accepted dossier", Kind: "skill_design",
+				ClientRef: "skill", Key: "TH-SKILL", Title: "Design a skill from the accepted dossier", Kind: "skill_design",
 				Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 			},
 		},
@@ -71,8 +71,8 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	}
 
 	items := itemsByKey(plan.Items)
-	research := items["WG-DOSSIER"]
-	skill := items["WG-SKILL"]
+	research := items["TH-DOSSIER"]
+	skill := items["TH-SKILL"]
 	research, err = service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: research.ID, TargetStatus: work.StatusReady, ActorID: "human:sponsor", Reason: "Approved for execution.", ExpectedVersion: 2, IdempotencyKey: "ready-research"})
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +91,7 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertReadyKeys(t, ready, "WG-DOSSIER")
+	assertReadyKeys(t, ready, "TH-DOSSIER")
 
 	producerContext, err := service.GetWorkItem(ctx, research.ID)
 	if err != nil {
@@ -116,7 +116,7 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	consumerPlan, err := service.ProposePlan(ctx, app.ProposePlanCommand{
 		ObjectiveID: consumerObjective.ID, ActorID: "agent:planner", IdempotencyKey: "propose-consumer-plan", Title: "Apply the dossier", Revision: 1,
 		Items: []app.ProposedWorkItem{{
-			ClientRef: "apply", Key: "WG-APPLY", Title: "Apply the reviewed source-auditing method", Kind: "workflow_design",
+			ClientRef: "apply", Key: "TH-APPLY", Title: "Apply the reviewed source-auditing method", Kind: "workflow_design",
 			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 		}},
 	})
@@ -152,7 +152,7 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertReadyKeys(t, ready, "WG-DOSSIER")
+	assertReadyKeys(t, ready, "TH-DOSSIER")
 
 	validations := []app.RecordValidationCommand{
 		{OutputRevisionID: revision.ID, CriterionRef: "structure", ValidatorKind: output.ValidatorStructure, Verdict: output.VerdictPassed, VerifierActorID: "agent:validator", Details: json.RawMessage(`{"summary":"Required dossier sections are present."}`)},
@@ -209,7 +209,7 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertReadyKeys(t, ready, "WG-APPLY", "WG-SKILL")
+	assertReadyKeys(t, ready, "TH-APPLY", "TH-SKILL")
 	accepted, err := service.ListAcceptedOutputs(ctx, app.AcceptedOutputFilter{
 		ProfileName: "research_dossier", VersionConstraint: "=1", ObjectiveID: producerObjective.ID,
 		ProducedBy: "agent:researcher", AcceptedSince: revision.ProducedAt, Limit: 10,

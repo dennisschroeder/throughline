@@ -5,9 +5,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/dennisschroeder/workgraph/internal/domain/authority"
-	"github.com/dennisschroeder/workgraph/internal/domain/output"
-	"github.com/dennisschroeder/workgraph/internal/domain/work"
+	"github.com/dennisschroeder/throughline/internal/domain/authority"
+	"github.com/dennisschroeder/throughline/internal/domain/output"
+	"github.com/dennisschroeder/throughline/internal/domain/work"
 )
 
 var ErrNotFound = errors.New("not found")
