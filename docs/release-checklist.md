@@ -43,6 +43,25 @@ gh run watch
 - [ ] Latest run on `main` completed successfully (`gofmt -l`, `go vet`, `go test`, `go build`,
       `CGO_ENABLED=0 go build` all pass).
 
+## 3a. Homebrew tap (one-time setup)
+
+`.goreleaser.yaml`'s `brews:` block pushes a formula to `dennisschroeder/homebrew-throughline` on
+every tagged release, authenticated with the `HOMEBREW_TAP_GITHUB_TOKEN` repository secret. Before
+the first release that should auto-publish a formula:
+
+```bash
+gh repo create dennisschroeder/homebrew-throughline --public
+gh secret set HOMEBREW_TAP_GITHUB_TOKEN --repo dennisschroeder/throughline
+```
+
+The secret value must be a token (fine-grained PAT, `contents: write` on the tap repo) — the
+default `GITHUB_TOKEN` cannot push across repositories. Skipping this step does not fail the
+release; GoReleaser's `brews` publish step fails independently and the archives/checksums still
+publish.
+
+- [ ] Tap repository exists.
+- [ ] `HOMEBREW_TAP_GITHUB_TOKEN` secret set on the `throughline` repository.
+
 ## 4. Tag the release
 
 This is the step that actually cuts the release: pushing the tag triggers

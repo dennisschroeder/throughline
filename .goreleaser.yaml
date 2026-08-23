@@ -29,6 +29,20 @@ checksum:
   name_template: "throughline_{{ .Version }}_checksums.txt"
   algorithm: sha256
 
+brews:
+  - repository:
+      owner: dennisschroeder
+      name: homebrew-throughline
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/dennisschroeder/throughline
+    description: Local, headless coordination state layer for human/agent workflows.
+    license: MIT
+    test: |
+      system "#{bin}/throughline", "version"
+    install: |
+      bin.install "throughline"
+
 changelog:
   sort: asc
   groups:

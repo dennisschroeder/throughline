@@ -38,8 +38,14 @@ every process reaching the workspace is already trusted.
 
 ## Install
 
-Download the archive matching your OS/architecture and the matching checksums file from the
-[GitHub Releases page](https://github.com/dennisschroeder/throughline/releases), verify with
+macOS or Linux with [Homebrew](https://brew.sh):
+
+```bash
+brew install dennisschroeder/throughline/throughline
+```
+
+Otherwise, download the archive matching your OS/architecture and the matching checksums file from
+the [GitHub Releases page](https://github.com/dennisschroeder/throughline/releases), verify with
 `shasum -a 256 -c`, then extract and move the `throughline` binary onto your `PATH`. Full
 step-by-step commands, the macOS Gatekeeper quarantine note, upgrade, backup/restore, and
 uninstall instructions are in [docs/install.md](docs/install.md).
@@ -63,13 +69,11 @@ work, and `get_item` before claiming anything.
 ## License and reporting a problem
 
 Throughline is released under the [MIT License](LICENSE). Report a problem or request a feature via
-GitHub issues on `github.com/dennisschroeder/throughline` (the repository is not yet public; this
-is the intended URL once it is).
+[GitHub issues](https://github.com/dennisschroeder/throughline/issues).
 
 ## Building from source
 
-This repository is currently pre-release: released binaries are not published yet, so a source
-build with the Go toolchain is the only way to run Throughline today. See
+If you have the Go toolchain and want to build from source instead of using a released binary, see
 [docs/development.md](docs/development.md) for build, test, and verification commands.
 
 ## See also

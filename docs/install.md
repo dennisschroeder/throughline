@@ -1,8 +1,15 @@
 # Install guide
 
-Every command in this guide uses a released archive from GitHub Releases. None of them require the
-Go toolchain. If you have Go and want to build from source instead, see
-[development.md](development.md).
+## Homebrew (macOS, Linux)
+
+```bash
+brew install dennisschroeder/throughline/throughline
+```
+
+This taps `dennisschroeder/homebrew-throughline` and installs the formula automatically; skip to
+[step 4](#4-verify-the-install) to verify. The remaining steps in this guide install from a
+released archive directly and use no package manager. None of them require the Go toolchain. If you
+have Go and want to build from source instead, see [development.md](development.md).
 
 Examples below use `v0.1.0`. GoReleaser strips the leading `v` from the git tag for the archive
 filename but keeps it in the release tag and download URL path, so a release tagged `v0.1.0`
@@ -91,9 +98,16 @@ This should report `v0.1.0` along with the commit and build date.
 
 ## 5. Upgrade
 
-Download the new version's archive and checksums file (step 1 with the new `0.1.0`), verify
-(step 2), then repeat step 3 to replace the binary in place — same filename, same `PATH` location.
-Your `.throughline/` workspace directory and its data are untouched by a binary upgrade.
+Homebrew install:
+
+```bash
+brew upgrade dennisschroeder/throughline/throughline
+```
+
+Archive install: download the new version's archive and checksums file (step 1 with the new
+`0.1.0`), verify (step 2), then repeat step 3 to replace the binary in place — same filename, same
+`PATH` location. Your `.throughline/` workspace directory and its data are untouched by a binary
+upgrade.
 
 ## 6. Backup and restore
 
@@ -121,7 +135,13 @@ try to replay a mismatched WAL.
 
 ## 7. Uninstall
 
-Remove the binary from `PATH`:
+Homebrew install:
+
+```bash
+brew uninstall dennisschroeder/throughline/throughline
+```
+
+Archive install — remove the binary from `PATH`:
 
 ```bash
 rm /usr/local/bin/throughline   # or wherever you installed it
