@@ -46,6 +46,9 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return 0
+	case "version", "--version":
+		fmt.Fprintln(stdout, versionLine())
+		return 0
 	case "help", "-h", "--help":
 		writeUsage(stdout)
 		return 0
@@ -194,5 +197,5 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) error
 }
 
 func writeUsage(writer io.Writer) {
-	fmt.Fprintln(writer, "usage: throughline <init|ready|show|mcp> [arguments]")
+	fmt.Fprintln(writer, "usage: throughline <init|ready|show|mcp|version> [arguments]")
 }

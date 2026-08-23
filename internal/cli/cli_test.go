@@ -120,6 +120,61 @@ func TestReadyAndShowInspectExecutionGraph(t *testing.T) {
 	}
 }
 
+func TestVersionCommandUsesDevelopmentFallbackWhenUninjected(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if code := Run(context.Background(), []string{"version"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("version exited %d: %s", code, stderr.String())
+	}
+	output := strings.TrimSpace(stdout.String())
+	if output == "" {
+		t.Fatal("version output is empty")
+	}
+	if !strings.Contains(output, "throughline version") {
+		t.Fatalf("version output = %q", output)
+	}
+	if strings.Contains(output, "()") || strings.Contains(output, "commit , built") {
+		t.Fatalf("version output has empty fields: %q", output)
+	}
+}
+
+func TestVersionCommandReportsInjectedValuesVerbatim(t *testing.T) {
+	previousVersion, previousCommit, previousDate := version, commit, date
+	t.Cleanup(func() {
+		version, commit, date = previousVersion, previousCommit, previousDate
+	})
+	version, commit, date = "v0.1.0", "abc123def456", "2026-08-23T10:00:00Z"
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Run(context.Background(), []string{"version"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("version exited %d: %s", code, stderr.String())
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "v0.1.0") || !strings.Contains(output, "abc123def456") || !strings.Contains(output, "2026-08-23T10:00:00Z") {
+		t.Fatalf("version output = %q", output)
+	}
+}
+
+func TestVersionAndDoubleDashVersionFlagProduceIdenticalOutput(t *testing.T) {
+	var stdoutVersion bytes.Buffer
+	var stderrVersion bytes.Buffer
+	if code := Run(context.Background(), []string{"version"}, &stdoutVersion, &stderrVersion); code != 0 {
+		t.Fatalf("version exited %d: %s", code, stderrVersion.String())
+	}
+
+	var stdoutFlag bytes.Buffer
+	var stderrFlag bytes.Buffer
+	if code := Run(context.Background(), []string{"--version"}, &stdoutFlag, &stderrFlag); code != 0 {
+		t.Fatalf("--version exited %d: %s", code, stderrFlag.String())
+	}
+
+	if stdoutVersion.String() != stdoutFlag.String() {
+		t.Fatalf("version output %q != --version output %q", stdoutVersion.String(), stdoutFlag.String())
+	}
+}
+
 type cliIDs struct{ next int }
 
 func (ids *cliIDs) New() (string, error) {

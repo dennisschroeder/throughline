@@ -1,0 +1,51 @@
+version: 2
+
+builds:
+  - main: ./cmd/throughline
+    binary: throughline
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+        -X github.com/dennisschroeder/throughline/internal/cli.version={{.Tag}}
+        -X github.com/dennisschroeder/throughline/internal/cli.commit={{.ShortCommit}}
+        -X github.com/dennisschroeder/throughline/internal/cli.date={{.Date}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      throughline_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "throughline_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Refactors
+      regexp: '^.*?refactor(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Chores
+      regexp: '^.*?chore(\([[:word:]]+\))??!?:.+$'
+      order: 3
+    - title: Other
+      order: 999
+
+release:
+  github: {}

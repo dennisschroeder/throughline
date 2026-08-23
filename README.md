@@ -1,96 +1,82 @@
 # Throughline
 
-Throughline is a lean, local-first authoritative state layer for domain-neutral agentic work. The
-current milestone provides one Go binary, one SQLite database, deterministic workspace
-initialization, governed planning, durable execution/output records, and safe multi-actor
-coordination.
+Throughline is a local, headless coordination state layer. `v0.1.0` lets one human and two
+MCP-capable agents resume, approve, safely claim, complete, validate, reuse, and audit one
+domain-neutral workflow across sessions, using one SQLite workspace. It ships as a single Go
+binary (`throughline`) that owns a `.throughline/` workspace directory and speaks MCP over stdio
+plus a compact CLI for local inspection. See the frozen release definition in
+[Product Decision 0001](docs/product/0001-market-testable-v0.1.md).
 
-## Build and verify
+## Scope boundary
 
-Requires Go 1.26 or newer.
+`v0.1.0` is deliberately narrow. Explicitly out of scope: authenticated identity, a policy
+language, a web UI, orchestration, multi-workspace or network transport, semantic search, broad
+CLI parity, and distributed coordination. The full release boundary is in
+[Product Decision 0001](docs/product/0001-market-testable-v0.1.md).
+
+Throughline records external-action proposals, principal-bound grants, and observed execution
+evidence. **It never performs an external effect.** Installing, publishing, sending, deploying, or
+any other side effect stays outside Throughline; only the coordination record — proposed, granted,
+started, succeeded/failed, with evidence — lives inside it.
+
+## Security model: trusted-local
+
+Throughline has no authentication. Actor strings (`human:reviewer`, `agent:planner`) are
+self-declared and not verified — any client speaking the MCP protocol to a workspace can act as
+any actor. The SQLite workspace is a plain local file. Do not place `.throughline/` on a shared or
+network filesystem, and do not run `throughline mcp` as a multi-tenant service. Throughline assumes
+every process reaching the workspace is already trusted.
+
+## Supported platforms
+
+| OS | Architecture |
+|---|---|
+| macOS (darwin) | amd64 |
+| macOS (darwin) | arm64 |
+| Linux | amd64 |
+| Linux | arm64 |
+
+## Install
+
+Download the archive matching your OS/architecture and the matching checksums file from the
+[GitHub Releases page](https://github.com/dennisschroeder/throughline/releases), verify with
+`shasum -a 256 -c`, then extract and move the `throughline` binary onto your `PATH`. Full
+step-by-step commands, the macOS Gatekeeper quarantine note, upgrade, backup/restore, and
+uninstall instructions are in [docs/install.md](docs/install.md).
+
+## Quickstart
 
 ```bash
-go build ./...
-go vet ./...
-go test ./...
-go test ./internal/sqlite -run TestInitializationAndDomainNeutralVerticalSlice -count=1
-go test ./internal/sqlite -run TestIntentAndPlanningVerticalSlice -count=1
-go test ./internal/sqlite -run TestDurableExecutionGraphVerticalSlice -count=1
-go test ./internal/sqlite -run TestCoordinationAndAuthorityVerticalSlice -count=1
-go test ./internal/sqlite -run TestConcurrentAgentsCannotBothClaimWorkItem -count=20
+throughline init /path/to/workspace
 ```
 
-The SQLite driver is CGo-free; `CGO_ENABLED=0 go build ./...` is supported.
-
-## Initialize a workspace
-
-```bash
-go run ./cmd/throughline init
-go run ./cmd/throughline init --database data/throughline.db /path/to/workspace
-go run ./cmd/throughline ready /path/to/workspace
-go run ./cmd/throughline show WORK_ITEM_ID /path/to/workspace
-go run ./cmd/throughline mcp /path/to/workspace
-```
-
-The default layout is:
-
-```text
-.throughline/
-  config.toml
-  throughline.db
-```
-
-A relative configured database path is resolved from `.throughline/`. `init` can be rerun safely: it
-reopens the configured database, applies only unapplied embedded migrations, and does not duplicate
-seeded profiles.
-
-## Current architecture
-
-- `internal/domain`: transport- and persistence-independent work, output, and authority value types.
-- `internal/app`: transaction-scoped planning, coordination, leases, readiness, output production,
-  validation, authority recording, reuse, activity, and retrieval use cases.
-- `internal/ports`: repository, transaction, clock, and identifier boundaries.
-- `internal/sqlite`: authoritative storage, pragmas, migrations, seeds, and repository implementation.
-- `internal/config`: workspace discovery, TOML configuration, and database-path resolution.
-- `internal/cli` and `cmd/throughline`: thin `init`, `ready`, and `show` adapters and binary entry point.
-
-The implemented scenario models research and agent-skill design. It requires no Git repository,
-branch, commit, pull request, build pipeline, CI system, or code-specific domain field.
-
-## Milestone boundary
-
-The coordination kernel is feature-complete for the market-testable `v0.1.0` scope, but release
-packaging and design-partner validation are not complete. The release contract is frozen in the
-[v0.1 product decision](docs/product/0001-market-testable-v0.1.md). Authenticated identity, policy
-language, a web UI, orchestration, multi-workspace/network transport, semantic search, broad CLI
-parity, and distributed coordination are explicitly outside that boundary. Throughline records
-external-action proposals, delegated authority, and observed execution evidence; it never performs
-an external effect.
-
-## MCP stdio
-
-`throughline mcp [WORKSPACE]` starts one MCP stdio server for the selected initialized workspace.
-It has no mutable current-workspace session state; tool responses identify the workspace as `local`.
-Start with `board_overview`, `list_ready_items`, and `get_item`, then claim work before mutating it.
-
-Codex configuration:
-
-```toml
-[mcp_servers.throughline]
-command = "/absolute/path/to/throughline"
-args = ["mcp", "/absolute/path/to/workspace"]
-```
-
-Claude Desktop configuration:
+Point an MCP client at the initialized workspace. Claude Desktop configuration:
 
 ```json
 {"mcpServers":{"throughline":{"command":"/absolute/path/to/throughline","args":["mcp","/absolute/path/to/workspace"]}}}
 ```
 
-The MCP server records external-action authority and observed results; it does not install,
-publish, send, deploy, or otherwise execute an external action.
+(Codex configuration is in [docs/install.md](docs/install.md).) Restart the client, then start with
+`board_overview` for a compact orientation summary, `list_ready_items` to see executable candidate
+work, and `get_item` before claiming anything.
 
-See [development and verification](docs/development.md), the architectural
-[implementation handoff](docs/implementation-handoff.md), the bounded
-[v0.1 product decision](docs/product/0001-market-testable-v0.1.md), the
-[v0.1.0 release handoff](docs/v0.1.0-release-handoff.md), and [ADRs](docs/adr/).
+## License and reporting a problem
+
+Throughline is released under the [MIT License](LICENSE). Report a problem or request a feature via
+GitHub issues on `github.com/dennisschroeder/throughline` (the repository is not yet public; this
+is the intended URL once it is).
+
+## Building from source
+
+This repository is currently pre-release: released binaries are not published yet, so a source
+build with the Go toolchain is the only way to run Throughline today. See
+[docs/development.md](docs/development.md) for build, test, and verification commands.
+
+## See also
+
+- [Development and verification](docs/development.md)
+- [Implementation handoff](docs/implementation-handoff.md)
+- [Product Decision 0001: market-testable v0.1](docs/product/0001-market-testable-v0.1.md)
+- [v0.1.0 release handoff](docs/v0.1.0-release-handoff.md)
+- [Install guide](docs/install.md)
+- [Architecture decision records](docs/adr/)

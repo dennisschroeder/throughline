@@ -1,7 +1,9 @@
-/.workgraph/
-/workgraph
+/.throughline/
+/throughline
 /coverage.out
 /graphify-out/
+/dist/
+/.agents/
 *.db-shm
 *.db-wal
 .DS_Store
