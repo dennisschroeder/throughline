@@ -20,6 +20,11 @@ jobs:
       - name: Check formatting
         run: test -z "$(gofmt -l cmd internal)"
 
+      - name: Check generated semantic model
+        run: |
+          go generate ./internal/semanticmodel
+          git diff --exit-code -- internal/semanticmodel/model.generated.json
+
       - name: Vet
         run: go vet ./...
 

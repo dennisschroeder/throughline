@@ -23,6 +23,7 @@ import (
 	"github.com/dennisschroeder/throughline/internal/domain/output"
 	"github.com/dennisschroeder/throughline/internal/domain/work"
 	"github.com/dennisschroeder/throughline/internal/ports"
+	"github.com/dennisschroeder/throughline/internal/semanticmodel"
 )
 
 const workspaceID = "local"
@@ -34,18 +35,34 @@ func Run(ctx context.Context, service *app.Service) error {
 
 // NewServer constructs the single-workspace MCP adapter for embedding and tests.
 func NewServer(service *app.Service) *mcp.Server {
+	instructions := serverInstructions
+	if model, err := semanticmodel.Load(); err == nil {
+		if builtInstructions, instructionErr := semanticInstructions(model); instructionErr == nil {
+			instructions = builtInstructions
+		}
+	}
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:        "throughline",
 		Title:       "Throughline",
 		Version:     "v1",
 		Description: "Authoritative local coordination state. Start with board_overview, then list_ready_items and get_item before claiming work.",
-	}, &mcp.ServerOptions{Instructions: serverInstructions})
+	}, &mcp.ServerOptions{Instructions: instructions})
 	adapter := &adapter{service: service}
 	adapter.addTools(server)
 	return server
 }
 
-const serverInstructions = `Use Throughline as durable shared coordination state, not as an execution harness. Start with board_overview, list_ready_items, and get_item. Claim an item before shared work and pass the returned version to every mutation. Inspect output contracts and external actions before acting. Throughline records external action proposals, grants, starts, results, and evidence; it never performs external effects. Use get_changes and get_objective_context to resume without hidden session state.`
+const maxServerInstructionsBytes = 2048
+
+const serverInstructions = `Use Throughline as durable shared coordination state, not as an execution harness. Start with board_overview, list_ready_items, and get_item. Claim an item before shared work and pass the returned version to every mutation. Inspect output contracts and external actions before acting. Throughline records external action proposals, grants, starts, results, and evidence; Throughline never performs external effects. Use get_changes and get_objective_context to resume without hidden session state.`
+
+func semanticInstructions(model *semanticmodel.Model) (string, error) {
+	instructions := fmt.Sprintf("%s Semantic model %s (%s). Work/output chain: WorkItem -> ExpectedOutput -> OutputRevision -> ValidationRecord -> accepted/reusable output. Authority chain: ExternalAction revision -> AuthorizationSubject -> principal-bound AuthorityGrant -> recorded execution evidence. Call get_semantic_model for details. %s", model.Bootstrap, model.ModelVersion, model.ContentDigest, serverInstructions)
+	if len(instructions) > maxServerInstructionsBytes {
+		return "", fmt.Errorf("semantic model instructions exceed %d bytes", maxServerInstructionsBytes)
+	}
+	return instructions, nil
+}
 
 type adapter struct{ service *app.Service }
 
@@ -56,6 +73,7 @@ func (a *adapter) addTools(server *mcp.Server) {
 	a.add(server, "get_item", "Retrieve structured work-item context.", true, schemaFor[getItemInput]("id"), a.getItem)
 	a.add(server, "get_objective_context", "Retrieve deterministic, bounded objective continuation context.", true, schemaFor[objectiveContextInput]("objective_id"), a.getObjectiveContext)
 	a.add(server, "get_changes", "Read cursor-based activity deltas.", true, schemaFor[changesInput](), a.getChanges)
+	a.add(server, "get_semantic_model", "Read the embedded Throughline semantic model.", true, semanticModelSchema(), a.getSemanticModel)
 	a.add(server, "list_output_profiles", "List governed persisted output profiles.", true, schemaFor[workspaceInput](), a.listProfiles)
 	a.add(server, "get_output_profile", "Read one exact governed output profile version.", true, schemaFor[outputProfileInput]("profile_name", "profile_version"), a.getProfile)
 	a.add(server, "list_outputs", "Discover accepted reusable outputs.", true, schemaFor[outputsInput](), a.listOutputs)
@@ -346,6 +364,8 @@ func resultSchema(name string) map[string]any {
 		return schemaForResult[app.ObjectiveContextSnapshot]()
 	case "get_changes":
 		return schemaForResult[changesResult]()
+	case "get_semantic_model":
+		return semanticModelResultSchema()
 	case "list_output_profiles":
 		return schemaForResult[[]output.Profile]()
 	case "get_output_profile", "propose_output_profile", "review_output_profile":
@@ -777,7 +797,10 @@ func snakeCase(value string) string {
 
 func (a *adapter) errorPayload(ctx context.Context, err error, raw json.RawMessage) map[string]any {
 	code := "validation_failed"
+	var invalidModel *semanticmodel.InvalidArtifactError
 	switch {
+	case errors.As(err, &invalidModel):
+		code = "semantic_model_invalid"
 	case errors.Is(err, ports.ErrNotFound):
 		code = "not_found"
 	case errors.Is(err, ports.ErrVersionConflict):
@@ -1379,6 +1402,46 @@ func (a *adapter) getChanges(ctx context.Context, raw json.RawMessage) (any, err
 		next = c.Sequence
 	}
 	return changesResult{Changes: changes, NextCursor: fmt.Sprint(next), HasMore: hasMore}, nil
+}
+
+type semanticModelInput struct {
+	Section string   `json:"section"`
+	IDs     []string `json:"ids"`
+}
+
+func semanticModelSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"section": map[string]any{"type": "string", "enum": semanticmodel.AvailableSections()},
+		"ids":     map[string]any{"type": "array", "maxItems": 50, "uniqueItems": true, "items": map[string]any{"type": "string"}},
+	}, "additionalProperties": false}
+}
+
+func semanticModelResultSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"section": map[string]any{"type": "string"}, "model_version": map[string]any{"type": "string"},
+		"content_digest": map[string]any{"type": "string"}, "data": map[string]any{"anyOf": []any{map[string]any{"type": "object"}, map[string]any{"type": "array"}}},
+		"not_found_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+	}, "required": []string{"section", "model_version", "content_digest", "data", "not_found_ids"}, "additionalProperties": false}
+}
+
+func (a *adapter) getSemanticModel(_ context.Context, raw json.RawMessage) (any, error) {
+	var input semanticModelInput
+	if err := decode(raw, &input); err != nil {
+		return nil, err
+	}
+	model, err := semanticmodel.Load()
+	if err != nil {
+		return nil, err
+	}
+	data, missing, err := model.Section(input.Section, input.IDs)
+	if err != nil {
+		return nil, err
+	}
+	section := input.Section
+	if section == "" {
+		section = "manifest"
+	}
+	return map[string]any{"section": section, "model_version": model.ModelVersion, "content_digest": model.ContentDigest, "data": data, "not_found_ids": missing}, nil
 }
 
 type changesResult struct {

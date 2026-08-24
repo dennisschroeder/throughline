@@ -22,6 +22,36 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Verify generated semantic model
+        run: |
+          go generate ./internal/semanticmodel
+          git diff --exit-code -- internal/semanticmodel/model.generated.json
+          go vet ./...
+          go test ./...
+          go build ./...
+          CGO_ENABLED=0 go build ./...
+
+      - name: Set up GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> 2"
+          args: --version
+
+      - name: Smoke test packaged semantic model
+        run: |
+          goreleaser release --snapshot --clean
+          archive_path="$(find dist -type f -name 'throughline_*_linux_amd64.tar.gz' | head -n 1)"
+          test -n "$archive_path"
+          smoke_dir="$(mktemp -d)"
+          tar -xzf "$archive_path" -C "$smoke_dir"
+          binary_path="$(find "$smoke_dir" -type f -name throughline -perm -u+x | head -n 1)"
+          test -n "$binary_path"
+          workspace_dir="$(mktemp -d)"
+          "$binary_path" init "$workspace_dir"
+          { printf '%s\n%s\n%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"release-smoke","version":"v1"}}}' '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_semantic_model","arguments":{}}}'; sleep 1; } \
+            | "$binary_path" mcp "$workspace_dir" 2>/dev/null \
+            | grep -q '\\"model_version\\"'
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:

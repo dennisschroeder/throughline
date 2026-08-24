@@ -1,0 +1,712 @@
+{
+  "schema_version": "1.0",
+  "model_version": "1.1.0",
+  "bootstrap": "Throughline is a local, authoritative coordination state layer for domain-neutral work. It records intent, plans, work, outputs, validation, reuse, and delegated authority; it does not orchestrate agents or perform external effects. Capability does not imply Authority. Call get_semantic_model for details.",
+  "entities": [
+    {
+      "id": "acceptance_criterion",
+      "name": "AcceptanceCriterion",
+      "definition": "An individually stateful condition used to judge completion."
+    },
+    {
+      "id": "activity",
+      "name": "Activity",
+      "definition": "An append-only audit event for a material state change or action."
+    },
+    {
+      "id": "actor",
+      "name": "Actor",
+      "definition": "A trusted-local human, agent, or service identity."
+    },
+    {
+      "id": "approval",
+      "name": "Approval",
+      "definition": "A durable request and decision for a governed target."
+    },
+    {
+      "id": "artifact",
+      "name": "Artifact",
+      "definition": "A typed external reference, not a large database blob."
+    },
+    {
+      "id": "attention",
+      "name": "Attention",
+      "definition": "An orthogonal request for human review, decision, clarification, or intervention; it is not a workflow status."
+    },
+    {
+      "id": "authority_grant",
+      "name": "AuthorityGrant",
+      "definition": "A principal-bound grant for one exact authorization subject within constraints and lifetime."
+    },
+    {
+      "id": "authorization_subject",
+      "name": "AuthorizationSubject",
+      "definition": "The canonical authorization-relevant subset of an external action revision."
+    },
+    {
+      "id": "blocker",
+      "name": "Blocker",
+      "definition": "A persisted manual or derived reason work cannot proceed; manual blockers are auditable."
+    },
+    {
+      "id": "capability",
+      "name": "Capability",
+      "definition": "A vendor-neutral ability required or offered by an actor."
+    },
+    {
+      "id": "claim",
+      "name": "Claim",
+      "definition": "A time-limited lease that an actor is working a work item."
+    },
+    {
+      "id": "context_record",
+      "name": "ContextRecord",
+      "definition": "Typed authoritative context such as a requirement, constraint, assumption, finding, risk, or success metric."
+    },
+    {
+      "id": "decision",
+      "name": "Decision",
+      "definition": "A concise durable choice with rationale and scope."
+    },
+    {
+      "id": "dependency",
+      "name": "Dependency",
+      "definition": "A directed, typed relationship between work items."
+    },
+    {
+      "id": "execution_policy",
+      "name": "ExecutionPolicy",
+      "definition": "The autonomy gate for claiming or executing a work item; it never grants external authority."
+    },
+    {
+      "id": "expected_output",
+      "name": "ExpectedOutput",
+      "definition": "A work-item-specific contract bound to one exact output profile version."
+    },
+    {
+      "id": "external_action",
+      "name": "ExternalAction",
+      "definition": "A versioned proposal for an observable side effect outside Throughline."
+    },
+    {
+      "id": "objective",
+      "name": "Objective",
+      "definition": "A durable goal that groups work items."
+    },
+    {
+      "id": "output_profile",
+      "name": "OutputProfile",
+      "definition": "An immutable, versioned, governed definition of an output class."
+    },
+    {
+      "id": "output_requirement",
+      "name": "OutputRequirement",
+      "definition": "A dependency on an accepted output revision or compatible profile."
+    },
+    {
+      "id": "output_revision",
+      "name": "OutputRevision",
+      "definition": "An immutable produced candidate bound to an expected output and profile version."
+    },
+    {
+      "id": "plan",
+      "name": "Plan",
+      "definition": "A versioned proposal for achieving an objective; approval commits work without executing it."
+    },
+    {
+      "id": "progress",
+      "name": "Progress",
+      "definition": "A concise durable checkpoint of completed, remaining, discovered, and blocking work; never raw model reasoning."
+    },
+    {
+      "id": "question",
+      "name": "Question",
+      "definition": "An unresolved question that may request human attention or block work."
+    },
+    {
+      "id": "validation_record",
+      "name": "ValidationRecord",
+      "definition": "An append-only verdict and evidence record for one output revision."
+    },
+    {
+      "id": "work_item",
+      "name": "WorkItem",
+      "definition": "A proposed, executable, reviewable, or trackable unit of domain-neutral work."
+    }
+  ],
+  "relations": [
+    {
+      "id": "authority_grant_binds_principal",
+      "from": "authority_grant",
+      "to": "actor",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "authority_grant_covers_authorization_subject",
+      "from": "authority_grant",
+      "to": "authorization_subject",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "expected_output_has_revision",
+      "from": "expected_output",
+      "to": "output_revision",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "expected_output_uses_output_profile",
+      "from": "expected_output",
+      "to": "output_profile",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "external_action_has_authorization_subject",
+      "from": "external_action",
+      "to": "authorization_subject",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "objective_groups_work_item",
+      "from": "objective",
+      "to": "work_item",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "objective_has_plan",
+      "from": "objective",
+      "to": "plan",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "output_requirement_accepts_output_profile",
+      "from": "output_requirement",
+      "to": "output_profile",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "output_requirement_reuses_output_revision",
+      "from": "output_requirement",
+      "to": "output_revision",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "output_revision_has_validation",
+      "from": "output_revision",
+      "to": "validation_record",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "plan_proposes_work_item",
+      "from": "plan",
+      "to": "work_item",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "work_item_depends_on_work_item",
+      "from": "work_item",
+      "to": "work_item",
+      "cardinality": "many_to_many"
+    },
+    {
+      "id": "work_item_has_attention",
+      "from": "work_item",
+      "to": "attention",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "work_item_has_blocker",
+      "from": "work_item",
+      "to": "blocker",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "work_item_has_context_record",
+      "from": "work_item",
+      "to": "context_record",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "work_item_has_external_action",
+      "from": "work_item",
+      "to": "external_action",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "work_item_has_progress",
+      "from": "work_item",
+      "to": "progress",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "work_item_requires_output",
+      "from": "work_item",
+      "to": "expected_output",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "work_item_requires_output_requirement",
+      "from": "work_item",
+      "to": "output_requirement",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "work_item_uses_execution_policy",
+      "from": "work_item",
+      "to": "execution_policy",
+      "cardinality": "many_to_one"
+    }
+  ],
+  "lifecycles": [
+    {
+      "id": "external_action_lifecycle",
+      "entity": "external_action",
+      "states": [
+        "proposed",
+        "authorized",
+        "executing",
+        "succeeded",
+        "failed",
+        "rejected",
+        "cancelled",
+        "expired"
+      ],
+      "transitions": [
+        [
+          "proposed",
+          "authorized"
+        ],
+        [
+          "authorized",
+          "executing"
+        ],
+        [
+          "executing",
+          "succeeded"
+        ],
+        [
+          "executing",
+          "failed"
+        ],
+        [
+          "proposed",
+          "rejected"
+        ],
+        [
+          "proposed",
+          "cancelled"
+        ],
+        [
+          "authorized",
+          "expired"
+        ]
+      ]
+    },
+    {
+      "id": "manual_blocker_lifecycle",
+      "entity": "blocker",
+      "states": [
+        "active",
+        "resolved"
+      ],
+      "transitions": [
+        [
+          "active",
+          "resolved"
+        ]
+      ]
+    },
+    {
+      "id": "objective_phase",
+      "entity": "objective",
+      "states": [
+        "idea",
+        "discovery",
+        "planning",
+        "execution",
+        "evaluation",
+        "completed",
+        "paused",
+        "cancelled"
+      ],
+      "transitions": [
+        [
+          "idea",
+          "discovery"
+        ],
+        [
+          "discovery",
+          "planning"
+        ],
+        [
+          "planning",
+          "execution"
+        ],
+        [
+          "execution",
+          "evaluation"
+        ],
+        [
+          "execution",
+          "planning"
+        ],
+        [
+          "evaluation",
+          "completed"
+        ],
+        [
+          "evaluation",
+          "planning"
+        ],
+        [
+          "evaluation",
+          "execution"
+        ],
+        [
+          "idea",
+          "paused"
+        ],
+        [
+          "discovery",
+          "paused"
+        ],
+        [
+          "planning",
+          "paused"
+        ],
+        [
+          "execution",
+          "paused"
+        ],
+        [
+          "evaluation",
+          "paused"
+        ],
+        [
+          "paused",
+          "idea"
+        ],
+        [
+          "paused",
+          "discovery"
+        ],
+        [
+          "paused",
+          "planning"
+        ],
+        [
+          "paused",
+          "execution"
+        ],
+        [
+          "paused",
+          "evaluation"
+        ],
+        [
+          "idea",
+          "cancelled"
+        ],
+        [
+          "discovery",
+          "cancelled"
+        ],
+        [
+          "planning",
+          "cancelled"
+        ],
+        [
+          "execution",
+          "cancelled"
+        ],
+        [
+          "evaluation",
+          "cancelled"
+        ],
+        [
+          "paused",
+          "cancelled"
+        ]
+      ],
+      "resume_rule": "A paused objective can resume only to its recorded prior_phase."
+    },
+    {
+      "id": "output_profile_lifecycle",
+      "entity": "output_profile",
+      "states": [
+        "draft",
+        "proposed",
+        "active",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": [
+        [
+          "draft",
+          "proposed"
+        ],
+        [
+          "proposed",
+          "active"
+        ],
+        [
+          "proposed",
+          "rejected"
+        ],
+        [
+          "active",
+          "superseded"
+        ]
+      ]
+    },
+    {
+      "id": "plan_commitment",
+      "entity": "plan",
+      "states": [
+        "draft",
+        "proposed",
+        "approved",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": [
+        [
+          "draft",
+          "proposed"
+        ],
+        [
+          "proposed",
+          "approved"
+        ],
+        [
+          "proposed",
+          "rejected"
+        ],
+        [
+          "approved",
+          "superseded"
+        ]
+      ]
+    },
+    {
+      "id": "work_item_execution",
+      "entity": "work_item",
+      "states": [
+        "backlog",
+        "ready",
+        "in_progress",
+        "review",
+        "done",
+        "cancelled"
+      ],
+      "transitions": [
+        [
+          "backlog",
+          "ready"
+        ],
+        [
+          "ready",
+          "in_progress"
+        ],
+        [
+          "in_progress",
+          "ready"
+        ],
+        [
+          "in_progress",
+          "review"
+        ],
+        [
+          "review",
+          "in_progress"
+        ],
+        [
+          "review",
+          "done"
+        ],
+        [
+          "backlog",
+          "cancelled"
+        ],
+        [
+          "ready",
+          "cancelled"
+        ],
+        [
+          "in_progress",
+          "cancelled"
+        ],
+        [
+          "review",
+          "cancelled"
+        ]
+      ]
+    }
+  ],
+  "invariants": [
+    {
+      "id": "accepted_output_required",
+      "statement": "Expected outputs are satisfied only by accepted immutable revisions with passed or waived validations."
+    },
+    {
+      "id": "attention_is_orthogonal",
+      "statement": "Attention requests human intervention without changing the work-item execution status."
+    },
+    {
+      "id": "canonical_authorization",
+      "statement": "Authorization uses the same canonical subject serialization and hash for proposal, grant, check, and audit."
+    },
+    {
+      "id": "capability_not_authority",
+      "statement": "Capability does not imply Authority; external effects require a matching principal-bound grant."
+    },
+    {
+      "id": "claims_are_leases",
+      "statement": "At most one unexpired active claim exists per work item; claims are reclaimable leases."
+    },
+    {
+      "id": "execution_policy_not_authority",
+      "statement": "Execution policy governs internal work autonomy and never grants authority for an ExternalAction."
+    },
+    {
+      "id": "external_effect_boundary",
+      "statement": "Throughline never executes an ExternalAction; external actors record execution and evidence."
+    },
+    {
+      "id": "no_self_dependency",
+      "statement": "A work item cannot depend on itself; hard prerequisite cycles are rejected."
+    },
+    {
+      "id": "optimistic_concurrency",
+      "statement": "Mutations use expected_version and reject mismatches without overwriting current state."
+    },
+    {
+      "id": "profile_immutability",
+      "statement": "Active output profile versions and produced output revisions are immutable; changes create new versions."
+    },
+    {
+      "id": "progress_is_concise",
+      "statement": "Progress records concise checkpoints and never raw model reasoning."
+    }
+  ],
+  "source_mappings": [
+    {
+      "id": "architecture_core_concepts",
+      "path": "docs/implementation-handoff.md",
+      "heading": "## 4. Core concepts and terminology"
+    },
+    {
+      "id": "authority_actions",
+      "path": "internal/domain/authority/actions.go",
+      "symbol": "type CanonicalAuthorizationSubject struct"
+    },
+    {
+      "id": "authority_subject",
+      "path": "internal/domain/authority/subject.go",
+      "symbol": "CanonicalizeSubject"
+    },
+    {
+      "id": "mcp_adapter",
+      "path": "internal/mcp/server.go",
+      "symbol": "NewServer"
+    },
+    {
+      "id": "migration_approval_versions",
+      "path": "internal/sqlite/migrations/0008_generic_approval_versions.sql",
+      "symbol": "ALTER TABLE approvals"
+    },
+    {
+      "id": "migration_authority",
+      "path": "internal/sqlite/migrations/0005_external_actions_and_authority.sql",
+      "symbol": "CREATE TABLE external_actions"
+    },
+    {
+      "id": "migration_blockers",
+      "path": "internal/sqlite/migrations/0006_manual_blockers.sql",
+      "symbol": "CREATE TABLE manual_blockers"
+    },
+    {
+      "id": "migration_coordination",
+      "path": "internal/sqlite/migrations/0004_safe_multi_actor_coordination.sql",
+      "symbol": "CREATE TABLE actors"
+    },
+    {
+      "id": "migration_execution",
+      "path": "internal/sqlite/migrations/0003_durable_execution_graph.sql",
+      "symbol": "CREATE TABLE acceptance_criteria"
+    },
+    {
+      "id": "migration_idempotency",
+      "path": "internal/sqlite/migrations/0009_idempotency_without_actor_foreign_key.sql",
+      "symbol": "CREATE TABLE idempotency_records_new"
+    },
+    {
+      "id": "migration_initial",
+      "path": "internal/sqlite/migrations/0001_initial.sql",
+      "symbol": "CREATE TABLE objectives"
+    },
+    {
+      "id": "migration_planning",
+      "path": "internal/sqlite/migrations/0002_intent_planning.sql",
+      "symbol": "CREATE TABLE context_records"
+    },
+    {
+      "id": "migration_profile_versions",
+      "path": "internal/sqlite/migrations/0007_output_profile_state_versions.sql",
+      "symbol": "ALTER TABLE output_profiles"
+    },
+    {
+      "id": "output_profiles",
+      "path": "internal/domain/output/types.go",
+      "symbol": "type Profile struct"
+    },
+    {
+      "id": "output_reuse",
+      "path": "internal/domain/output/revisions.go",
+      "symbol": "type OutputRequirement struct"
+    },
+    {
+      "id": "work_coordination",
+      "path": "internal/domain/work/coordination.go",
+      "symbol": "EvaluateTransitionGate"
+    },
+    {
+      "id": "work_execution",
+      "path": "internal/domain/work/execution.go",
+      "symbol": "TransitionWorkItem"
+    },
+    {
+      "id": "work_planning",
+      "path": "internal/domain/work/planning.go",
+      "symbol": "TransitionObjective"
+    },
+    {
+      "id": "work_types",
+      "path": "internal/domain/work/types.go",
+      "symbol": "type Objective struct"
+    }
+  ],
+  "manifest": {
+    "schema_version": "1.0",
+    "model_version": "1.1.0",
+    "content_digest": "2eff9eef545ff0b338cc108ddf77fa9b83a78851024783a2b9c1d15f78aae91f",
+    "source_digest": "1a4a2892cc9c149ef2f906849034935cc0af294f912321a9413bb701d4aff2b3",
+    "bootstrap": "Throughline is a local, authoritative coordination state layer for domain-neutral work. It records intent, plans, work, outputs, validation, reuse, and delegated authority; it does not orchestrate agents or perform external effects. Capability does not imply Authority. Call get_semantic_model for details.",
+    "available_sections": [
+      "manifest",
+      "entities",
+      "relations",
+      "lifecycles",
+      "invariants",
+      "source_mappings",
+      "full"
+    ],
+    "section_counts": {
+      "entities": 26,
+      "invariants": 11,
+      "lifecycles": 6,
+      "relations": 20,
+      "source_mappings": 19
+    }
+  },
+  "content_digest": "2eff9eef545ff0b338cc108ddf77fa9b83a78851024783a2b9c1d15f78aae91f",
+  "source_digest": "1a4a2892cc9c149ef2f906849034935cc0af294f912321a9413bb701d4aff2b3"
+}

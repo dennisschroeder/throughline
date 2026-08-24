@@ -42,17 +42,44 @@ func TestToolsExposeStableErrorsAndReadAnnotations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var found bool
+	var foundSemantic, foundChanges bool
 	for _, tool := range tools.Tools {
+		if tool.Name == "get_semantic_model" {
+			foundSemantic = true
+			if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
+				t.Fatalf("get_semantic_model annotations = %#v", tool.Annotations)
+			}
+		}
 		if tool.Name == "get_changes" {
-			found = true
+			foundChanges = true
 			if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
 				t.Fatalf("get_changes annotations = %#v", tool.Annotations)
 			}
 		}
 	}
-	if !found {
-		t.Fatal("get_changes was not advertised")
+	if !foundSemantic || !foundChanges {
+		t.Fatal("read-only semantic/change tool was not advertised")
+	}
+	semantic, err := session.CallTool(ctx, &protocol.CallToolParams{Name: "get_semantic_model", Arguments: map[string]any{"section": "entities", "ids": []any{"work_item", "unknown"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if semantic.IsError {
+		t.Fatalf("semantic model call failed: %s", semantic.Content[0].(*protocol.TextContent).Text)
+	}
+	var semanticPayload struct {
+		Result struct {
+			Section       string   `json:"section"`
+			ContentDigest string   `json:"content_digest"`
+			Data          []any    `json:"data"`
+			NotFound      []string `json:"not_found_ids"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(semantic.Content[0].(*protocol.TextContent).Text), &semanticPayload); err != nil {
+		t.Fatal(err)
+	}
+	if semanticPayload.Result.Section != "entities" || semanticPayload.Result.ContentDigest == "" || len(semanticPayload.Result.Data) != 1 || len(semanticPayload.Result.NotFound) != 1 {
+		t.Fatalf("semantic payload = %#v", semanticPayload)
 	}
 
 	result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: "get_item", Arguments: map[string]any{"id": "missing"}})
