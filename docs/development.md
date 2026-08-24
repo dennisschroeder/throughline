@@ -15,6 +15,17 @@ go test ./internal/sqlite -run TestConcurrentAgentsCannotBothClaimWorkItem -coun
 CGO_ENABLED=0 go build ./...
 ```
 
+Semantic model generation is deterministic and part of the normal build check:
+
+```bash
+go generate ./internal/semanticmodel
+git diff --exit-code -- internal/semanticmodel/model.generated.json
+```
+
+The canonical ontology is [ontology/throughline.json](../ontology/throughline.json). The binary
+embeds the generated model and MCP clients can retrieve its manifest or bounded sections with
+`get_semantic_model`; Graphify remains outside CI and release dependencies.
+
 `gofmt -w` above fixes formatting in place. CI instead runs the list-only check, which fails if any
 file is unformatted rather than silently rewriting it:
 

@@ -22,6 +22,15 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Verify generated semantic model
+        run: |
+          go generate ./internal/semanticmodel
+          git diff --exit-code -- internal/semanticmodel/model.generated.json
+          go vet ./...
+          go test ./...
+          go build ./...
+          CGO_ENABLED=0 go build ./...
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
