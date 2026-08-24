@@ -34,6 +34,7 @@ type Lifecycle struct {
 	Entity      string      `json:"entity"`
 	States      []string    `json:"states"`
 	Transitions [][2]string `json:"transitions"`
+	ResumeRule  string      `json:"resume_rule,omitempty"`
 }
 
 type SourceMapping struct {
@@ -124,6 +125,9 @@ func (model *Model) Validate() error {
 	if counts["entities"] != len(model.Entities) || counts["relations"] != len(model.Relations) || counts["lifecycles"] != len(model.Lifecycles) || counts["invariants"] != len(model.Invariants) || counts["source_mappings"] != len(model.SourceMappings) {
 		return &InvalidArtifactError{Reason: "manifest section counts do not match model"}
 	}
+	if !sameStrings(model.Manifest.AvailableSections, AvailableSections()) {
+		return &InvalidArtifactError{Reason: "manifest available sections do not match model"}
+	}
 	entityIDs := map[string]bool{}
 	lifecycleIDs := map[string]bool{}
 	invariantIDs := map[string]bool{}
@@ -154,6 +158,9 @@ func (model *Model) Validate() error {
 		}
 		states := map[string]bool{}
 		for _, state := range lifecycle.States {
+			if state == "" || states[state] {
+				return &InvalidArtifactError{Reason: fmt.Sprintf("lifecycle %q has invalid states", lifecycle.ID)}
+			}
 			states[state] = true
 		}
 		for _, transition := range lifecycle.Transitions {
@@ -177,9 +184,24 @@ func (model *Model) Validate() error {
 	return nil
 }
 
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func (model *Model) Section(section string, ids []string) (any, []string, error) {
 	if section == "" {
 		section = "manifest"
+	}
+	if !isSupportedSection(section) {
+		return nil, nil, fmt.Errorf("unknown semantic model section %q", section)
 	}
 	if len(ids) > 50 {
 		return nil, nil, errors.New("ids cannot contain more than 50 values")

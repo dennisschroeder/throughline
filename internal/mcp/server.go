@@ -37,7 +37,9 @@ func Run(ctx context.Context, service *app.Service) error {
 func NewServer(service *app.Service) *mcp.Server {
 	instructions := serverInstructions
 	if model, err := semanticmodel.Load(); err == nil {
-		instructions = model.Bootstrap + " Semantic model " + model.ModelVersion + " (" + model.ContentDigest + "). Call get_semantic_model for details. " + serverInstructions
+		if builtInstructions, instructionErr := semanticInstructions(model); instructionErr == nil {
+			instructions = builtInstructions
+		}
 	}
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:        "throughline",
@@ -50,7 +52,17 @@ func NewServer(service *app.Service) *mcp.Server {
 	return server
 }
 
-const serverInstructions = `Use Throughline as durable shared coordination state, not as an execution harness. Start with board_overview, list_ready_items, and get_item. Claim an item before shared work and pass the returned version to every mutation. Inspect output contracts and external actions before acting. Throughline records external action proposals, grants, starts, results, and evidence; it never performs external effects. Use get_changes and get_objective_context to resume without hidden session state.`
+const maxServerInstructionsBytes = 2048
+
+const serverInstructions = `Use Throughline as durable shared coordination state, not as an execution harness. Start with board_overview, list_ready_items, and get_item. Claim an item before shared work and pass the returned version to every mutation. Inspect output contracts and external actions before acting. Throughline records external action proposals, grants, starts, results, and evidence; Throughline never performs external effects. Use get_changes and get_objective_context to resume without hidden session state.`
+
+func semanticInstructions(model *semanticmodel.Model) (string, error) {
+	instructions := fmt.Sprintf("%s Semantic model %s (%s). Work/output chain: WorkItem -> ExpectedOutput -> OutputRevision -> ValidationRecord -> accepted/reusable output. Authority chain: ExternalAction revision -> AuthorizationSubject -> principal-bound AuthorityGrant -> recorded execution evidence. Call get_semantic_model for details. %s", model.Bootstrap, model.ModelVersion, model.ContentDigest, serverInstructions)
+	if len(instructions) > maxServerInstructionsBytes {
+		return "", fmt.Errorf("semantic model instructions exceed %d bytes", maxServerInstructionsBytes)
+	}
+	return instructions, nil
+}
 
 type adapter struct{ service *app.Service }
 
@@ -1399,8 +1411,8 @@ type semanticModelInput struct {
 
 func semanticModelSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{
-		"section": map[string]any{"type": "string", "enum": []string{"manifest", "entities", "relations", "lifecycles", "invariants", "source_mappings", "full"}},
-		"ids":     map[string]any{"type": "array", "maxItems": 50, "items": map[string]any{"type": "string"}},
+		"section": map[string]any{"type": "string", "enum": semanticmodel.AvailableSections()},
+		"ids":     map[string]any{"type": "array", "maxItems": 50, "uniqueItems": true, "items": map[string]any{"type": "string"}},
 	}, "additionalProperties": false}
 }
 

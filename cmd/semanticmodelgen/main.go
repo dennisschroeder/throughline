@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/dennisschroeder/throughline/internal/semanticmodel"
 )
 
 type record struct {
@@ -44,6 +46,7 @@ type lifecycle struct {
 	Entity      string      `json:"entity"`
 	States      []string    `json:"states"`
 	Transitions [][2]string `json:"transitions"`
+	ResumeRule  string      `json:"resume_rule,omitempty"`
 }
 type sourceMapping struct {
 	ID      string `json:"id"`
@@ -73,34 +76,46 @@ func generate() error {
 	if err != nil {
 		return err
 	}
-	input, err := os.ReadFile(filepath.Join(root, "ontology", "throughline.json"))
+	output, err := renderModel(root)
 	if err != nil {
 		return err
 	}
+	path := filepath.Join(root, "internal", "semanticmodel", "model.generated.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, output, 0644)
+}
+
+func renderModel(root string) ([]byte, error) {
+	input, err := os.ReadFile(filepath.Join(root, "ontology", "throughline.json"))
+	if err != nil {
+		return nil, err
+	}
 	var raw map[string]any
 	if err := json.Unmarshal(input, &raw); err != nil {
-		return fmt.Errorf("decode ontology: %w", err)
+		return nil, fmt.Errorf("decode ontology: %w", err)
 	}
 	for _, section := range []string{"entities", "relations", "lifecycles", "invariants", "source_mappings"} {
 		if _, ok := raw[section]; !ok {
-			return fmt.Errorf("ontology missing %s", section)
+			return nil, fmt.Errorf("ontology missing %s", section)
 		}
 	}
 	canonical, err := canonicalJSON(raw)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	contentDigest := digest(canonical)
 	var result model
 	if err := json.Unmarshal(canonical, &result); err != nil {
-		return err
+		return nil, err
 	}
 	result.ContentDigest = contentDigest
 	result.SourceDigest, err = sourceDigest(root, result.SourceMapping)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	result.Manifest = manifest{SchemaVersion: result.SchemaVersion, ModelVersion: result.ModelVersion, ContentDigest: result.ContentDigest, SourceDigest: result.SourceDigest, Bootstrap: result.Bootstrap, AvailableSections: []string{"manifest", "entities", "relations", "lifecycles", "invariants", "source_mappings", "full"}, SectionCounts: map[string]int{"entities": len(result.Entities), "relations": len(result.Relations), "lifecycles": len(result.Lifecycles), "invariants": len(result.Invariants), "source_mappings": len(result.SourceMapping)}}
+	result.Manifest = manifest{SchemaVersion: result.SchemaVersion, ModelVersion: result.ModelVersion, ContentDigest: result.ContentDigest, SourceDigest: result.SourceDigest, Bootstrap: result.Bootstrap, AvailableSections: semanticmodel.AvailableSections(), SectionCounts: map[string]int{"entities": len(result.Entities), "relations": len(result.Relations), "lifecycles": len(result.Lifecycles), "invariants": len(result.Invariants), "source_mappings": len(result.SourceMapping)}}
 	for _, values := range [][]record{result.Entities, result.Invariants} {
 		sort.Slice(values, func(i, j int) bool { return values[i].ID < values[j].ID })
 	}
@@ -109,14 +124,10 @@ func generate() error {
 	sort.Slice(result.SourceMapping, func(i, j int) bool { return result.SourceMapping[i].ID < result.SourceMapping[j].ID })
 	output, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	output = append(output, '\n')
-	path := filepath.Join(root, "internal", "semanticmodel", "model.generated.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, output, 0644)
+	return output, nil
 }
 
 func repositoryRoot() (string, error) {
@@ -143,8 +154,19 @@ func canonicalJSON(value map[string]any) ([]byte, error) {
 			return nil, fmt.Errorf("ontology %s must be an array", section)
 		}
 		sort.SliceStable(values, func(i, j int) bool {
-			return fmt.Sprint(values[i].(map[string]any)["id"]) < fmt.Sprint(values[j].(map[string]any)["id"])
+			left, leftOK := values[i].(map[string]any)
+			right, rightOK := values[j].(map[string]any)
+			if !leftOK || !rightOK {
+				return false
+			}
+			return fmt.Sprint(left["id"]) < fmt.Sprint(right["id"])
 		})
+		for _, candidate := range values {
+			record, ok := candidate.(map[string]any)
+			if !ok || strings.TrimSpace(fmt.Sprint(record["id"])) == "" {
+				return nil, fmt.Errorf("ontology %s entries must be objects with IDs", section)
+			}
+		}
 	}
 	delete(value, "manifest")
 	delete(value, "content_digest")
@@ -160,14 +182,17 @@ func sourceDigest(root string, mappings []sourceMapping) (string, error) {
 	paths := make([]string, 0, len(mappings))
 	seen := map[string]bool{}
 	for _, mapping := range mappings {
-		if mapping.Path == "" || seen[mapping.Path] {
+		if mapping.Path == "" {
 			continue
 		}
 		normalized := filepath.ToSlash(filepath.Clean(mapping.Path))
 		if filepath.IsAbs(mapping.Path) || normalized == ".." || strings.HasPrefix(normalized, "../") {
 			return "", fmt.Errorf("source mapping %s escapes repository root", mapping.Path)
 		}
-		seen[mapping.Path] = true
+		if seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
 		paths = append(paths, normalized)
 	}
 	sort.Strings(paths)
@@ -178,48 +203,47 @@ func sourceDigest(root string, mappings []sourceMapping) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("source mapping %s: %w", path, err)
 		}
-		files := []string{path}
 		if info.IsDir() {
-			files = nil
-			err = filepath.Walk(absolute, func(candidate string, entry os.FileInfo, walkErr error) error {
-				if walkErr != nil {
-					return walkErr
-				}
-				if entry.IsDir() {
-					return nil
-				}
-				relative, relErr := filepath.Rel(root, candidate)
-				if relErr != nil {
-					return relErr
-				}
-				files = append(files, filepath.ToSlash(relative))
-				return nil
-			})
-			if err != nil {
-				return "", fmt.Errorf("source mapping %s: %w", path, err)
-			}
-			sort.Strings(files)
+			return "", fmt.Errorf("source mapping %s must reference a file", path)
 		}
-		for _, file := range files {
-			realFile, resolveErr := filepath.EvalSymlinks(filepath.Join(root, file))
-			if resolveErr != nil {
-				return "", resolveErr
-			}
-			relative, relErr := filepath.Rel(realRoot, realFile)
-			if relErr != nil || relative == ".." || strings.HasPrefix(filepath.ToSlash(relative), "../") {
-				return "", fmt.Errorf("source mapping %s resolves outside repository", file)
-			}
-			content, readErr := os.ReadFile(filepath.Join(root, file))
-			if readErr != nil {
-				return "", fmt.Errorf("source mapping %s: %w", file, readErr)
-			}
-			combined.WriteString(file)
-			combined.WriteByte(0)
-			combined.Write(content)
-			combined.WriteByte(0)
+		realFile, resolveErr := filepath.EvalSymlinks(filepath.Join(root, path))
+		if resolveErr != nil {
+			return "", resolveErr
 		}
+		relative, relErr := filepath.Rel(realRoot, realFile)
+		if relErr != nil || relative == ".." || strings.HasPrefix(filepath.ToSlash(relative), "../") {
+			return "", fmt.Errorf("source mapping %s resolves outside repository", path)
+		}
+		content, readErr := os.ReadFile(filepath.Join(root, path))
+		if readErr != nil {
+			return "", fmt.Errorf("source mapping %s: %w", path, readErr)
+		}
+		mapping, ok := mappingForPath(mappings, path)
+		if !ok {
+			return "", fmt.Errorf("source mapping %s is missing", path)
+		}
+		anchor := mapping.Symbol
+		if anchor == "" {
+			anchor = mapping.Heading
+		}
+		if !bytes.Contains(content, []byte(anchor)) {
+			return "", fmt.Errorf("source mapping %s anchor %q does not exist", path, anchor)
+		}
+		combined.WriteString(path)
+		combined.WriteByte(0)
+		combined.Write(content)
+		combined.WriteByte(0)
 	}
 	return digest(combined.Bytes()), nil
+}
+
+func mappingForPath(mappings []sourceMapping, path string) (sourceMapping, bool) {
+	for _, mapping := range mappings {
+		if filepath.ToSlash(filepath.Clean(mapping.Path)) == path {
+			return mapping, true
+		}
+	}
+	return sourceMapping{}, false
 }
 
 func digest(value []byte) string { sum := sha256.Sum256(value); return hex.EncodeToString(sum[:]) }
