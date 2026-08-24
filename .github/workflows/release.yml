@@ -31,15 +31,14 @@ jobs:
           go build ./...
           CGO_ENABLED=0 go build ./...
 
-      - name: Set up GoReleaser
+      - name: Build snapshot release
         uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> 2"
-          args: --version
+          args: release --snapshot --clean
 
       - name: Smoke test packaged semantic model
         run: |
-          goreleaser release --snapshot --clean
           archive_path="$(find dist -type f -name 'throughline_*_linux_amd64.tar.gz' | head -n 1)"
           test -n "$archive_path"
           smoke_dir="$(mktemp -d)"
