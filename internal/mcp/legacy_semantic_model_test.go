@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,22 +10,23 @@ import (
 	protocol "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/dennisschroeder/throughline/internal/app"
-	throughlinesqlite "github.com/dennisschroeder/throughline/internal/sqlite"
+	"github.com/dennisschroeder/throughline/internal/config"
+	"github.com/dennisschroeder/throughline/internal/router"
 )
 
 func TestLegacyInitializationIncludesSemanticInstructions(t *testing.T) {
 	ctx := context.Background()
-	database, err := throughlinesqlite.Open(ctx, filepath.Join(t.TempDir(), "throughline.db"))
+	workspace, _, err := config.Initialize(t.TempDir(), "", "legacy-init-workspace")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
-	if err := database.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
+	fakeRegistry := newTestRegistry()
+	fakeRegistry.register(t, workspace)
+	workspaceRouter := router.New(fakeRegistry, router.NewProviderManager(router.SQLiteProvider{}), app.UUIDv7Generator{}, app.SystemClock{}, 0)
+	t.Cleanup(func() { _ = workspaceRouter.Close() })
 
 	serverTransport, clientTransport := protocol.NewInMemoryTransports()
-	server := NewServer(app.NewService(database.Store(), app.UUIDv7Generator{}, app.SystemClock{}))
+	server := NewServer(workspaceRouter)
 	if _, err := server.Connect(ctx, serverTransport, nil); err != nil {
 		t.Fatal(err)
 	}

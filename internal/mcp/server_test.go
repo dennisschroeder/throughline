@@ -3,40 +3,25 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"os/exec"
-	"path/filepath"
+	"fmt"
+	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	protocol "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/dennisschroeder/throughline/internal/app"
+	"github.com/dennisschroeder/throughline/internal/config"
 	"github.com/dennisschroeder/throughline/internal/domain/authority"
-	throughlinesqlite "github.com/dennisschroeder/throughline/internal/sqlite"
+	"github.com/dennisschroeder/throughline/internal/registry"
+	"github.com/dennisschroeder/throughline/internal/router"
 )
 
 func TestToolsExposeStableErrorsAndReadAnnotations(t *testing.T) {
-	ctx := context.Background()
-	database, err := throughlinesqlite.Open(ctx, filepath.Join(t.TempDir(), "throughline.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
-	if err := database.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
-	serverTransport, clientTransport := protocol.NewInMemoryTransports()
-	server := NewServer(app.NewService(database.Store(), app.UUIDv7Generator{}, app.SystemClock{}))
-	if _, err := server.Connect(ctx, serverTransport, nil); err != nil {
-		t.Fatal(err)
-	}
-	client := protocol.NewClient(&protocol.Implementation{Name: "mcp-test", Version: "v1"}, nil)
-	session, err := client.Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer session.Close()
+	ctx, session := newSession(t)
 
 	tools, err := session.ListTools(ctx, nil)
 	if err != nil {
@@ -82,7 +67,7 @@ func TestToolsExposeStableErrorsAndReadAnnotations(t *testing.T) {
 		t.Fatalf("semantic payload = %#v", semanticPayload)
 	}
 
-	result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: "get_item", Arguments: map[string]any{"id": "missing"}})
+	result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: "get_item", Arguments: map[string]any{"workspace_id": testWorkspaceID, "id": "missing"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,6 +114,9 @@ func TestCreateObjectiveReplaysAndVersionConflictIncludesCurrent(t *testing.T) {
 	ctx, session := newSession(t)
 	call := func(name string, arguments map[string]any) map[string]any {
 		t.Helper()
+		if _, ok := arguments["workspace_id"]; !ok {
+			arguments["workspace_id"] = testWorkspaceID
+		}
 		result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: name, Arguments: arguments})
 		if err != nil {
 			t.Fatal(err)
@@ -173,6 +161,9 @@ func TestProposePlanUsesStrictSnakeCaseNestedInput(t *testing.T) {
 	ctx, session := newSession(t)
 	call := func(name string, arguments map[string]any) map[string]any {
 		t.Helper()
+		if _, ok := arguments["workspace_id"]; !ok {
+			arguments["workspace_id"] = testWorkspaceID
+		}
 		result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: name, Arguments: arguments})
 		if err != nil {
 			t.Fatal(err)
@@ -196,10 +187,315 @@ func TestProposePlanUsesStrictSnakeCaseNestedInput(t *testing.T) {
 	}
 }
 
+func TestWorkspaceScopedToolsFailClosedOnMissingAndUnknownWorkspaceID(t *testing.T) {
+	ctx, session := newSession(t)
+
+	missing, err := session.CallTool(ctx, &protocol.CallToolParams{Name: "board_overview", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !missing.IsError {
+		t.Fatal("board_overview without workspace_id was accepted")
+	}
+	var missingPayload struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(missing.Content[0].(*protocol.TextContent).Text), &missingPayload); err != nil {
+		t.Fatal(err)
+	}
+	if missingPayload.Error.Code != "workspace_required" {
+		t.Fatalf("missing workspace_id error code = %q, want workspace_required", missingPayload.Error.Code)
+	}
+
+	unknown, err := session.CallTool(ctx, &protocol.CallToolParams{Name: "board_overview", Arguments: map[string]any{"workspace_id": "no-such-workspace"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !unknown.IsError {
+		t.Fatal("board_overview with an unknown workspace_id was accepted")
+	}
+	var unknownPayload struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(unknown.Content[0].(*protocol.TextContent).Text), &unknownPayload); err != nil {
+		t.Fatal(err)
+	}
+	if unknownPayload.Error.Code != "workspace_not_found" {
+		t.Fatalf("unknown workspace_id error code = %q, want workspace_not_found", unknownPayload.Error.Code)
+	}
+}
+
+func TestGetSemanticModelNeedsNoWorkspaceID(t *testing.T) {
+	ctx, session := newSession(t)
+	result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: "get_semantic_model", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("get_semantic_model without workspace_id failed: %s", result.Content[0].(*protocol.TextContent).Text)
+	}
+}
+
+// TestConcurrentRequestsRouteDistinctWorkspacesIndependently proves the central per-request
+// wrapper, not a connection or session, decides which workspace a call reaches: two
+// workspaces served by one Router behind one HTTP endpoint never see each other's writes,
+// even when their requests interleave concurrently.
+func TestConcurrentRequestsRouteDistinctWorkspacesIndependently(t *testing.T) {
+	ctx := context.Background()
+	fakeRegistry := newTestRegistry()
+	workspaceA, _, err := config.Initialize(t.TempDir(), "", "workspace-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceB, _, err := config.Initialize(t.TempDir(), "", "workspace-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeRegistry.register(t, workspaceA)
+	fakeRegistry.register(t, workspaceB)
+	workspaceRouter := router.New(fakeRegistry, router.NewProviderManager(router.SQLiteProvider{}), app.UUIDv7Generator{}, app.SystemClock{}, 0)
+	t.Cleanup(func() { _ = workspaceRouter.Close() })
+
+	httpServer := httptest.NewServer(Handler(workspaceRouter))
+	t.Cleanup(httpServer.Close)
+
+	open := func() *protocol.ClientSession {
+		t.Helper()
+		client := protocol.NewClient(&protocol.Implementation{Name: "concurrent-test", Version: "v1"}, nil)
+		session, err := client.Connect(ctx, &protocol.StreamableClientTransport{Endpoint: httpServer.URL + "/mcp"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = session.Close() })
+		return session
+	}
+
+	const attemptsPerWorkspace = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, attemptsPerWorkspace*2)
+	createInWorkspace := func(workspaceID, key string) {
+		defer wg.Done()
+		session := open()
+		result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: "create_objective", Arguments: map[string]any{
+			"workspace_id": workspaceID, "actor_id": "agent:concurrent", "idempotency_key": key,
+			"key": key, "title": "Concurrent objective", "desired_outcome": "Isolation check", "phase": "discovery",
+		}})
+		if err != nil {
+			errs <- err
+			return
+		}
+		if result.IsError {
+			errs <- fmt.Errorf("%s: %s", key, result.Content[0].(*protocol.TextContent).Text)
+		}
+	}
+	for i := 0; i < attemptsPerWorkspace; i++ {
+		wg.Add(2)
+		go createInWorkspace(workspaceA.Config.WorkspaceID, fmt.Sprintf("OBJ-A-%d", i))
+		go createInWorkspace(workspaceB.Config.WorkspaceID, fmt.Sprintf("OBJ-B-%d", i))
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+
+	// Every idempotency key was unique per workspace; a leak across workspaces would have
+	// surfaced above as a spurious idempotency collision or version conflict. Confirm both
+	// workspaces are still independently queryable after the concurrent storm.
+	verify := open()
+	for _, workspaceID := range []string{workspaceA.Config.WorkspaceID, workspaceB.Config.WorkspaceID} {
+		result, err := verify.CallTool(ctx, &protocol.CallToolParams{Name: "list_items", Arguments: map[string]any{"workspace_id": workspaceID}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.IsError {
+			t.Fatalf("list_items for %s failed after concurrent writes: %s", workspaceID, result.Content[0].(*protocol.TextContent).Text)
+		}
+	}
+}
+
+// TestParallelGraphNodesClaimConflictRereadAndReplayIndependently exercises the accepted
+// "distinct logical actor identity for every parallel graph node" contract
+// (agent:<harness>:<run_id>:<node_key>) through the full HTTP+router+MCP stack: two nodes
+// of the same run race a claim, the loser gets a claim_conflict envelope carrying enough
+// current state to reread and decide whether to retry, and idempotent replay/mismatch
+// detection both work per-actor. Claim lease expiry itself is exercised at the domain layer
+// (internal/domain/work/coordination_test.go); this test proves routing/HTTP does not
+// interfere with the identity, claim, or idempotency semantics that layer guarantees.
+func TestParallelGraphNodesClaimConflictRereadAndReplayIndependently(t *testing.T) {
+	ctx, session := newSession(t)
+	runID := "01996f20-9a10-7000-8000-000000000000" // a fixed UUIDv7-shaped run_id
+	nodeA := "agent:codex:" + runID + ":dossier"
+	nodeB := "agent:codex:" + runID + ":review"
+
+	call := func(name string, arguments map[string]any) map[string]any {
+		t.Helper()
+		if _, ok := arguments["workspace_id"]; !ok {
+			arguments["workspace_id"] = testWorkspaceID
+		}
+		result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: name, Arguments: arguments})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(result.Content[0].(*protocol.TextContent).Text), &payload); err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+
+	for _, actor := range []string{nodeA, nodeB} {
+		if payload := call("register_actor", map[string]any{"actor_id": actor, "kind": "agent", "display_name": actor, "idempotency_key": "register-" + actor}); payload["error"] != nil {
+			t.Fatalf("register %s = %#v", actor, payload)
+		}
+	}
+	if payload := call("register_actor", map[string]any{"actor_id": "human:reviewer", "kind": "human", "display_name": "Reviewer", "idempotency_key": "register-reviewer-" + runID}); payload["error"] != nil {
+		t.Fatalf("register reviewer = %#v", payload)
+	}
+	objective := call("create_objective", map[string]any{
+		"actor_id": nodeA, "idempotency_key": "objective-" + runID, "key": "OBJ-PARALLEL-" + runID[:8],
+		"title": "Parallel graph run", "desired_outcome": "Distinct node identities are enforced.", "phase": "discovery",
+	})["result"].(map[string]any)
+	plan := call("propose_plan", map[string]any{
+		"objective_id": objective["id"], "actor_id": nodeA, "idempotency_key": "plan-" + runID, "title": "Parallel plan", "revision": 1,
+		"items": []any{map[string]any{
+			"client_ref": "shared", "key": "TH-PARALLEL-" + runID[:8], "title": "Shared work", "kind": "research",
+			"priority": "medium", "estimated_scope": "small", "execution_policy": "autonomous_with_report", "required_actor_kind": "agent",
+		}},
+	})["result"].(map[string]any)
+	planID := plan["plan"].(map[string]any)["id"]
+	call("review_plan", map[string]any{"plan_id": planID, "actor_id": "human:reviewer", "idempotency_key": "review-" + runID, "decision": "approved", "reason": "Approved.", "expected_version": 1})
+	call("transition_objective", map[string]any{"objective_id": objective["id"], "actor_id": "human:reviewer", "idempotency_key": "planning-" + runID, "target_phase": "planning", "reason": "Plan.", "expected_version": 1})
+	call("transition_objective", map[string]any{"objective_id": objective["id"], "actor_id": "human:reviewer", "idempotency_key": "execution-" + runID, "target_phase": "execution", "reason": "Execute.", "expected_version": 2})
+
+	version := func(id any) any {
+		t.Helper()
+		return call("get_item", map[string]any{"id": id})["result"].(map[string]any)["work_item"].(map[string]any)["version"]
+	}
+
+	items := call("list_items", map[string]any{"objective_id": objective["id"]})["result"].(map[string]any)["items"].([]any)
+	item := items[0].(map[string]any)["work_item"].(map[string]any)
+	call("transition_item", map[string]any{
+		"id": item["id"], "actor_id": nodeA, "target_status": "ready", "expected_version": version(item["id"]),
+		"idempotency_key": "ready-" + runID,
+	})
+
+	// Node A wins the claim.
+	readyVersion := version(item["id"])
+	claimA := call("claim_item", map[string]any{
+		"id": item["id"], "actor_id": nodeA, "expected_version": readyVersion, "idempotency_key": "claim-" + runID,
+		"lease_seconds": 300,
+	})
+	if claimA["error"] != nil {
+		t.Fatalf("node A claim = %#v", claimA)
+	}
+	claimedVersion := claimA["result"].(map[string]any)["work_item"].(map[string]any)["version"]
+
+	// Node B, a distinct actor identity for the same run, loses the race and must be told
+	// enough to reread rather than guess.
+	claimB := call("claim_item", map[string]any{
+		"id": item["id"], "actor_id": nodeB, "expected_version": claimedVersion, "idempotency_key": "claim-" + runID,
+		"lease_seconds": 300,
+	})
+	errorPayload, _ := claimB["error"].(map[string]any)
+	if errorPayload["code"] != "claim_conflict" {
+		t.Fatalf("node B claim = %#v, want claim_conflict", claimB)
+	}
+	current, ok := errorPayload["current"].(map[string]any)
+	if !ok || current["id"] != item["id"] {
+		t.Fatalf("claim_conflict current = %#v, want enough state to reread %s", errorPayload["current"], item["id"])
+	}
+
+	// Node A's own identical retry (same actor, same idempotency key) replays rather than
+	// re-executing or conflicting with itself.
+	replay := call("claim_item", map[string]any{
+		"id": item["id"], "actor_id": nodeA, "expected_version": readyVersion, "idempotency_key": "claim-" + runID,
+		"lease_seconds": 300,
+	})
+	if !reflect.DeepEqual(replay, claimA) {
+		t.Fatalf("node A replay = %#v, want identical to the original claim %#v", replay, claimA)
+	}
+
+	// Idempotency is scoped per (actor_id, key): node B reusing node A's exact key text is
+	// evaluated as node B's own fresh request, not as a replay of node A's successful claim
+	// (which would be a cross-actor isolation bug) — it independently hits its own
+	// claim_conflict rather than returning node A's result.
+	if reflect.DeepEqual(claimB, claimA) {
+		t.Fatalf("node B's request with node A's key text returned node A's own claim result: %#v", claimB)
+	}
+
+	// Node A reusing its own key with a materially different request is rejected outright,
+	// not silently accepted as a replay.
+	mismatch := call("claim_item", map[string]any{
+		"id": item["id"], "actor_id": nodeA, "expected_version": readyVersion, "idempotency_key": "claim-" + runID,
+		"lease_seconds": 600,
+	})
+	mismatchError, _ := mismatch["error"].(map[string]any)
+	if mismatchError["code"] != "idempotency_key_reused_with_different_request" {
+		t.Fatalf("same-actor changed retry = %#v, want idempotency_key_reused_with_different_request", mismatch)
+	}
+}
+
+// TestDaemonRemainsHealthyAfterAnAbruptClientDisconnect proves one client abandoning a
+// request mid-flight (its context cancelled, no clean MCP session shutdown) never wedges
+// the daemon for anyone else: a fresh session opened immediately afterward against the same
+// Router/HTTP server still resolves workspace_id and completes a call normally.
+func TestDaemonRemainsHealthyAfterAnAbruptClientDisconnect(t *testing.T) {
+	fakeRegistry := newTestRegistry()
+	workspace, _, err := config.Initialize(t.TempDir(), "", "disconnect-workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeRegistry.register(t, workspace)
+	workspaceRouter := router.New(fakeRegistry, router.NewProviderManager(router.SQLiteProvider{}), app.UUIDv7Generator{}, app.SystemClock{}, 0)
+	t.Cleanup(func() { _ = workspaceRouter.Close() })
+
+	httpServer := httptest.NewServer(Handler(workspaceRouter))
+	t.Cleanup(httpServer.Close)
+
+	open := func() *protocol.ClientSession {
+		t.Helper()
+		client := protocol.NewClient(&protocol.Implementation{Name: "disconnect-test", Version: "v1"}, nil)
+		// DisableStandaloneSSE: this test's abandoned session must leave behind exactly one
+		// thing — a request whose context was already cancelled — not also a lingering
+		// server-initiated event stream, which is a distinct concern from a mid-request
+		// disconnect.
+		transport := &protocol.StreamableClientTransport{Endpoint: httpServer.URL + "/mcp", DisableStandaloneSSE: true}
+		session, err := client.Connect(context.Background(), transport, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return session
+	}
+
+	abandoned := open()
+	abandonedCtx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled: simulates a client that vanished before the response arrived
+	_, _ = abandoned.CallTool(abandonedCtx, &protocol.CallToolParams{Name: "board_overview", Arguments: map[string]any{"workspace_id": workspace.Config.WorkspaceID}})
+	// Deliberately no session.Close(): the abandoned session's underlying connection is left
+	// exactly as an abruptly killed process would leave it.
+
+	fresh := open()
+	t.Cleanup(func() { _ = fresh.Close() })
+	freshCtx, freshCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer freshCancel()
+	result, err := fresh.CallTool(freshCtx, &protocol.CallToolParams{Name: "board_overview", Arguments: map[string]any{"workspace_id": workspace.Config.WorkspaceID}})
+	if err != nil {
+		t.Fatalf("a fresh session after an abandoned peer connection did not complete within 5s: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("board_overview after an abandoned peer connection failed: %s", result.Content[0].(*protocol.TextContent).Text)
+	}
+}
+
 func TestRuntimeValidationRejectsUnknownNestedArtifactField(t *testing.T) {
 	ctx, session := newSession(t)
 	result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: "create_output_revision", Arguments: map[string]any{
-		"expected_output_id": "missing", "actor_id": "agent:writer", "idempotency_key": "revision", "artifacts": []any{
+		"workspace_id": testWorkspaceID, "expected_output_id": "missing", "actor_id": "agent:writer", "idempotency_key": "revision", "artifacts": []any{
 			map[string]any{"kind": "document", "uri": "file:///tmp/result.md", "unexpected": true},
 		},
 	}})
@@ -224,7 +520,7 @@ func TestTerminalExecutionRequiresNonEmptyEvidenceArtifactID(t *testing.T) {
 func TestRequestAttentionRejectsUnsupportedTargetKind(t *testing.T) {
 	ctx, session := newSession(t)
 	result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: "request_attention", Arguments: map[string]any{
-		"target_kind": "unsupported", "target_id": "target-1", "actor_id": "human:reviewer", "idempotency_key": "attention", "attention_state": "needs_human_review",
+		"workspace_id": testWorkspaceID, "target_kind": "unsupported", "target_id": "target-1", "actor_id": "human:reviewer", "idempotency_key": "attention", "attention_state": "needs_human_review",
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -238,6 +534,9 @@ func TestRequestAttentionSupportsObjectiveScopedQuestion(t *testing.T) {
 	ctx, session := newSession(t)
 	call := func(name string, arguments map[string]any) map[string]any {
 		t.Helper()
+		if _, ok := arguments["workspace_id"]; !ok {
+			arguments["workspace_id"] = testWorkspaceID
+		}
 		result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: name, Arguments: arguments})
 		if err != nil {
 			t.Fatal(err)
@@ -263,7 +562,7 @@ func TestRequestAttentionSupportsObjectiveScopedQuestion(t *testing.T) {
 func TestRuntimeValidationRejectsUnknownAuthorizationSubjectField(t *testing.T) {
 	ctx, session := newSession(t)
 	result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: "propose_external_action", Arguments: map[string]any{
-		"work_item_id": "missing", "actor_id": "agent:writer", "expected_version": 1, "idempotency_key": "action",
+		"workspace_id": testWorkspaceID, "work_item_id": "missing", "actor_id": "agent:writer", "expected_version": 1, "idempotency_key": "action",
 		"title": "Action", "authorization_subject": map[string]any{"action_type": "tool.install", "target": map[string]any{"package": "tool", "unexpected": true}, "arguments": []any{}, "scope": map[string]any{}, "permissions": []any{}, "credential_requirements": []any{}, "constraints": map[string]any{}},
 	}})
 	if err != nil {
@@ -277,7 +576,7 @@ func TestRuntimeValidationRejectsUnknownAuthorizationSubjectField(t *testing.T) 
 func TestRuntimeValidationRejectsUnknownFlattenedActionArgumentField(t *testing.T) {
 	ctx, session := newSession(t)
 	result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: "propose_plan", Arguments: map[string]any{
-		"objective_id": "missing", "actor_id": "agent:writer", "idempotency_key": "plan", "title": "Plan", "items": []any{map[string]any{
+		"workspace_id": testWorkspaceID, "objective_id": "missing", "actor_id": "agent:writer", "idempotency_key": "plan", "title": "Plan", "items": []any{map[string]any{
 			"client_ref": "one", "key": "TH-1", "title": "One", "kind": "research", "external_actions": []any{map[string]any{
 				"title": "External work", "action_type": "tool.install", "target": map[string]any{}, "arguments": []any{map[string]any{"unexpected": true}}, "scope": map[string]any{}, "permissions": []any{}, "credential_requirements": []any{}, "constraints": map[string]any{},
 			}},
@@ -291,19 +590,27 @@ func TestRuntimeValidationRejectsUnknownFlattenedActionArgumentField(t *testing.
 	}
 }
 
+// testWorkspaceID is the stable workspace_id newSession registers for every test in this
+// package. Tests inject it into tool arguments rather than relying on any default, matching
+// the accepted decision that every workspace-scoped tool call requires workspace_id
+// explicitly.
+const testWorkspaceID = "test-workspace"
+
 func newSession(t *testing.T) (context.Context, *protocol.ClientSession) {
 	t.Helper()
 	ctx := context.Background()
-	database, err := throughlinesqlite.Open(ctx, filepath.Join(t.TempDir(), "throughline.db"))
+	root := t.TempDir()
+	workspace, _, err := config.Initialize(root, "", testWorkspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = database.Close() })
-	if err := database.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
+	fakeRegistry := newTestRegistry()
+	fakeRegistry.register(t, workspace)
+	workspaceRouter := router.New(fakeRegistry, router.NewProviderManager(router.SQLiteProvider{}), app.UUIDv7Generator{}, app.SystemClock{}, 0)
+	t.Cleanup(func() { _ = workspaceRouter.Close() })
+
 	serverTransport, clientTransport := protocol.NewInMemoryTransports()
-	server := NewServer(app.NewService(database.Store(), app.UUIDv7Generator{}, app.SystemClock{}))
+	server := NewServer(workspaceRouter)
 	if _, err := server.Connect(ctx, serverTransport, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -316,10 +623,43 @@ func newSession(t *testing.T) (context.Context, *protocol.ClientSession) {
 	return ctx, session
 }
 
+// testRegistry is a minimal in-memory router.Registry so mcp package tests do not need a
+// real SQLite-backed registry.Registry file.
+type testRegistry struct {
+	targets map[string]registry.WorkspaceTarget
+}
+
+func newTestRegistry() *testRegistry {
+	return &testRegistry{targets: map[string]registry.WorkspaceTarget{}}
+}
+
+func (r *testRegistry) register(t *testing.T, workspace config.Workspace) {
+	t.Helper()
+	r.targets[workspace.Config.WorkspaceID] = registry.WorkspaceTarget{
+		WorkspaceID:     workspace.Config.WorkspaceID,
+		ProviderKind:    registry.ProviderSQLite,
+		ProviderLocator: workspace.Config.WorkspaceID,
+		CanonicalRoot:   workspace.Root,
+		Generation:      1,
+		LifecycleState:  registry.LifecycleActive,
+	}
+}
+
+func (r *testRegistry) Lookup(_ context.Context, workspaceID string) (registry.WorkspaceTarget, error) {
+	target, ok := r.targets[workspaceID]
+	if !ok {
+		return registry.WorkspaceTarget{}, registry.ErrWorkspaceNotFound
+	}
+	return target, nil
+}
+
 func TestOmittedMutationsReplayAndRejectChangedRequests(t *testing.T) {
 	ctx, session := newSession(t)
 	call := func(name string, arguments map[string]any) map[string]any {
 		t.Helper()
+		if _, ok := arguments["workspace_id"]; !ok {
+			arguments["workspace_id"] = testWorkspaceID
+		}
 		result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: name, Arguments: arguments})
 		if err != nil {
 			t.Fatal(err)
@@ -428,22 +768,29 @@ func TestOmittedMutationsReplayAndRejectChangedRequests(t *testing.T) {
 	run(replayCase{"revise_external_action", map[string]any{"action_id": action["id"], "actor_id": "agent:writer", "idempotency_key": "matrix-revise-action", "expected_action_version": patchedAction["version"], "expected_work_item_version": version(dependent["id"]), "authorization_subject": map[string]any{"action_type": "archive.request", "target": map[string]any{"collection": "matrix-revised"}, "arguments": []any{}, "scope": map[string]any{"project": "matrix"}, "permissions": []any{"network.read"}, "credential_requirements": []any{}, "constraints": map[string]any{}}}, func(arguments map[string]any) { arguments["authorization_subject"] = actionSubject }})
 }
 
-func TestStdioTwoClientNonCodeWorkflowSmoke(t *testing.T) {
+// TestHTTPTwoClientNonCodeWorkflowSmoke exercises the full multi-tool coordination workflow
+// over Streamable HTTP with two independent client sessions against one shared daemon
+// process (here, one httptest server sharing one Router), proving concurrent sessions are
+// routed independently rather than through connection-bound workspace state.
+func TestHTTPTwoClientNonCodeWorkflowSmoke(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	binary := filepath.Join(t.TempDir(), "throughline")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/throughline")
-	build.Dir = filepath.Join("..", "..")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build server: %v\n%s", err, output)
+	workspace, _, err := config.Initialize(root, "", "smoke-workspace")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if output, err := exec.Command(binary, "init", root).CombinedOutput(); err != nil {
-		t.Fatalf("init workspace: %v\n%s", err, output)
-	}
+	fakeRegistry := newTestRegistry()
+	fakeRegistry.register(t, workspace)
+	workspaceRouter := router.New(fakeRegistry, router.NewProviderManager(router.SQLiteProvider{}), app.UUIDv7Generator{}, app.SystemClock{}, 0)
+	t.Cleanup(func() { _ = workspaceRouter.Close() })
+
+	httpServer := httptest.NewServer(Handler(workspaceRouter))
+	t.Cleanup(httpServer.Close)
+
 	open := func(name string) *protocol.ClientSession {
 		t.Helper()
 		client := protocol.NewClient(&protocol.Implementation{Name: name, Version: "v1"}, nil)
-		session, err := client.Connect(ctx, &protocol.CommandTransport{Command: exec.Command(binary, "mcp", root)}, nil)
+		session, err := client.Connect(ctx, &protocol.StreamableClientTransport{Endpoint: httpServer.URL + "/mcp"}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -461,6 +808,9 @@ func TestStdioTwoClientNonCodeWorkflowSmoke(t *testing.T) {
 	mutation := map[string]bool{"register_actor": true, "create_objective": true, "patch_objective": true, "propose_plan": true, "review_plan": true, "transition_objective": true, "transition_item": true, "claim_item": true, "append_progress": true, "create_output_revision": true, "record_validation": true, "attach_artifact": true, "propose_external_action": true, "request_action_approval": true, "resolve_action_approval": true, "record_external_action_execution": true}
 	call := func(session *protocol.ClientSession, name string, arguments map[string]any) (map[string]any, bool) {
 		t.Helper()
+		if _, ok := arguments["workspace_id"]; !ok {
+			arguments["workspace_id"] = workspace.Config.WorkspaceID
+		}
 		response, err := session.CallTool(ctx, &protocol.CallToolParams{Name: name, Arguments: arguments})
 		if err != nil {
 			t.Fatal(err)

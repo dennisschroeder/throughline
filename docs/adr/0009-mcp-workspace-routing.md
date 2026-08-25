@@ -1,7 +1,16 @@
 # ADR 0009: Explicit MCP workspace routing
 
-- Status: Proposed
+- Status: Superseded by [ADR 0016](0016-workspace-identity-and-registry.md) and [ADR 0017](0017-request-scoped-streamable-http-mcp.md)
 - Date: 2026-08-21
+
+> **2026-08-25:** `OBJ-WORKSPACE-ROUTING` replaced the single-configured-workspace allowlist
+> described below with a per-user registry mapping a logical `workspace_id` (not a
+> filesystem path) to a provider-neutral target, resolved fresh on every request by a
+> `WorkspaceRouter`. `workspace_id` is required on every call — there is no default,
+> single-workspace omission form. See ADR 0016 and ADR 0017; the full accepted specification
+> is in [docs/product/workspace-routing-spec.md](../product/workspace-routing-spec.md). The
+> content below is preserved as the historical record of the milestone-4 decision it
+> documents.
 
 ## Context
 

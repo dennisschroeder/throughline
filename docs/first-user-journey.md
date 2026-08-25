@@ -1,5 +1,13 @@
 # First user journey: v0.1.0
 
+> **2026-08-25 note:** this journey was run against the `v0.1.0` stdio, single-workspace
+> transport, since superseded by the global Streamable HTTP daemon described in
+> [docs/product/workspace-routing-spec.md](product/workspace-routing-spec.md) and
+> [docs/install.md](install.md). It remains an accurate historical record of that release's
+> install/verify/download flow (steps 1–5), which is unchanged; its MCP configuration and
+> multi-session steps describe the retired `throughline mcp <workspace>` stdio form and should be
+> read against the current `throughline setup`/`daemon` flow instead.
+
 Evidence that a target user without a source checkout or Go toolchain can discover, download,
 verify, install, configure, and run Throughline `v0.1.0`, then complete the bounded
 researcher/reviewer scenario from Product Decision 0001, entirely from the packaged binary

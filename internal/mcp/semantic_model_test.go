@@ -69,7 +69,7 @@ func TestSemanticModelInitializationAndReadContract(t *testing.T) {
 		t.Fatalf("default manifest payload = %#v", payload)
 	}
 
-	changes, err := session.CallTool(ctx, &protocol.CallToolParams{Name: "get_changes", Arguments: map[string]any{"since": "0"}})
+	changes, err := session.CallTool(ctx, &protocol.CallToolParams{Name: "get_changes", Arguments: map[string]any{"workspace_id": testWorkspaceID, "since": "0"}})
 	if err != nil {
 		t.Fatal(err)
 	}

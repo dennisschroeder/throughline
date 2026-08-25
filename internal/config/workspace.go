@@ -2,6 +2,8 @@ package config
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -14,13 +16,34 @@ const (
 	DirectoryName       = ".throughline"
 	ConfigFileName      = "config.toml"
 	DefaultDatabasePath = "throughline.db"
-	CurrentSchema       = 1
+	CurrentSchema       = 2
+
+	// LegacySchema is the pre-routing single-workspace schema. Its config.toml has no
+	// workspace_id; Load rejects it with ErrLegacyWorkspace instead of silently treating
+	// it as routable. There is no automatic migration: see the clean-cut cutover
+	// procedure in docs/product/workspace-routing-spec.md.
+	LegacySchema = 1
 )
+
+// ErrLegacyWorkspace is returned by Load when a workspace's config.toml predates workspace
+// identity (schema_version 1, no workspace_id). Callers should surface remediation
+// pointing at export/archive/setup/init, never fall back to routing it.
+var ErrLegacyWorkspace = errors.New("legacy_workspace_unsupported")
 
 type Config struct {
 	SchemaVersion int    `toml:"schema_version"`
+	WorkspaceID   string `toml:"workspace_id"`
 	DatabasePath  string `toml:"database_path"`
 	ItemKeyPrefix string `toml:"item_key_prefix"`
+}
+
+// Fingerprint is a stable content hash of the fields that identify this workspace's
+// configuration. The registry stores it at registration time and compares it against a
+// freshly loaded value to detect drift between the registry and the workspace's own
+// config.toml, without ever storing the config file's path or contents itself.
+func (c Config) Fingerprint() string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d|%s|%s|%s", c.SchemaVersion, c.WorkspaceID, c.DatabasePath, c.ItemKeyPrefix)))
+	return hex.EncodeToString(sum[:])
 }
 
 type Workspace struct {
@@ -31,7 +54,13 @@ type Workspace struct {
 	Config       Config
 }
 
-func Initialize(root, databasePath string) (Workspace, bool, error) {
+// Initialize idempotently creates or reopens the workspace at root. On first creation it
+// writes workspaceID into config.toml via an atomic fsync-and-rename so a crash mid-write
+// never leaves a partially written config; workspaceID is ignored when the workspace
+// already exists. The caller (throughline init) is responsible for registering the
+// resulting identity in the global registry before or after this call, per its own
+// pending-to-active recovery contract.
+func Initialize(root, databasePath, workspaceID string) (Workspace, bool, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return Workspace{}, false, fmt.Errorf("resolve workspace root: %w", err)
@@ -63,11 +92,15 @@ func Initialize(root, databasePath string) (Workspace, bool, error) {
 		return Workspace{}, false, fmt.Errorf("inspect workspace config: %w", err)
 	}
 
+	if workspaceID == "" {
+		return Workspace{}, false, errors.New("workspace_id is required to create a new workspace")
+	}
 	if databasePath == "" {
 		databasePath = DefaultDatabasePath
 	}
 	workspaceConfig := Config{
 		SchemaVersion: CurrentSchema,
+		WorkspaceID:   workspaceID,
 		DatabasePath:  databasePath,
 		ItemKeyPrefix: "TH",
 	}
@@ -75,16 +108,8 @@ func Initialize(root, databasePath string) (Workspace, bool, error) {
 	if err != nil {
 		return Workspace{}, false, fmt.Errorf("encode workspace config: %w", err)
 	}
-	file, err := os.OpenFile(configPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return Workspace{}, false, fmt.Errorf("create workspace config: %w", err)
-	}
-	if _, err := file.Write(encoded); err != nil {
-		_ = file.Close()
-		return Workspace{}, false, fmt.Errorf("write workspace config: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return Workspace{}, false, fmt.Errorf("close workspace config: %w", err)
+	if err := writeFileAtomically(configPath, encoded, 0o644, false); err != nil {
+		return Workspace{}, false, err
 	}
 
 	workspace, err := Load(root)
@@ -92,6 +117,82 @@ func Initialize(root, databasePath string) (Workspace, bool, error) {
 		return Workspace{}, false, err
 	}
 	return workspace, true, nil
+}
+
+// Fork rewrites an already-initialized workspace's config.toml with a brand-new
+// workspace_id, keeping its existing database_path and item_key_prefix. It is the only
+// sanctioned way an independent copy of a workspace directory diverges from the workspace
+// it was copied from; a plain copy otherwise keeps the original identity. Fork returns the
+// rewritten workspace along with the workspace_id it forked from, so the caller can record
+// fork provenance in the registry.
+func Fork(root, newWorkspaceID string) (Workspace, string, error) {
+	if newWorkspaceID == "" {
+		return Workspace{}, "", errors.New("workspace_id is required to fork a workspace")
+	}
+	existing, err := Load(root)
+	if err != nil {
+		return Workspace{}, "", err
+	}
+	sourceWorkspaceID := existing.Config.WorkspaceID
+	forked := Config{
+		SchemaVersion: CurrentSchema,
+		WorkspaceID:   newWorkspaceID,
+		DatabasePath:  existing.Config.DatabasePath,
+		ItemKeyPrefix: existing.Config.ItemKeyPrefix,
+	}
+	encoded, err := toml.Marshal(forked)
+	if err != nil {
+		return Workspace{}, "", fmt.Errorf("encode forked workspace config: %w", err)
+	}
+	if err := writeFileAtomically(existing.ConfigPath, encoded, 0o644, true); err != nil {
+		return Workspace{}, "", err
+	}
+	workspace, err := Load(root)
+	if err != nil {
+		return Workspace{}, "", err
+	}
+	return workspace, sourceWorkspaceID, nil
+}
+
+// writeFileAtomically writes content to a temporary file in the same directory as path,
+// fsyncs it, and renames it into place, so config.toml never exists partially written.
+// overwrite must be true for Fork's intentional replacement of an existing config file;
+// fresh Initialize calls pass false so a concurrent creator is never silently clobbered.
+func writeFileAtomically(path string, content []byte, mode os.FileMode, overwrite bool) error {
+	directory := filepath.Dir(path)
+	temporary, err := os.CreateTemp(directory, ".config-*.toml.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary workspace config: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+
+	if err := temporary.Chmod(mode); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("set temporary workspace config permissions: %w", err)
+	}
+	if _, err := temporary.Write(content); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("write temporary workspace config: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("sync temporary workspace config: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary workspace config: %w", err)
+	}
+	if !overwrite {
+		if _, err := os.Stat(path); err == nil {
+			return fmt.Errorf("workspace config already exists at %s", path)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect workspace config: %w", err)
+		}
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("rename workspace config into place: %w", err)
+	}
+	return nil
 }
 
 func Find(start string) (Workspace, error) {
@@ -132,8 +233,14 @@ func Load(root string) (Workspace, error) {
 	if err := decoder.Decode(&workspaceConfig); err != nil {
 		return Workspace{}, fmt.Errorf("decode workspace config: %w", err)
 	}
+	if workspaceConfig.SchemaVersion == LegacySchema {
+		return Workspace{}, fmt.Errorf("%w: %s predates workspace identity; export, archive, run throughline setup, and reinitialize with throughline init", ErrLegacyWorkspace, configPath)
+	}
 	if workspaceConfig.SchemaVersion != CurrentSchema {
 		return Workspace{}, fmt.Errorf("unsupported workspace config schema %d", workspaceConfig.SchemaVersion)
+	}
+	if workspaceConfig.WorkspaceID == "" {
+		return Workspace{}, errors.New("workspace_id is required")
 	}
 	if workspaceConfig.DatabasePath == "" {
 		return Workspace{}, errors.New("workspace database_path is required")
