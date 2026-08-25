@@ -39,17 +39,30 @@ jobs:
 
       - name: Smoke test packaged semantic model
         run: |
+          set -e
           archive_path="$(find dist -type f -name 'throughline_*_linux_amd64.tar.gz' | head -n 1)"
           test -n "$archive_path"
           smoke_dir="$(mktemp -d)"
           tar -xzf "$archive_path" -C "$smoke_dir"
           binary_path="$(find "$smoke_dir" -type f -name throughline -perm -u+x | head -n 1)"
           test -n "$binary_path"
-          workspace_dir="$(mktemp -d)"
-          "$binary_path" init "$workspace_dir"
-          { printf '%s\n%s\n%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"release-smoke","version":"v1"}}}' '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_semantic_model","arguments":{}}}'; sleep 1; } \
-            | "$binary_path" mcp "$workspace_dir" 2>/dev/null \
-            | grep -q '\\"model_version\\"'
+
+          export XDG_STATE_HOME="$(mktemp -d)"
+          mkdir -p "$XDG_STATE_HOME/throughline"
+          addr="127.0.0.1:43121"
+          "$binary_path" mcp --addr "$addr" >"$smoke_dir/daemon.log" 2>&1 &
+          daemon_pid=$!
+          trap 'kill "$daemon_pid" 2>/dev/null || true' EXIT
+
+          token_path="$XDG_STATE_HOME/throughline/credentials"
+          for _ in $(seq 1 50); do
+            [ -s "$token_path" ] && curl -fs "http://$addr/health" -H "Authorization: Bearer $(cat "$token_path")" >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          test -s "$token_path"
+
+          THROUGHLINE_SMOKE_ENDPOINT="http://$addr/mcp" THROUGHLINE_SMOKE_TOKEN="$(cat "$token_path")" \
+            go run ./cmd/releasesmoke
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
