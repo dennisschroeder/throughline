@@ -1,4 +1,7 @@
-// Package mcp exposes Throughline's application services over MCP stdio.
+// Package mcp exposes Throughline's application services over Streamable HTTP. Every
+// workspace-scoped tool call is independently routed: the adapter resolves workspace_id to
+// an application Service through a WorkspaceRouter on each request, never from connection,
+// session, CWD, environment, or server-instruction state.
 package mcp
 
 import (
@@ -10,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -19,22 +23,30 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/dennisschroeder/throughline/internal/app"
+	"github.com/dennisschroeder/throughline/internal/daemonhttp"
 	"github.com/dennisschroeder/throughline/internal/domain/authority"
 	"github.com/dennisschroeder/throughline/internal/domain/output"
 	"github.com/dennisschroeder/throughline/internal/domain/work"
 	"github.com/dennisschroeder/throughline/internal/ports"
+	"github.com/dennisschroeder/throughline/internal/registry"
+	throughlinerouter "github.com/dennisschroeder/throughline/internal/router"
 	"github.com/dennisschroeder/throughline/internal/semanticmodel"
 )
 
-const workspaceID = "local"
-
-// Run serves one already-resolved workspace over MCP's stdio transport.
-func Run(ctx context.Context, service *app.Service) error {
-	return NewServer(service).Run(ctx, &mcp.StdioTransport{})
+// Handler returns the http.Handler that serves every MCP request over Streamable HTTP,
+// resolving workspace_id independently per tool call through router. It is exactly one
+// mcp.Server shared by every request and connection: the SDK's own documentation notes it
+// is fine for getServer to return the same server repeatedly, since no per-connection
+// workspace state exists to isolate.
+func Handler(router *throughlinerouter.Router) http.Handler {
+	server := NewServer(router)
+	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
 }
 
-// NewServer constructs the single-workspace MCP adapter for embedding and tests.
-func NewServer(service *app.Service) *mcp.Server {
+// NewServer constructs the MCP adapter for embedding and tests. It never holds a
+// pre-resolved workspace; every workspace-scoped tool call resolves workspace_id through
+// router for that request alone.
+func NewServer(router *throughlinerouter.Router) *mcp.Server {
 	instructions := serverInstructions
 	if model, err := semanticmodel.Load(); err == nil {
 		if builtInstructions, instructionErr := semanticInstructions(model); instructionErr == nil {
@@ -47,7 +59,7 @@ func NewServer(service *app.Service) *mcp.Server {
 		Version:     "v1",
 		Description: "Authoritative local coordination state. Start with board_overview, then list_ready_items and get_item before claiming work.",
 	}, &mcp.ServerOptions{Instructions: instructions})
-	adapter := &adapter{service: service}
+	adapter := &adapter{router: router}
 	adapter.addTools(server)
 	return server
 }
@@ -64,7 +76,7 @@ func semanticInstructions(model *semanticmodel.Model) (string, error) {
 	return instructions, nil
 }
 
-type adapter struct{ service *app.Service }
+type adapter struct{ router *throughlinerouter.Router }
 
 func (a *adapter) addTools(server *mcp.Server) {
 	a.add(server, "board_overview", "Compact orientation summary.", true, schemaFor[boardOverviewInput](), a.boardOverview)
@@ -73,7 +85,7 @@ func (a *adapter) addTools(server *mcp.Server) {
 	a.add(server, "get_item", "Retrieve structured work-item context.", true, schemaFor[getItemInput]("id"), a.getItem)
 	a.add(server, "get_objective_context", "Retrieve deterministic, bounded objective continuation context.", true, schemaFor[objectiveContextInput]("objective_id"), a.getObjectiveContext)
 	a.add(server, "get_changes", "Read cursor-based activity deltas.", true, schemaFor[changesInput](), a.getChanges)
-	a.add(server, "get_semantic_model", "Read the embedded Throughline semantic model.", true, semanticModelSchema(), a.getSemanticModel)
+	a.addWorkspaceless(server, "get_semantic_model", "Read the embedded Throughline semantic model. Domain-neutral; not workspace-scoped.", true, semanticModelSchema(), a.getSemanticModel)
 	a.add(server, "list_output_profiles", "List governed persisted output profiles.", true, schemaFor[workspaceInput](), a.listProfiles)
 	a.add(server, "get_output_profile", "Read one exact governed output profile version.", true, schemaFor[outputProfileInput]("profile_name", "profile_version"), a.getProfile)
 	a.add(server, "list_outputs", "Discover accepted reusable outputs.", true, schemaFor[outputsInput](), a.listOutputs)
@@ -85,6 +97,7 @@ func (a *adapter) addTools(server *mcp.Server) {
 	a.add(server, "request_attention", "Request an orthogonal human attention state for a governed target.", false, requestAttentionSchema(), a.requestAttention)
 	a.add(server, "request_approval", "Request an approval for a governed target.", false, requestApprovalSchema(), a.requestApproval)
 	a.add(server, "resolve_approval", "Resolve or revoke a requested approval.", false, resolveApprovalSchema(), a.resolveApproval)
+	a.add(server, "approve_work_item_execution", "Grant a specific actor approval to claim and execute a work item under an approval-required execution policy.", false, schemaFor[approveWorkItemExecutionInput]("work_item_id", "actor_id", "approved_for_actor_id", "expected_version", "idempotency_key", "request", "rationale"), a.approveWorkItemExecution)
 	a.add(server, "block_item", "Create a persisted manual blocker.", false, schemaFor[blockItemInput]("work_item_id", "actor_id", "idempotency_key", "expected_version", "reason"), a.blockItem)
 	a.add(server, "unblock_item", "Resolve a persisted manual blocker.", false, schemaFor[unblockItemInput]("blocker_id", "actor_id", "idempotency_key", "expected_version", "resolution"), a.unblockItem)
 	a.add(server, "transition_objective", "Move an objective through its governed phase lifecycle.", false, schemaFor[transitionObjectiveInput]("objective_id", "actor_id", "target_phase", "expected_version", "idempotency_key"), a.transitionObjective)
@@ -117,35 +130,74 @@ func (a *adapter) addTools(server *mcp.Server) {
 	a.add(server, "record_external_action_execution", "Record an observed start, success, or failure; no effect is executed.", false, executionSchema(), a.recordExecution)
 }
 
-func (a *adapter) add(server *mcp.Server, name, description string, readOnly bool, inputSchema map[string]any, handler func(context.Context, json.RawMessage) (any, error)) {
+// add registers one workspace-scoped tool. The wrapper is the single central place that
+// validates required workspace_id and resolves the application Service through the
+// WorkspaceRouter for this request alone, before the handler runs; no handler, connection,
+// context default, or client-chosen path selects a workspace.
+func (a *adapter) add(server *mcp.Server, name, description string, readOnly bool, inputSchema map[string]any, handler func(context.Context, *app.Service, json.RawMessage) (any, error)) {
 	server.AddTool(&mcp.Tool{Name: name, Description: description, InputSchema: inputSchema, OutputSchema: outputSchema(name), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly}}, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		if err := validateToolInput(request.Params.Arguments, inputSchema); err != nil {
-			return toolErrorResult(a.errorPayload(ctx, err, request.Params.Arguments)), nil
-		}
-		result, err := handler(ctx, request.Params.Arguments)
+		// workspace_id is checked before general schema validation so a missing or empty
+		// value always reports the specific workspace_required code rather than the
+		// generic validation_failed a bare required-field check would produce.
+		workspaceIDValue, err := workspaceIDFromRaw(request.Params.Arguments)
 		if err != nil {
-			return toolErrorResult(a.errorPayload(ctx, err, request.Params.Arguments)), nil
+			return toolErrorResult(a.errorPayload(ctx, nil, err, request.Params.Arguments)), nil
+		}
+		if strings.TrimSpace(workspaceIDValue) == "" {
+			return toolErrorResult(routingErrorPayload(ctx, throughlinerouter.ErrWorkspaceRequired)), nil
+		}
+		if err := validateToolInput(request.Params.Arguments, inputSchema); err != nil {
+			return toolErrorResult(a.errorPayload(ctx, nil, err, request.Params.Arguments)), nil
+		}
+		service, err := a.router.Service(ctx, workspaceIDValue)
+		if err != nil {
+			return toolErrorResult(routingErrorPayload(ctx, err)), nil
+		}
+		result, err := handler(ctx, service, request.Params.Arguments)
+		if err != nil {
+			return toolErrorResult(a.errorPayload(ctx, service, err, request.Params.Arguments)), nil
 		}
 		cursor := int64(0)
 		if !readOnly {
-			cursor, err = a.idempotencyCursor(ctx, request.Params.Arguments)
+			cursor, err = a.idempotencyCursor(ctx, service, request.Params.Arguments)
 		} else {
-			cursor, err = a.service.LatestActivitySequence(ctx)
+			cursor, err = service.LatestActivitySequence(ctx)
 		}
 		if err != nil {
-			return toolErrorResult(a.errorPayload(ctx, err, request.Params.Arguments)), nil
+			return toolErrorResult(a.errorPayload(ctx, service, err, request.Params.Arguments)), nil
 		}
 		normalized := snakeCaseValue(result)
-		output := map[string]any{"workspace": map[string]any{"id": workspaceID, "change_cursor": fmt.Sprint(cursor)}, "result": normalized}
+		output := map[string]any{"workspace": map[string]any{"id": workspaceIDValue, "change_cursor": fmt.Sprint(cursor)}, "result": normalized}
 		schema := outputSchema(name)
 		if err := validateJSONSchema(output, schema, schema, "output"); err != nil {
-			return toolErrorResult(map[string]any{"code": "output_validation_failed", "message": err.Error(), "requirements": []any{}}), nil
+			return toolErrorResult(map[string]any{"code": "output_validation_failed", "message": err.Error(), "requirements": []any{}, "retryable": false, "request_id": daemonhttp.RequestIDFromContext(ctx)}), nil
 		}
-		return toolResult(normalized, cursor), nil
+		return toolResult(normalized, cursor, workspaceIDValue), nil
 	})
 }
 
-func (a *adapter) idempotencyCursor(ctx context.Context, raw json.RawMessage) (int64, error) {
+// addWorkspaceless registers a domain-neutral tool that touches no workspace persistence
+// (only get_semantic_model qualifies) and therefore never resolves a Service.
+func (a *adapter) addWorkspaceless(server *mcp.Server, name, description string, readOnly bool, inputSchema map[string]any, handler func(context.Context, *app.Service, json.RawMessage) (any, error)) {
+	server.AddTool(&mcp.Tool{Name: name, Description: description, InputSchema: inputSchema, OutputSchema: outputSchema(name), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly}}, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if err := validateToolInput(request.Params.Arguments, inputSchema); err != nil {
+			return toolErrorResult(a.errorPayload(ctx, nil, err, request.Params.Arguments)), nil
+		}
+		result, err := handler(ctx, nil, request.Params.Arguments)
+		if err != nil {
+			return toolErrorResult(a.errorPayload(ctx, nil, err, request.Params.Arguments)), nil
+		}
+		normalized := snakeCaseValue(result)
+		output := map[string]any{"workspace": map[string]any{"id": "", "change_cursor": "0"}, "result": normalized}
+		schema := outputSchema(name)
+		if err := validateJSONSchema(output, schema, schema, "output"); err != nil {
+			return toolErrorResult(map[string]any{"code": "output_validation_failed", "message": err.Error(), "requirements": []any{}, "retryable": false, "request_id": daemonhttp.RequestIDFromContext(ctx)}), nil
+		}
+		return toolResult(normalized, 0, ""), nil
+	})
+}
+
+func (a *adapter) idempotencyCursor(ctx context.Context, service *app.Service, raw json.RawMessage) (int64, error) {
 	var input struct {
 		ActorID        string `json:"actor_id"`
 		IdempotencyKey string `json:"idempotency_key"`
@@ -153,7 +205,59 @@ func (a *adapter) idempotencyCursor(ctx context.Context, raw json.RawMessage) (i
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return 0, err
 	}
-	return a.service.IdempotencyCursor(ctx, input.ActorID, input.IdempotencyKey)
+	return service.IdempotencyCursor(ctx, input.ActorID, input.IdempotencyKey)
+}
+
+// workspaceIDFromRaw reads workspace_id directly from raw tool arguments, independent of
+// each tool's specific typed input struct, so resolution happens before any handler-level
+// decoding.
+func workspaceIDFromRaw(raw json.RawMessage) (string, error) {
+	var probe struct {
+		WorkspaceID string `json:"workspace_id"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return "", err
+	}
+	return probe.WorkspaceID, nil
+}
+
+// routableCodes lists the stable routing codes in the order routingErrorPayload checks
+// them, alongside whether a caller could plausibly get a different answer by retrying
+// without changing anything (a transient provider/registry condition) versus not (the
+// identifier or its state is simply wrong).
+var routableCodes = []struct {
+	err       error
+	code      string
+	retryable bool
+}{
+	{throughlinerouter.ErrWorkspaceRequired, "workspace_required", false},
+	{throughlinerouter.ErrWorkspaceInvalid, "workspace_invalid", false},
+	{registry.ErrWorkspaceNotFound, "workspace_not_found", false},
+	{registry.ErrWorkspacePending, "workspace_pending", true},
+	{registry.ErrWorkspaceUnavailable, "workspace_unavailable", true},
+	{registry.ErrWorkspaceRegistryConflict, "workspace_registry_conflict", false},
+	{throughlinerouter.ErrProviderUnsupported, "provider_unsupported", false},
+	{throughlinerouter.ErrProviderUnavailable, "provider_unavailable", true},
+	{throughlinerouter.ErrWorkspaceBusy, "workspace_busy", true},
+}
+
+// routingErrorPayload maps a WorkspaceRouter/registry resolution failure to the stable
+// error envelope: a stable code, a safe message identical to the code (never a path,
+// locator, or credential), whether retrying without changes could succeed, and the
+// request's correlation id for cross-referencing daemon logs. No routing error falls back
+// to another workspace, provider, or transport.
+func routingErrorPayload(ctx context.Context, err error) map[string]any {
+	code, retryable := "workspace_invalid", false
+	for _, candidate := range routableCodes {
+		if errors.Is(err, candidate.err) {
+			code, retryable = candidate.code, candidate.retryable
+			break
+		}
+	}
+	return map[string]any{
+		"code": code, "message": code, "requirements": []any{},
+		"retryable": retryable, "request_id": daemonhttp.RequestIDFromContext(ctx),
+	}
 }
 
 func validateToolInput(raw json.RawMessage, schema map[string]any) error {
@@ -231,8 +335,8 @@ func validateJSONSchema(value any, schema, root map[string]any, path string) err
 			return fmt.Errorf("%s must be one of the documented values", path)
 		}
 	}
-	if kind, _ := schema["type"].(string); kind != "" && !matchesJSONType(value, kind) {
-		return fmt.Errorf("%s must be a %s", path, kind)
+	if err := validateJSONType(value, schema["type"], path); err != nil {
+		return err
 	}
 	object, isObject := value.(map[string]any)
 	if isObject {
@@ -290,6 +394,76 @@ func schemaRequired(schema map[string]any) []string {
 	return result
 }
 
+// validateJSONType checks value against a JSON Schema "type" keyword, which may be a
+// single type string or, for a nullable field such as a Go slice inferred by
+// jsonschema.For, a union list like ["null","array"]. A schema without a "type" (nil, or
+// any other shape) imposes no type constraint.
+func validateJSONType(value any, rawType any, path string) error {
+	switch kind := rawType.(type) {
+	case string:
+		if kind != "" && !matchesJSONType(value, kind) {
+			return fmt.Errorf("%s must be a %s", path, kind)
+		}
+	case []any:
+		for _, candidate := range kind {
+			if name, ok := candidate.(string); ok && matchesJSONType(value, name) {
+				return nil
+			}
+		}
+		if len(kind) > 0 {
+			return fmt.Errorf("%s must match one of the documented types", path)
+		}
+	}
+	return nil
+}
+
+// dropNullableArrayUnion rewrites a jsonschema.For-inferred ["null","array"] type union
+// down to plain "array" wherever it appears, recursively. jsonschema.For emits that union
+// for any slice-typed field because a nil Go slice and an absent value are both valid, but
+// some MCP clients mis-encode a two-element type union when serializing an array argument.
+// Every affected field here treats "absent", "null", and "empty array" identically, so
+// collapsing the union to a single concrete type is lossless and improves client
+// compatibility without weakening validation.
+func dropNullableArrayUnion(schema map[string]any) map[string]any {
+	result := make(map[string]any, len(schema))
+	for key, value := range schema {
+		if key == "type" {
+			if union, ok := value.([]any); ok && len(union) == 2 {
+				hasNull, hasArray := false, false
+				for _, candidate := range union {
+					switch candidate {
+					case "null":
+						hasNull = true
+					case "array":
+						hasArray = true
+					}
+				}
+				if hasNull && hasArray {
+					result[key] = "array"
+					continue
+				}
+			}
+		}
+		switch typed := value.(type) {
+		case map[string]any:
+			result[key] = dropNullableArrayUnion(typed)
+		case []any:
+			values := make([]any, len(typed))
+			for index, candidate := range typed {
+				if nested, ok := candidate.(map[string]any); ok {
+					values[index] = dropNullableArrayUnion(nested)
+				} else {
+					values[index] = candidate
+				}
+			}
+			result[key] = values
+		default:
+			result[key] = value
+		}
+	}
+	return result
+}
+
 func matchesJSONType(value any, kind string) bool {
 	switch kind {
 	case "object":
@@ -326,12 +500,17 @@ func matchesJSONType(value any, kind string) bool {
 	}
 }
 
+// schemaFor derives a tool's input schema from T and marks required as required, always
+// including workspace_id first: every workspace-scoped tool's input type embeds
+// workspaceInput, and this is the single place that enforces workspace_id is never
+// optional. The one domain-neutral exception (get_semantic_model) uses its own schema
+// builder and addWorkspaceless instead of schemaFor.
 func schemaFor[T any](required ...string) map[string]any {
 	schema, err := jsonschema.For[T](nil)
 	if err != nil {
 		panic(fmt.Sprintf("derive MCP schema: %v", err))
 	}
-	schema.Required = required
+	schema.Required = append([]string{"workspace_id"}, required...)
 	encoded, err := json.Marshal(schema)
 	if err != nil {
 		panic(fmt.Sprintf("encode MCP schema: %v", err))
@@ -340,7 +519,7 @@ func schemaFor[T any](required ...string) map[string]any {
 	if err := json.Unmarshal(encoded, &result); err != nil {
 		panic(fmt.Sprintf("decode MCP schema: %v", err))
 	}
-	return strictGovernedSchemas(result)
+	return dropNullableArrayUnion(strictGovernedSchemas(result))
 }
 
 func outputSchema(name string) map[string]any {
@@ -386,6 +565,8 @@ func resultSchema(name string) map[string]any {
 		return oneOf(schemaForResult[work.Approval](), schemaForResult[app.ApprovalResolutionResult](), schemaForResult[authority.ActionApproval]())
 	case "resolve_action_approval":
 		return schemaForResult[app.ApprovalResolutionResult]()
+	case "approve_work_item_execution":
+		return schemaForResult[work.ExecutionApproval]()
 	case "block_item", "unblock_item":
 		return schemaForResult[work.ManualBlocker]()
 	case "propose_plan":
@@ -541,7 +722,7 @@ func governedSchema(name string) (map[string]any, bool) {
 	case "structure":
 		return object(map[string]any{"required": stringArray}), true
 	case "semantics":
-		return object(map[string]any{"claims_require_provenance": map[string]any{"type": "boolean"}, "claims_require_sources": map[string]any{"type": "boolean"}, "purpose": map[string]any{"type": "string"}}), true
+		return object(map[string]any{"claims_require_provenance": map[string]any{"type": "boolean"}, "claims_require_sources": map[string]any{"type": "boolean"}, "purpose": map[string]any{"type": "string"}, "capabilities_do_not_grant_authority": map[string]any{"type": "boolean"}}), true
 	case "validation":
 		return object(map[string]any{"required": map[string]any{"type": "array", "items": object(map[string]any{"kind": map[string]any{"type": "string"}, "criterion_ref": map[string]any{"type": "string"}, "rubric": map[string]any{"type": "string"}}, "kind")}}), true
 	case "contract":
@@ -724,7 +905,7 @@ func requiredFields(fields []string) []any {
 	return result
 }
 
-func toolResult(result any, cursor int64) *mcp.CallToolResult {
+func toolResult(result any, cursor int64, workspaceID string) *mcp.CallToolResult {
 	payload := map[string]any{"workspace": map[string]string{"id": workspaceID, "change_cursor": fmt.Sprint(cursor)}, "result": snakeCaseValue(result)}
 	encoded, _ := json.Marshal(payload)
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded)}}, StructuredContent: payload}
@@ -795,7 +976,21 @@ func snakeCase(value string) string {
 	return result.String()
 }
 
-func (a *adapter) errorPayload(ctx context.Context, err error, raw json.RawMessage) map[string]any {
+// errorPayload builds the stable error envelope for a domain (non-routing) failure, always
+// including this request's correlation id and whether retrying without changes could
+// plausibly succeed.
+func (a *adapter) errorPayload(ctx context.Context, service *app.Service, err error, raw json.RawMessage) map[string]any {
+	payload := a.buildErrorPayload(ctx, service, err, raw)
+	if _, ok := payload["request_id"]; !ok {
+		payload["request_id"] = daemonhttp.RequestIDFromContext(ctx)
+	}
+	if _, ok := payload["retryable"]; !ok {
+		payload["retryable"] = errors.Is(err, ports.ErrVersionConflict) || errors.Is(err, ports.ErrClaimConflict)
+	}
+	return payload
+}
+
+func (a *adapter) buildErrorPayload(ctx context.Context, service *app.Service, err error, raw json.RawMessage) map[string]any {
 	code := "validation_failed"
 	var invalidModel *semanticmodel.InvalidArtifactError
 	switch {
@@ -809,6 +1004,11 @@ func (a *adapter) errorPayload(ctx context.Context, err error, raw json.RawMessa
 		code = "claim_conflict"
 	case errors.Is(err, ports.ErrIdempotencyMismatch):
 		code = "idempotency_key_reused_with_different_request"
+	}
+	if service == nil {
+		// Failed before workspace resolution (schema validation or a malformed
+		// workspace_id): no Service exists yet to enrich the payload with current state.
+		return map[string]any{"code": code, "message": err.Error(), "requirements": []any{}}
 	}
 	var claim app.ClaimGateError
 	if errors.As(err, &claim) {
@@ -829,7 +1029,7 @@ func (a *adapter) errorPayload(ctx context.Context, err error, raw json.RawMessa
 			if id == "" {
 				id = input.WorkItemID
 			}
-			if current, getErr := a.service.GetWorkItem(ctx, id); getErr == nil {
+			if current, getErr := service.GetWorkItem(ctx, id); getErr == nil {
 				payload["current"] = map[string]any{"id": current.WorkItem.ID, "version": current.WorkItem.Version, "status": current.WorkItem.ExecutionStatus, "claims": current.Claims}
 			}
 		}
@@ -847,7 +1047,7 @@ func (a *adapter) errorPayload(ctx context.Context, err error, raw json.RawMessa
 			if id == "" {
 				id = input.WorkItemID
 			}
-			if current, getErr := a.service.GetWorkItem(ctx, id); getErr == nil {
+			if current, getErr := service.GetWorkItem(ctx, id); getErr == nil {
 				payload["current"] = map[string]any{"id": current.WorkItem.ID, "version": current.WorkItem.Version, "status": current.WorkItem.ExecutionStatus, "claims": current.Claims}
 			}
 		}
@@ -875,14 +1075,14 @@ func (a *adapter) errorPayload(ctx context.Context, err error, raw json.RawMessa
 			ApprovalID string `json:"approval_id"`
 		}
 		if json.Unmarshal(raw, &input) == nil && input.ActionID == "" && input.ApprovalID != "" {
-			if approval, getErr := a.service.GetActionApproval(ctx, input.ApprovalID); getErr == nil {
+			if approval, getErr := service.GetActionApproval(ctx, input.ApprovalID); getErr == nil {
 				input.ActionID = approval.ExternalActionID
 			}
 		}
 		if input.ActionID != "" {
-			if action, getErr := a.service.GetExternalAction(ctx, input.ActionID); getErr == nil {
+			if action, getErr := service.GetExternalAction(ctx, input.ActionID); getErr == nil {
 				current := map[string]any{"id": action.ID, "version": action.Version, "state": action.State, "current_revision": action.CurrentRevision}
-				if revision, revisionErr := a.service.GetCurrentExternalActionRevision(ctx, action.ID); revisionErr == nil {
+				if revision, revisionErr := service.GetCurrentExternalActionRevision(ctx, action.ID); revisionErr == nil {
 					current["authorization_subject_hash"] = revision.AuthorizationSubjectHash
 				}
 				payload["current"] = current
@@ -895,46 +1095,46 @@ func (a *adapter) errorPayload(ctx context.Context, err error, raw json.RawMessa
 			for _, field := range []string{"id", "work_item_id", "objective_id", "plan_id", "profile_id", "action_id", "output_revision_id", "execution_id", "approval_id"} {
 				var id string
 				if json.Unmarshal(input[field], &id) == nil && id != "" {
-					if current, getErr := a.service.GetWorkItem(ctx, id); getErr == nil {
+					if current, getErr := service.GetWorkItem(ctx, id); getErr == nil {
 						payload["current"] = map[string]any{"id": current.WorkItem.ID, "key": current.WorkItem.Key, "version": current.WorkItem.Version, "status": current.WorkItem.ExecutionStatus}
 						return payload
 					}
-					context, contextErr := a.service.GetObjectiveContext(ctx, id)
+					context, contextErr := service.GetObjectiveContext(ctx, id)
 					if contextErr == nil {
 						payload["current"] = map[string]any{"id": context.Objective.ID, "key": context.Objective.Key, "version": context.Objective.Version, "phase": context.Objective.Phase}
 						return payload
 					}
-					action, actionErr := a.service.GetExternalAction(ctx, id)
+					action, actionErr := service.GetExternalAction(ctx, id)
 					if actionErr == nil {
 						payload["current"] = map[string]any{"id": action.ID, "version": action.Version, "state": action.State, "current_revision": action.CurrentRevision}
 						return payload
 					}
-					plan, planErr := a.service.GetPlan(ctx, id)
+					plan, planErr := service.GetPlan(ctx, id)
 					if planErr == nil {
 						payload["current"] = map[string]any{"id": plan.ID, "version": plan.Version, "commitment_state": plan.CommitmentState, "revision": plan.Revision}
 						return payload
 					}
-					profile, profileErr := a.service.GetOutputProfileByID(ctx, id)
+					profile, profileErr := service.GetOutputProfileByID(ctx, id)
 					if profileErr == nil {
 						payload["current"] = map[string]any{"id": profile.ID, "name": profile.Name, "version": profile.Version, "state_version": profile.StateVersion, "lifecycle_state": profile.LifecycleState}
 						return payload
 					}
-					revision, revisionErr := a.service.GetOutputRevision(ctx, id)
+					revision, revisionErr := service.GetOutputRevision(ctx, id)
 					if revisionErr == nil {
 						payload["current"] = map[string]any{"id": revision.ID, "revision": revision.Revision, "acceptance_state": revision.AcceptanceState, "expected_output_id": revision.ExpectedOutputID}
 						return payload
 					}
-					execution, executionErr := a.service.GetExternalActionExecution(ctx, id)
+					execution, executionErr := service.GetExternalActionExecution(ctx, id)
 					if executionErr == nil {
 						payload["current"] = map[string]any{"id": execution.ID, "action_id": execution.ExternalActionID, "action_revision": execution.ActionRevision, "state": execution.State}
 						return payload
 					}
-					approval, approvalErr := a.service.GetActionApproval(ctx, id)
+					approval, approvalErr := service.GetActionApproval(ctx, id)
 					if approvalErr == nil {
 						payload["current"] = map[string]any{"id": approval.ID, "action_id": approval.ExternalActionID, "action_revision": approval.ExternalActionRevision, "status": approval.Status}
 						return payload
 					}
-					genericApproval, genericApprovalErr := a.service.GetApproval(ctx, id)
+					genericApproval, genericApprovalErr := service.GetApproval(ctx, id)
 					if genericApprovalErr == nil {
 						payload["current"] = map[string]any{"id": genericApproval.ID, "version": genericApproval.Version, "status": genericApproval.Status, "plan_id": genericApproval.PlanID, "work_item_id": genericApproval.WorkItemID, "output_profile_id": genericApproval.OutputProfileID, "output_revision_id": genericApproval.OutputRevisionID}
 						return payload
@@ -946,16 +1146,16 @@ func (a *adapter) errorPayload(ctx context.Context, err error, raw json.RawMessa
 	return payload
 }
 
+// decode strictly unmarshals raw tool arguments into target. By the time a handler calls
+// decode, add's central wrapper has already resolved workspace_id through the router for
+// this request; decode only re-parses the same bytes into the tool's specific typed shape.
 func decode(raw json.RawMessage, target any) error {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return err
 	}
-	if err := requireEOF(decoder); err != nil {
-		return err
-	}
-	return validateWorkspace(workspaceFrom(target))
+	return requireEOF(decoder)
 }
 
 func requireEOF(decoder *json.Decoder) error {
@@ -969,24 +1169,12 @@ func requireEOF(decoder *json.Decoder) error {
 	return nil
 }
 
-func validateWorkspace(id string) error {
-	if id != "" && id != workspaceID {
-		return errors.New("workspace_not_found")
-	}
-	return nil
-}
-
+// workspaceInput is embedded by every workspace-scoped tool's input type so its schema
+// documents workspace_id and decode accepts the field without an "unknown field" error.
+// Actual resolution happens once, centrally, in add — never per handler.
 type workspaceInput struct {
 	WorkspaceID string `json:"workspace_id"`
 }
-
-func workspaceFrom(value any) string {
-	if input, ok := value.(interface{ workspace() string }); ok {
-		return input.workspace()
-	}
-	return ""
-}
-func (i workspaceInput) workspace() string { return i.WorkspaceID }
 
 type listReadyInput struct {
 	workspaceInput
@@ -994,7 +1182,7 @@ type listReadyInput struct {
 	IncludeClaimed bool   `json:"include_claimed"`
 }
 
-func (a *adapter) listReady(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) listReady(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in listReadyInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
@@ -1004,9 +1192,9 @@ func (a *adapter) listReady(ctx context.Context, raw json.RawMessage) (any, erro
 		err   error
 	)
 	if in.ActorID == "" {
-		items, err = a.service.ListReadyWork(ctx)
+		items, err = service.ListReadyWork(ctx)
 	} else {
-		items, err = a.service.ListReadyWorkForActor(ctx, in.ActorID)
+		items, err = service.ListReadyWorkForActor(ctx, in.ActorID)
 	}
 	if err != nil || in.IncludeClaimed {
 		return items, err
@@ -1026,20 +1214,20 @@ type boardOverviewInput struct {
 	IncludeAttention bool   `json:"include_attention"`
 }
 
-func (a *adapter) boardOverview(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) boardOverview(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in boardOverviewInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	items, err := a.service.ListWorkItems(ctx)
+	items, err := service.ListWorkItems(ctx)
 	if err != nil {
 		return nil, err
 	}
-	ready, err := a.service.ListReadyWork(ctx)
+	ready, err := service.ListReadyWork(ctx)
 	if err != nil {
 		return nil, err
 	}
-	cursor, err := a.service.LatestActivitySequence(ctx)
+	cursor, err := service.LatestActivitySequence(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1064,7 +1252,7 @@ func (a *adapter) boardOverview(ctx context.Context, raw json.RawMessage) (any, 
 			result.NeedsHumanAttention = append(result.NeedsHumanAttention, item.WorkItem)
 		}
 	}
-	profiles, err := a.service.ListOutputProfiles(ctx)
+	profiles, err := service.ListOutputProfiles(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1111,18 +1299,18 @@ type listItemsInput struct {
 	Limit                  int                    `json:"limit"`
 }
 
-func (a *adapter) listItems(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) listItems(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in listItemsInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	items, err := a.service.ListWorkItems(ctx)
+	items, err := service.ListWorkItems(ctx)
 	if err != nil {
 		return nil, err
 	}
 	readyIDs := map[string]bool{}
 	if in.Blocked != nil {
-		ready, err := a.service.ListReadyWork(ctx)
+		ready, err := service.ListReadyWork(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -1263,12 +1451,12 @@ type getItemInput struct {
 	ActivityLimit int      `json:"activity_limit"`
 }
 
-func (a *adapter) getItem(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) getItem(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in getItemInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	item, err := a.service.GetWorkItem(ctx, in.ID)
+	item, err := service.GetWorkItem(ctx, in.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -1321,7 +1509,7 @@ func (a *adapter) getItem(ctx context.Context, raw json.RawMessage) (any, error)
 		if limit <= 0 || limit > 100 {
 			limit = 20
 		}
-		result.Activity, err = a.service.ListActivity(ctx, app.ActivityFilter{WorkItemID: in.ID, Limit: limit})
+		result.Activity, err = service.ListActivity(ctx, app.ActivityFilter{WorkItemID: in.ID, Limit: limit})
 		if err != nil {
 			return nil, err
 		}
@@ -1342,7 +1530,7 @@ type objectiveContextInput struct {
 	Include     []string `json:"include"`
 }
 
-func (a *adapter) getObjectiveContext(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) getObjectiveContext(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in objectiveContextInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
@@ -1352,7 +1540,7 @@ func (a *adapter) getObjectiveContext(ctx context.Context, raw json.RawMessage) 
 			return nil, fmt.Errorf("get_objective_context include %q is not supported", section)
 		}
 	}
-	return a.service.SelectObjectiveContext(ctx, app.ObjectiveContextQuery{ObjectiveID: in.ObjectiveID, ActorID: in.ActorID, Include: in.Include, MaxItemsPerSection: in.MaxItems})
+	return service.SelectObjectiveContext(ctx, app.ObjectiveContextQuery{ObjectiveID: in.ObjectiveID, ActorID: in.ActorID, Include: in.Include, MaxItemsPerSection: in.MaxItems})
 }
 
 func containsString(values []string, value string) bool {
@@ -1372,7 +1560,7 @@ type changesInput struct {
 	ObjectiveID string `json:"objective_id"`
 }
 
-func (a *adapter) getChanges(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) getChanges(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in changesInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
@@ -1389,7 +1577,7 @@ func (a *adapter) getChanges(ctx context.Context, raw json.RawMessage) (any, err
 	if limit <= 0 || limit > 100 {
 		limit = 100
 	}
-	changes, err := a.service.ListActivity(ctx, app.ActivityFilter{Since: since, Limit: limit + 1, WorkItemID: in.WorkItemID, ObjectiveID: in.ObjectiveID})
+	changes, err := service.ListActivity(ctx, app.ActivityFilter{Since: since, Limit: limit + 1, WorkItemID: in.WorkItemID, ObjectiveID: in.ObjectiveID})
 	if err != nil {
 		return nil, err
 	}
@@ -1424,7 +1612,7 @@ func semanticModelResultSchema() map[string]any {
 	}, "required": []string{"section", "model_version", "content_digest", "data", "not_found_ids"}, "additionalProperties": false}
 }
 
-func (a *adapter) getSemanticModel(_ context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) getSemanticModel(_ context.Context, _ *app.Service, raw json.RawMessage) (any, error) {
 	var input semanticModelInput
 	if err := decode(raw, &input); err != nil {
 		return nil, err
@@ -1450,12 +1638,12 @@ type changesResult struct {
 	HasMore    bool            `json:"has_more"`
 }
 
-func (a *adapter) listProfiles(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) listProfiles(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in workspaceInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.ListOutputProfiles(ctx)
+	return service.ListOutputProfiles(ctx)
 }
 
 type outputProfileInput struct {
@@ -1464,12 +1652,12 @@ type outputProfileInput struct {
 	Version int    `json:"profile_version"`
 }
 
-func (a *adapter) getProfile(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) getProfile(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in outputProfileInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	profiles, err := a.service.ListOutputProfiles(ctx)
+	profiles, err := service.ListOutputProfiles(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1491,7 +1679,7 @@ type outputsInput struct {
 	Limit         int    `json:"limit"`
 }
 
-func (a *adapter) listOutputs(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) listOutputs(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in outputsInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
@@ -1508,7 +1696,7 @@ func (a *adapter) listOutputs(ctx context.Context, raw json.RawMessage) (any, er
 	if acceptedSince != nil {
 		filter.AcceptedSince = *acceptedSince
 	}
-	return a.service.ListAcceptedOutputs(ctx, filter)
+	return service.ListAcceptedOutputs(ctx, filter)
 }
 
 type registerActorInput struct {
@@ -1519,12 +1707,12 @@ type registerActorInput struct {
 	IdempotencyKey string         `json:"idempotency_key"`
 }
 
-func (a *adapter) registerActor(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) registerActor(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in registerActorInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: in.ActorID, Kind: in.Kind, DisplayName: in.DisplayName}, IdempotencyKey: in.IdempotencyKey})
+	return service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: in.ActorID, Kind: in.Kind, DisplayName: in.DisplayName}, IdempotencyKey: in.IdempotencyKey})
 }
 
 type createObjectiveInput struct {
@@ -1538,12 +1726,12 @@ type createObjectiveInput struct {
 	Phase          work.ObjectivePhase `json:"phase"`
 }
 
-func (a *adapter) createObjective(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) createObjective(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in createObjectiveInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.CreateObjective(ctx, app.CreateObjectiveCommand{ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome, Phase: in.Phase})
+	return service.CreateObjective(ctx, app.CreateObjectiveCommand{ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome, Phase: in.Phase})
 }
 
 type patchObjectiveInput struct {
@@ -1557,12 +1745,12 @@ type patchObjectiveInput struct {
 	DesiredOutcome  *string `json:"desired_outcome"`
 }
 
-func (a *adapter) patchObjective(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) patchObjective(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in patchObjectiveInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.PatchObjective(ctx, app.PatchObjectiveCommand{ObjectiveID: in.ObjectiveID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome})
+	return service.PatchObjective(ctx, app.PatchObjectiveCommand{ObjectiveID: in.ObjectiveID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome})
 }
 
 type createItemInput struct {
@@ -1596,7 +1784,7 @@ type createItemDependencyInput struct {
 	Note                string              `json:"note,omitempty"`
 }
 
-func (a *adapter) createItem(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) createItem(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in createItemInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
@@ -1632,7 +1820,7 @@ func (a *adapter) createItem(ctx context.Context, raw json.RawMessage) (any, err
 	for _, dependency := range in.Dependencies {
 		command.Dependencies = append(command.Dependencies, app.CreateWorkItemDependency{DependsOnWorkItemID: dependency.DependsOnWorkItemID, Kind: dependency.Kind, Note: dependency.Note})
 	}
-	return a.service.CreateWorkItem(ctx, command)
+	return service.CreateWorkItem(ctx, command)
 }
 
 type patchItemInput struct {
@@ -1685,7 +1873,7 @@ func patchItemSchema() map[string]any {
 	return result
 }
 
-func (a *adapter) patchItem(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) patchItem(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in patchItemInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
@@ -1697,7 +1885,7 @@ func (a *adapter) patchItem(ctx context.Context, raw json.RawMessage) (any, erro
 	for _, expected := range in.ExpectedOutputsToAdd {
 		command.ExpectedOutputsToAdd = append(command.ExpectedOutputsToAdd, app.ProposedExpectedOutput{Name: expected.Name, ProfileName: expected.ProfileName, ProfileVersion: expected.ProfileVersion, Contract: expected.Contract, DestinationHint: expected.DestinationHint, Required: expected.Required, Ordinal: expected.Ordinal})
 	}
-	return a.service.PatchWorkItem(ctx, command)
+	return service.PatchWorkItem(ctx, command)
 }
 
 type requestAttentionInput struct {
@@ -1722,12 +1910,12 @@ func requestAttentionSchema() map[string]any {
 	return result
 }
 
-func (a *adapter) requestAttention(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) requestAttention(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in requestAttentionInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.RequestAttention(ctx, app.RequestAttentionCommand{TargetKind: in.TargetKind, TargetID: in.TargetID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, AttentionState: in.AttentionState})
+	return service.RequestAttention(ctx, app.RequestAttentionCommand{TargetKind: in.TargetKind, TargetID: in.TargetID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, AttentionState: in.AttentionState})
 }
 
 type requestApprovalInput struct {
@@ -1749,7 +1937,7 @@ type requestApprovalInput struct {
 	ExpiresAt                string          `json:"expires_at"`
 }
 
-func (a *adapter) requestApproval(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) requestApproval(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in requestApprovalInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
@@ -1765,7 +1953,7 @@ func (a *adapter) requestApproval(ctx context.Context, raw json.RawMessage) (any
 			(in.TargetKind == "output_revision" && (in.OutputRevisionID == "" || in.PlanID != "" || in.WorkItemID != "" || in.OutputProfileID != "" || in.ActionID != "")) {
 			return nil, errors.New("generic approval target_kind must match exactly one target id")
 		}
-		return a.service.RequestApproval(ctx, app.RequestApprovalCommand{ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Request: in.Request, PlanID: in.PlanID, WorkItemID: in.WorkItemID, OutputProfileID: in.OutputProfileID, OutputRevisionID: in.OutputRevisionID, ExpectedTargetVersion: in.ExpectedVersion})
+		return service.RequestApproval(ctx, app.RequestApprovalCommand{ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Request: in.Request, PlanID: in.PlanID, WorkItemID: in.WorkItemID, OutputProfileID: in.OutputProfileID, OutputRevisionID: in.OutputRevisionID, ExpectedTargetVersion: in.ExpectedVersion})
 	case "external_action":
 		if in.ActionID == "" || in.ApprovedForActorID == "" || in.ExpectedActionVersion < 1 || in.AuthorizationSubjectHash == "" || in.PlanID != "" || in.WorkItemID != "" || in.OutputProfileID != "" || in.OutputRevisionID != "" {
 			return nil, errors.New("external action approval requires action_id, approved_for_actor_id, expected_action_version, and authorization_subject_hash")
@@ -1774,7 +1962,7 @@ func (a *adapter) requestApproval(ctx context.Context, raw json.RawMessage) (any
 		if err != nil {
 			return nil, err
 		}
-		return a.service.RequestExternalActionApproval(ctx, app.RequestExternalActionApprovalCommand{ActionID: in.ActionID, ActorID: in.ActorID, ApprovedForActorID: in.ApprovedForActorID, ExpectedActionVersion: in.ExpectedActionVersion, ExpectedSubjectHash: in.AuthorizationSubjectHash, IdempotencyKey: in.IdempotencyKey, Constraints: in.Constraints, ExpiresAt: expiresAt, Request: in.Request})
+		return service.RequestExternalActionApproval(ctx, app.RequestExternalActionApprovalCommand{ActionID: in.ActionID, ActorID: in.ActorID, ApprovedForActorID: in.ApprovedForActorID, ExpectedActionVersion: in.ExpectedActionVersion, ExpectedSubjectHash: in.AuthorizationSubjectHash, IdempotencyKey: in.IdempotencyKey, Constraints: in.Constraints, ExpiresAt: expiresAt, Request: in.Request})
 	default:
 		return nil, errors.New("request_approval target_kind must be plan, work_item, output_profile, output_revision, or external_action")
 	}
@@ -1837,7 +2025,7 @@ type resolveApprovalInput struct {
 	Rationale             string `json:"rationale"`
 }
 
-func (a *adapter) resolveApproval(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) resolveApproval(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in resolveApprovalInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
@@ -1846,13 +2034,13 @@ func (a *adapter) resolveApproval(ctx context.Context, raw json.RawMessage) (any
 		if in.ExpectedActionVersion < 1 {
 			return nil, errors.New("external action approval resolution requires expected_action_version")
 		}
-		return a.service.RevokeExternalActionApproval(ctx, app.RevokeExternalActionApprovalCommand{ApprovalID: in.ApprovalID, ActorID: in.ActorID, ExpectedActionVersion: in.ExpectedActionVersion, IdempotencyKey: in.IdempotencyKey, Rationale: in.Rationale})
+		return service.RevokeExternalActionApproval(ctx, app.RevokeExternalActionApprovalCommand{ApprovalID: in.ApprovalID, ActorID: in.ActorID, ExpectedActionVersion: in.ExpectedActionVersion, IdempotencyKey: in.IdempotencyKey, Rationale: in.Rationale})
 	}
 	if in.TargetKind == "external_action" {
 		if in.ExpectedActionVersion < 1 {
 			return nil, errors.New("external action approval resolution requires expected_action_version")
 		}
-		return a.service.ResolveExternalActionApproval(ctx, app.ResolveExternalActionApprovalCommand{ApprovalID: in.ApprovalID, ActorID: in.ActorID, ExpectedActionVersion: in.ExpectedActionVersion, IdempotencyKey: in.IdempotencyKey, Decision: authority.ApprovalStatus(in.Decision), Rationale: in.Rationale})
+		return service.ResolveExternalActionApproval(ctx, app.ResolveExternalActionApprovalCommand{ApprovalID: in.ApprovalID, ActorID: in.ActorID, ExpectedActionVersion: in.ExpectedActionVersion, IdempotencyKey: in.IdempotencyKey, Decision: authority.ApprovalStatus(in.Decision), Rationale: in.Rationale})
 	}
 	if in.TargetKind != "plan" && in.TargetKind != "work_item" && in.TargetKind != "output_profile" && in.TargetKind != "output_revision" {
 		return nil, errors.New("resolve_approval target_kind must identify the approval target")
@@ -1860,7 +2048,7 @@ func (a *adapter) resolveApproval(ctx context.Context, raw json.RawMessage) (any
 	if in.ExpectedVersion < 1 {
 		return nil, errors.New("generic approval resolution requires expected_version")
 	}
-	return a.service.ResolveApproval(ctx, app.ResolveApprovalCommand{ApprovalID: in.ApprovalID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, Decision: work.ApprovalStatus(in.Decision), Rationale: in.Rationale})
+	return service.ResolveApproval(ctx, app.ResolveApprovalCommand{ApprovalID: in.ApprovalID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, Decision: work.ApprovalStatus(in.Decision), Rationale: in.Rationale})
 }
 
 func resolveApprovalSchema() map[string]any {
@@ -1882,6 +2070,30 @@ func approvalResolutionBranch(kind string) map[string]any {
 	return map[string]any{"required": []string{"target_kind", "approval_id", "actor_id", "idempotency_key", "decision", "rationale", "expected_version"}, "properties": map[string]any{"target_kind": map[string]any{"const": kind}}, "not": map[string]any{"required": []string{"expected_action_version"}}}
 }
 
+type approveWorkItemExecutionInput struct {
+	workspaceInput
+	WorkItemID         string `json:"work_item_id"`
+	ActorID            string `json:"actor_id"`
+	ApprovedForActorID string `json:"approved_for_actor_id"`
+	ExpectedVersion    int    `json:"expected_version"`
+	IdempotencyKey     string `json:"idempotency_key"`
+	Request            string `json:"request"`
+	Rationale          string `json:"rationale"`
+	ExpiresAt          string `json:"expires_at"`
+}
+
+func (a *adapter) approveWorkItemExecution(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
+	var in approveWorkItemExecutionInput
+	if err := decode(raw, &in); err != nil {
+		return nil, err
+	}
+	expiresAt, err := parseOptionalTime(in.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	return service.ApproveWorkItemExecution(ctx, app.ApproveWorkItemExecutionCommand{WorkItemID: in.WorkItemID, ActorID: in.ActorID, ApprovedForID: in.ApprovedForActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Request: in.Request, Rationale: in.Rationale, ExpiresAt: expiresAt})
+}
+
 type blockItemInput struct {
 	workspaceInput
 	WorkItemID      string `json:"work_item_id"`
@@ -1891,12 +2103,12 @@ type blockItemInput struct {
 	Reason          string `json:"reason"`
 }
 
-func (a *adapter) blockItem(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) blockItem(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in blockItemInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.BlockWorkItem(ctx, app.BlockWorkItemCommand{WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, Reason: in.Reason})
+	return service.BlockWorkItem(ctx, app.BlockWorkItemCommand{WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, Reason: in.Reason})
 }
 
 type unblockItemInput struct {
@@ -1908,12 +2120,12 @@ type unblockItemInput struct {
 	Resolution      string `json:"resolution"`
 }
 
-func (a *adapter) unblockItem(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) unblockItem(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in unblockItemInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.UnblockWorkItem(ctx, app.UnblockWorkItemCommand{BlockerID: in.BlockerID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, Resolution: in.Resolution})
+	return service.UnblockWorkItem(ctx, app.UnblockWorkItemCommand{BlockerID: in.BlockerID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, Resolution: in.Resolution})
 }
 
 type transitionObjectiveInput struct {
@@ -1926,12 +2138,12 @@ type transitionObjectiveInput struct {
 	IdempotencyKey  string              `json:"idempotency_key"`
 }
 
-func (a *adapter) transitionObjective(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) transitionObjective(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in transitionObjectiveInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: in.ObjectiveID, ActorID: in.ActorID, TargetPhase: in.Target, Reason: in.Reason, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey})
+	return service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: in.ObjectiveID, ActorID: in.ActorID, TargetPhase: in.Target, Reason: in.Reason, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey})
 }
 
 type planInput struct {
@@ -2023,7 +2235,7 @@ func externalActionSubject(action planExternalActionInput) (json.RawMessage, err
 	})
 }
 
-func (a *adapter) proposePlan(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) proposePlan(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in planInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
@@ -2049,7 +2261,7 @@ func (a *adapter) proposePlan(ctx context.Context, raw json.RawMessage) (any, er
 		}
 		items = append(items, converted)
 	}
-	return a.service.ProposePlan(ctx, app.ProposePlanCommand{ObjectiveID: in.ObjectiveID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Title: in.Title, Summary: in.Summary, Revision: in.Revision, Items: items})
+	return service.ProposePlan(ctx, app.ProposePlanCommand{ObjectiveID: in.ObjectiveID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Title: in.Title, Summary: in.Summary, Revision: in.Revision, Items: items})
 }
 
 type reviewPlanInput struct {
@@ -2077,12 +2289,12 @@ type recordContextInput struct {
 	SupersedesID   string             `json:"supersedes_id"`
 }
 
-func (a *adapter) recordContext(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) recordContext(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in recordContextInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.RecordContext(ctx, app.RecordContextCommand{ObjectiveID: in.ObjectiveID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Kind: in.Kind, Title: in.Title, Body: in.Body, Status: in.Status, Confidence: in.Confidence, SourceURI: in.SourceURI, SupersedesID: in.SupersedesID})
+	return service.RecordContext(ctx, app.RecordContextCommand{ObjectiveID: in.ObjectiveID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Kind: in.Kind, Title: in.Title, Body: in.Body, Status: in.Status, Confidence: in.Confidence, SourceURI: in.SourceURI, SupersedesID: in.SupersedesID})
 }
 
 type recordDecisionInput struct {
@@ -2098,12 +2310,12 @@ type recordDecisionInput struct {
 	SupersedesID   string   `json:"supersedes_id"`
 }
 
-func (a *adapter) recordDecision(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) recordDecision(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in recordDecisionInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.RecordDecision(ctx, app.RecordDecisionCommand{ObjectiveID: in.ObjectiveID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Title: in.Title, Decision: in.Decision, Rationale: in.Rationale, Alternatives: in.Alternatives, SupersedesID: in.SupersedesID})
+	return service.RecordDecision(ctx, app.RecordDecisionCommand{ObjectiveID: in.ObjectiveID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Title: in.Title, Decision: in.Decision, Rationale: in.Rationale, Alternatives: in.Alternatives, SupersedesID: in.SupersedesID})
 }
 
 type askQuestionInput struct {
@@ -2116,12 +2328,12 @@ type askQuestionInput struct {
 	RequiresHumanAttention bool   `json:"requires_human_attention"`
 }
 
-func (a *adapter) askQuestion(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) askQuestion(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in askQuestionInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.AskQuestion(ctx, app.AskQuestionCommand{ObjectiveID: in.ObjectiveID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Question: in.Question, RequiresHumanAttention: in.RequiresHumanAttention})
+	return service.AskQuestion(ctx, app.AskQuestionCommand{ObjectiveID: in.ObjectiveID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Question: in.Question, RequiresHumanAttention: in.RequiresHumanAttention})
 }
 
 type answerQuestionInput struct {
@@ -2134,7 +2346,7 @@ type answerQuestionInput struct {
 	WaiveReason     string `json:"waive_reason"`
 }
 
-func (a *adapter) answerQuestion(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) answerQuestion(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in answerQuestionInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
@@ -2143,17 +2355,17 @@ func (a *adapter) answerQuestion(ctx context.Context, raw json.RawMessage) (any,
 		return nil, errors.New("answer_question accepts either answer or waive_reason")
 	}
 	if in.WaiveReason != "" {
-		return a.service.WaiveQuestion(ctx, app.WaiveQuestionCommand{QuestionID: in.QuestionID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Reason: in.WaiveReason, ExpectedVersion: in.ExpectedVersion})
+		return service.WaiveQuestion(ctx, app.WaiveQuestionCommand{QuestionID: in.QuestionID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Reason: in.WaiveReason, ExpectedVersion: in.ExpectedVersion})
 	}
-	return a.service.AnswerQuestion(ctx, app.AnswerQuestionCommand{QuestionID: in.QuestionID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Answer: in.Answer, ExpectedVersion: in.ExpectedVersion})
+	return service.AnswerQuestion(ctx, app.AnswerQuestionCommand{QuestionID: in.QuestionID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Answer: in.Answer, ExpectedVersion: in.ExpectedVersion})
 }
 
-func (a *adapter) reviewPlan(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) reviewPlan(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in reviewPlanInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: in.PlanID, ReviewerActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Decision: in.Decision, Reason: in.Reason, ExpectedVersion: in.ExpectedVersion})
+	return service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: in.PlanID, ReviewerActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Decision: in.Decision, Reason: in.Reason, ExpectedVersion: in.ExpectedVersion})
 }
 
 type proposeOutputProfileInput struct {
@@ -2170,12 +2382,12 @@ type proposeOutputProfileInput struct {
 	Supersedes     string          `json:"supersedes"`
 }
 
-func (a *adapter) proposeOutputProfile(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) proposeOutputProfile(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in proposeOutputProfileInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.ProposeOutputProfile(ctx, app.ProposeOutputProfileCommand{ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Name: in.Name, Version: in.Version, Description: in.Description, Structure: in.Structure, Semantics: in.Semantics, Validation: in.Validation, SupersedesID: in.SupersedesID, Supersedes: in.Supersedes})
+	return service.ProposeOutputProfile(ctx, app.ProposeOutputProfileCommand{ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Name: in.Name, Version: in.Version, Description: in.Description, Structure: in.Structure, Semantics: in.Semantics, Validation: in.Validation, SupersedesID: in.SupersedesID, Supersedes: in.Supersedes})
 }
 
 type reviewOutputProfileInput struct {
@@ -2188,12 +2400,12 @@ type reviewOutputProfileInput struct {
 	Reason          string              `json:"reason"`
 }
 
-func (a *adapter) reviewOutputProfile(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) reviewOutputProfile(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in reviewOutputProfileInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.ReviewOutputProfile(ctx, app.ReviewOutputProfileCommand{ProfileID: in.ProfileID, ReviewerActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, Decision: in.Decision, Reason: in.Reason})
+	return service.ReviewOutputProfile(ctx, app.ReviewOutputProfileCommand{ProfileID: in.ProfileID, ReviewerActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, Decision: in.Decision, Reason: in.Reason})
 }
 
 type claimInput struct {
@@ -2206,12 +2418,12 @@ type claimInput struct {
 	Transition      bool   `json:"transition_to_in_progress"`
 }
 
-func (a *adapter) claimItem(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) claimItem(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in claimInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.ClaimWorkItem(ctx, app.ClaimWorkItemCommand{WorkItemID: in.ID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, LeaseDuration: time.Duration(in.LeaseSeconds) * time.Second, TransitionToInProgress: in.Transition})
+	return service.ClaimWorkItem(ctx, app.ClaimWorkItemCommand{WorkItemID: in.ID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, LeaseDuration: time.Duration(in.LeaseSeconds) * time.Second, TransitionToInProgress: in.Transition})
 }
 
 type claimRenewInput struct {
@@ -2224,12 +2436,12 @@ type claimRenewInput struct {
 	LeaseSeconds    int    `json:"lease_seconds"`
 }
 
-func (a *adapter) renewClaim(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) renewClaim(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in claimRenewInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.RenewClaim(ctx, app.RenewClaimCommand{WorkItemID: in.WorkItemID, ClaimID: in.ClaimID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Extension: time.Duration(in.LeaseSeconds) * time.Second})
+	return service.RenewClaim(ctx, app.RenewClaimCommand{WorkItemID: in.WorkItemID, ClaimID: in.ClaimID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Extension: time.Duration(in.LeaseSeconds) * time.Second})
 }
 
 type claimReleaseInput struct {
@@ -2243,12 +2455,12 @@ type claimReleaseInput struct {
 	ReturnToReady   bool   `json:"return_to_ready"`
 }
 
-func (a *adapter) releaseClaim(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) releaseClaim(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in claimReleaseInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.ReleaseClaim(ctx, app.ReleaseClaimCommand{WorkItemID: in.WorkItemID, ClaimID: in.ClaimID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Reason: in.Reason, ReturnToReady: in.ReturnToReady})
+	return service.ReleaseClaim(ctx, app.ReleaseClaimCommand{WorkItemID: in.WorkItemID, ClaimID: in.ClaimID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Reason: in.Reason, ReturnToReady: in.ReturnToReady})
 }
 
 type progressInput struct {
@@ -2264,12 +2476,12 @@ type progressInput struct {
 	Discovered      []string `json:"discovered"`
 }
 
-func (a *adapter) appendProgress(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) appendProgress(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in progressInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.AppendProgress(ctx, app.AppendProgressCommand{WorkItemID: in.ID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Summary: in.Summary, Completed: in.Completed, Remaining: in.Remaining, Discovered: in.Discovered, Blocker: in.Blocker})
+	return service.AppendProgress(ctx, app.AppendProgressCommand{WorkItemID: in.ID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Summary: in.Summary, Completed: in.Completed, Remaining: in.Remaining, Discovered: in.Discovered, Blocker: in.Blocker})
 }
 
 type transitionItemInput struct {
@@ -2282,12 +2494,12 @@ type transitionItemInput struct {
 	IdempotencyKey  string               `json:"idempotency_key"`
 }
 
-func (a *adapter) transitionItem(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) transitionItem(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in transitionItemInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: in.ID, ActorID: in.ActorID, TargetStatus: in.Target, Reason: in.Reason, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey})
+	return service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: in.ID, ActorID: in.ActorID, TargetStatus: in.Target, Reason: in.Reason, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey})
 }
 
 type expectedOutputInput struct {
@@ -2305,12 +2517,12 @@ type expectedOutputInput struct {
 	Required        bool            `json:"required"`
 }
 
-func (a *adapter) defineExpectedOutput(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) defineExpectedOutput(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in expectedOutputInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.DefineExpectedOutput(ctx, app.DefineExpectedOutputCommand{WorkItemID: in.WorkItemID, ActorID: in.ActorID, Name: in.Name, ProfileName: in.ProfileName, ProfileVersion: in.ProfileVersion, Contract: in.Contract, DestinationHint: in.DestinationHint, Required: in.Required, Ordinal: in.Ordinal, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey})
+	return service.DefineExpectedOutput(ctx, app.DefineExpectedOutputCommand{WorkItemID: in.WorkItemID, ActorID: in.ActorID, Name: in.Name, ProfileName: in.ProfileName, ProfileVersion: in.ProfileVersion, Contract: in.Contract, DestinationHint: in.DestinationHint, Required: in.Required, Ordinal: in.Ordinal, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey})
 }
 
 type outputRevisionInput struct {
@@ -2322,12 +2534,12 @@ type outputRevisionInput struct {
 	Artifacts        []app.OutputArtifactInput `json:"artifacts"`
 }
 
-func (a *adapter) createOutputRevision(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) createOutputRevision(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in outputRevisionInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.CreateOutputRevision(ctx, app.CreateOutputRevisionCommand{ExpectedOutputID: in.ExpectedOutputID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ContentDigest: in.ContentDigest, Artifacts: in.Artifacts})
+	return service.CreateOutputRevision(ctx, app.CreateOutputRevisionCommand{ExpectedOutputID: in.ExpectedOutputID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ContentDigest: in.ContentDigest, Artifacts: in.Artifacts})
 }
 
 type validationInput struct {
@@ -2342,12 +2554,12 @@ type validationInput struct {
 	Details            json.RawMessage          `json:"details"`
 }
 
-func (a *adapter) recordValidation(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) recordValidation(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in validationInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.RecordValidation(ctx, app.RecordValidationCommand{OutputRevisionID: in.OutputRevisionID, CriterionRef: in.CriterionRef, ValidatorKind: in.ValidatorKind, Verdict: in.Verdict, VerifierActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, EvidenceArtifactID: in.EvidenceArtifactID, Details: in.Details})
+	return service.RecordValidation(ctx, app.RecordValidationCommand{OutputRevisionID: in.OutputRevisionID, CriterionRef: in.CriterionRef, ValidatorKind: in.ValidatorKind, Verdict: in.Verdict, VerifierActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, EvidenceArtifactID: in.EvidenceArtifactID, Details: in.Details})
 }
 
 type outputRequirementInput struct {
@@ -2363,12 +2575,12 @@ type outputRequirementInput struct {
 	Note                     string `json:"note"`
 }
 
-func (a *adapter) addOutputRequirement(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) addOutputRequirement(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in outputRequirementInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.AddOutputRequirement(ctx, app.AddOutputRequirementCommand{
+	return service.AddOutputRequirement(ctx, app.AddOutputRequirementCommand{
 		WorkItemID: in.WorkItemID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion,
 		IdempotencyKey: in.IdempotencyKey, RequiredOutputRevisionID: in.RequiredOutputRevisionID,
 		RequiredProfileName: in.RequiredProfileName, VersionConstraint: in.VersionConstraint,
@@ -2388,12 +2600,12 @@ type artifactInput struct {
 	Metadata        json.RawMessage `json:"metadata"`
 }
 
-func (a *adapter) attachArtifact(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) attachArtifact(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in artifactInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.AttachArtifact(ctx, app.AttachArtifactCommand{WorkItemID: in.WorkItemID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Kind: in.Kind, URI: in.URI, Title: in.Title, Metadata: in.Metadata})
+	return service.AttachArtifact(ctx, app.AttachArtifactCommand{WorkItemID: in.WorkItemID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Kind: in.Kind, URI: in.URI, Title: in.Title, Metadata: in.Metadata})
 }
 
 type dependencyInput struct {
@@ -2407,12 +2619,12 @@ type dependencyInput struct {
 	Note                string              `json:"note"`
 }
 
-func (a *adapter) linkDependency(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) linkDependency(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in dependencyInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.LinkDependency(ctx, app.LinkDependencyCommand{WorkItemID: in.WorkItemID, DependsOnWorkItemID: in.DependsOnWorkItemID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Kind: in.Kind, Note: in.Note})
+	return service.LinkDependency(ctx, app.LinkDependencyCommand{WorkItemID: in.WorkItemID, DependsOnWorkItemID: in.DependsOnWorkItemID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Kind: in.Kind, Note: in.Note})
 }
 
 type unlinkDependencyInput struct {
@@ -2425,12 +2637,12 @@ type unlinkDependencyInput struct {
 	Kind                work.DependencyKind `json:"kind"`
 }
 
-func (a *adapter) unlinkDependency(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) unlinkDependency(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in unlinkDependencyInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.UnlinkDependency(ctx, app.UnlinkDependencyCommand{WorkItemID: in.WorkItemID, DependsOnWorkItemID: in.DependsOnWorkItemID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Kind: in.Kind})
+	return service.UnlinkDependency(ctx, app.UnlinkDependencyCommand{WorkItemID: in.WorkItemID, DependsOnWorkItemID: in.DependsOnWorkItemID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Kind: in.Kind})
 }
 
 type actionInput struct {
@@ -2449,7 +2661,7 @@ type actionInput struct {
 	Subject         json.RawMessage `json:"authorization_subject"`
 }
 
-func (a *adapter) proposeAction(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) proposeAction(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in actionInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
@@ -2463,7 +2675,7 @@ func (a *adapter) proposeAction(ctx context.Context, raw json.RawMessage) (any, 
 	if in.Title == "" {
 		return nil, errors.New("propose_external_action requires metadata.title or title")
 	}
-	return a.service.ProposeExternalAction(ctx, app.ProposeExternalActionCommand{WorkItemID: in.WorkItemID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Required: in.Required, Title: in.Title, Rationale: in.Rationale, Subject: in.Subject})
+	return service.ProposeExternalAction(ctx, app.ProposeExternalActionCommand{WorkItemID: in.WorkItemID, ActorID: in.ActorID, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey, Required: in.Required, Title: in.Title, Rationale: in.Rationale, Subject: in.Subject})
 }
 
 func actionSchema() map[string]any {
@@ -2488,7 +2700,7 @@ type patchActionMetadataInput struct {
 	} `json:"metadata"`
 }
 
-func (a *adapter) patchActionMetadata(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) patchActionMetadata(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in patchActionMetadataInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
@@ -2496,7 +2708,7 @@ func (a *adapter) patchActionMetadata(ctx context.Context, raw json.RawMessage) 
 	if in.Metadata == nil || (in.Metadata.Title == nil && in.Metadata.Rationale == nil) {
 		return nil, errors.New("patch_external_action_metadata requires title or rationale metadata")
 	}
-	return a.service.PatchExternalActionMetadata(ctx, app.PatchExternalActionMetadataCommand{ActionID: in.ActionID, ActorID: in.ActorID, ExpectedActionVersion: in.ExpectedActionVersion, IdempotencyKey: in.IdempotencyKey, Title: in.Metadata.Title, Rationale: in.Metadata.Rationale})
+	return service.PatchExternalActionMetadata(ctx, app.PatchExternalActionMetadataCommand{ActionID: in.ActionID, ActorID: in.ActorID, ExpectedActionVersion: in.ExpectedActionVersion, IdempotencyKey: in.IdempotencyKey, Title: in.Metadata.Title, Rationale: in.Metadata.Rationale})
 }
 
 type reviseActionInput struct {
@@ -2509,12 +2721,12 @@ type reviseActionInput struct {
 	Subject                 json.RawMessage `json:"authorization_subject"`
 }
 
-func (a *adapter) reviseAction(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) reviseAction(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in reviseActionInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.ReviseExternalAction(ctx, app.ReviseExternalActionCommand{ActionID: in.ActionID, ActorID: in.ActorID, ExpectedActionVersion: in.ExpectedActionVersion, ExpectedWorkItemVersion: in.ExpectedWorkItemVersion, IdempotencyKey: in.IdempotencyKey, Subject: in.Subject})
+	return service.ReviseExternalAction(ctx, app.ReviseExternalActionCommand{ActionID: in.ActionID, ActorID: in.ActorID, ExpectedActionVersion: in.ExpectedActionVersion, ExpectedWorkItemVersion: in.ExpectedWorkItemVersion, IdempotencyKey: in.IdempotencyKey, Subject: in.Subject})
 }
 
 type requestActionApprovalInput struct {
@@ -2530,7 +2742,7 @@ type requestActionApprovalInput struct {
 	Request                  string          `json:"request"`
 }
 
-func (a *adapter) requestActionApproval(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) requestActionApproval(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in requestActionApprovalInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
@@ -2542,7 +2754,7 @@ func (a *adapter) requestActionApproval(ctx context.Context, raw json.RawMessage
 	if in.AuthorizationSubjectHash == "" {
 		return nil, errors.New("request_action_approval requires authorization_subject_hash")
 	}
-	return a.service.RequestExternalActionApproval(ctx, app.RequestExternalActionApprovalCommand{ActionID: in.ActionID, ActorID: in.ActorID, ApprovedForActorID: in.ApprovedForActorID, ExpectedActionVersion: in.ExpectedActionVersion, ExpectedSubjectHash: in.AuthorizationSubjectHash, IdempotencyKey: in.IdempotencyKey, Constraints: in.Constraints, ExpiresAt: expiresAt, Request: in.Request})
+	return service.RequestExternalActionApproval(ctx, app.RequestExternalActionApprovalCommand{ActionID: in.ActionID, ActorID: in.ActorID, ApprovedForActorID: in.ApprovedForActorID, ExpectedActionVersion: in.ExpectedActionVersion, ExpectedSubjectHash: in.AuthorizationSubjectHash, IdempotencyKey: in.IdempotencyKey, Constraints: in.Constraints, ExpiresAt: expiresAt, Request: in.Request})
 }
 
 type resolveActionApprovalInput struct {
@@ -2555,12 +2767,12 @@ type resolveActionApprovalInput struct {
 	Rationale             string                   `json:"rationale"`
 }
 
-func (a *adapter) resolveActionApproval(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) resolveActionApproval(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in resolveActionApprovalInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.ResolveExternalActionApproval(ctx, app.ResolveExternalActionApprovalCommand{ApprovalID: in.ApprovalID, ActorID: in.ActorID, ExpectedActionVersion: in.ExpectedActionVersion, IdempotencyKey: in.IdempotencyKey, Decision: in.Decision, Rationale: in.Rationale})
+	return service.ResolveExternalActionApproval(ctx, app.ResolveExternalActionApprovalCommand{ApprovalID: in.ApprovalID, ActorID: in.ActorID, ExpectedActionVersion: in.ExpectedActionVersion, IdempotencyKey: in.IdempotencyKey, Decision: in.Decision, Rationale: in.Rationale})
 }
 
 type authorizationInput struct {
@@ -2570,12 +2782,12 @@ type authorizationInput struct {
 	SubjectHash string `json:"subject_hash"`
 }
 
-func (a *adapter) checkAuthorization(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) checkAuthorization(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in authorizationInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return a.service.CheckActionAuthorization(ctx, app.CheckActionAuthorizationQuery{ActionID: in.ActionID, ActorID: in.ActorID, SubjectHash: in.SubjectHash})
+	return service.CheckActionAuthorization(ctx, app.CheckActionAuthorizationQuery{ActionID: in.ActionID, ActorID: in.ActorID, SubjectHash: in.SubjectHash})
 }
 
 type executionInput struct {
@@ -2592,7 +2804,7 @@ type executionInput struct {
 	EvidenceArtifactID    string                   `json:"evidence_artifact_id"`
 }
 
-func (a *adapter) recordExecution(ctx context.Context, raw json.RawMessage) (any, error) {
+func (a *adapter) recordExecution(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
 	var in executionInput
 	if err := decode(raw, &in); err != nil {
 		return nil, err
@@ -2601,9 +2813,9 @@ func (a *adapter) recordExecution(ctx context.Context, raw json.RawMessage) (any
 		return nil, err
 	}
 	if in.State == authority.ExecutionStarted {
-		return a.service.StartExternalActionExecution(ctx, app.StartExternalActionExecutionCommand{ActionID: in.ActionID, ActorID: in.ActorID, ExpectedActionVersion: in.ExpectedActionVersion, IdempotencyKey: in.IdempotencyKey, SubjectHash: in.SubjectHash, AuthorityGrantID: in.AuthorityGrantID})
+		return service.StartExternalActionExecution(ctx, app.StartExternalActionExecutionCommand{ActionID: in.ActionID, ActorID: in.ActorID, ExpectedActionVersion: in.ExpectedActionVersion, IdempotencyKey: in.IdempotencyKey, SubjectHash: in.SubjectHash, AuthorityGrantID: in.AuthorityGrantID})
 	}
-	return a.service.CompleteExternalActionExecution(ctx, app.CompleteExternalActionExecutionCommand{ExecutionID: in.ExecutionID, ActorID: in.ActorID, ExpectedActionVersion: in.ExpectedActionVersion, IdempotencyKey: in.IdempotencyKey, State: in.State, Result: in.Result, EvidenceArtifactID: in.EvidenceArtifactID})
+	return service.CompleteExternalActionExecution(ctx, app.CompleteExternalActionExecutionCommand{ExecutionID: in.ExecutionID, ActorID: in.ActorID, ExpectedActionVersion: in.ExpectedActionVersion, IdempotencyKey: in.IdempotencyKey, State: in.State, Result: in.Result, EvidenceArtifactID: in.EvidenceArtifactID})
 }
 
 func validateExecutionBranch(raw json.RawMessage, state authority.ExecutionState) error {

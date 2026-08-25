@@ -1,5 +1,13 @@
 # Throughline — implementation handoff
 
+> **2026-08-25 note:** `OBJ-WORKSPACE-ROUTING` replaced this document's single-workspace stdio
+> transport with one globally configured, per-user Streamable HTTP daemon routing every MCP call
+> by a stable logical `workspace_id`. Where this handoff describes stdio, a single allowlisted
+> workspace, or `workspace.id: "local"`, treat [docs/product/workspace-routing-spec.md](product/workspace-routing-spec.md)
+> and [ADR 0016](adr/0016-workspace-identity-and-registry.md)–[ADR 0025](adr/0025-unified-setup-and-domain-cli.md)
+> as authoritative instead. This handoff's domain-model, application-layer, and governance
+> sections (planning, execution, output, and authority) are otherwise still current.
+
 **Status:** architectural north star and technical brief; the bounded `v0.1.0` release contract is [Product Decision 0001](product/0001-market-testable-v0.1.md)
 
 **Audience:** a fresh coding/design session  

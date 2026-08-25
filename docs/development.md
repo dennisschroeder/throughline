@@ -46,12 +46,15 @@ report the same pseudo-version, commit, and date a local `go build` would.
 
 ## MCP smoke test
 
-Build outside the repository, initialize a temporary workspace, then configure two independent
-MCP clients with the same `mcp` command. Both clients should receive `workspace.id: "local"`.
-Use one client to claim an item and the other with the stale version to confirm a
-`version_conflict`; resume with `get_item` and `get_changes`. The package-level MCP test uses a
-real MCP client/server session and verifies tool discovery, read-only annotations, and stable
-`not_found` errors.
+Build outside the repository, initialize a temporary workspace, and run `throughline mcp` to
+start the daemon on its default loopback address. Configure two independent MCP clients against
+that same Streamable HTTP endpoint (`http://127.0.0.1:43121/mcp`, `Authorization: Bearer <token
+from throughline setup or credential.LoadOrCreate>`) with the workspace's `workspace_id` on every
+call. Use one client to claim an item and the other with the stale version to confirm a
+`version_conflict`; resume with `get_item` and `get_changes`. `internal/mcp`'s package-level tests
+use a real MCP client/server session over both an in-memory transport and a real `httptest`
+Streamable HTTP server, and verify tool discovery, read-only annotations, workspace fail-closed
+behavior, concurrent multi-workspace isolation, and stable error codes.
 
 `go build ./...` validates the binary without writing it into the repository. To build an executable
 explicitly, choose an output path outside the working tree:
@@ -109,10 +112,13 @@ OutputProfile behavior is data-driven. The application checks persisted lifecycl
 version; it never branches on profile names. Proposed profile versions are unavailable to plans
 until an explicit review activates them.
 
-`throughline ready [DIRECTORY]` lists derived ready work. `throughline show WORK_ITEM_ID [DIRECTORY]`
-returns its structured objective, plan, output, criterion, dependency, validation, reuse,
-coordination, and authority context. The application layer also offers actor-filtered ready work;
-MCP/CLI exposure of claims and authority operations is intentionally deferred.
+`throughline ready --actor <id> [DIRECTORY]` lists ready work for that actor. `throughline show
+WORK_ITEM_ID [DIRECTORY]` returns its structured objective, plan, output, criterion, dependency,
+validation, reuse, coordination, and authority context. Both are daemon clients — they resolve
+`workspace_id` from the nearest `.throughline/config.toml` and call the running daemon over MCP
+rather than opening the database directly (see [docs/product/workspace-routing-spec.md](product/workspace-routing-spec.md));
+run `throughline mcp` or `throughline daemon start` first. MCP/CLI exposure of claims and
+authority operations beyond `ready`/`show` is intentionally deferred.
 
 ## Release dry run
 
