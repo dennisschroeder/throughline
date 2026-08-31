@@ -12,11 +12,16 @@ for the full accepted routing architecture and [Product Decision
 
 ## Scope boundary
 
-Explicitly out of scope: a policy language, a web UI, orchestration, semantic search, broad CLI
-parity, and distributed (cross-machine) coordination. The full original release boundary is in
-[Product Decision 0001](docs/product/0001-market-testable-v0.1.md); multi-workspace routing and a
-network-reachable (loopback-only) transport, both listed there as out of scope for `v0.1.0`, were
-deliberately added by `OBJ-WORKSPACE-ROUTING` and are documented in
+Explicitly out of scope: a policy language, any *mutation-capable* UI, orchestration, semantic
+search, broad CLI parity, and distributed (cross-machine) coordination. A **read-only** human
+overview UI is in scope — inline elements in an agent chat/session and a live browser dashboard,
+both backed by MCP tool responses and daemon state, with no mutation path of their own; all
+mutations remain agent-executed via the existing MCP tools. See [ADR
+0027](docs/adr/0027-read-only-visualization-scope.md) for the full accepted decision. The full
+original release boundary is in [Product Decision
+0001](docs/product/0001-market-testable-v0.1.md); multi-workspace routing and a network-reachable
+(loopback-only) transport, both listed there as out of scope for `v0.1.0`, were deliberately added
+by `OBJ-WORKSPACE-ROUTING` and are documented in
 [docs/product/workspace-routing-spec.md](docs/product/workspace-routing-spec.md).
 
 Throughline records external-action proposals, principal-bound grants, and observed execution
@@ -104,6 +109,7 @@ If you have the Go toolchain and want to build from source instead of using a re
 - [Development and verification](docs/development.md)
 - [Implementation handoff](docs/implementation-handoff.md)
 - [Product Decision 0001: market-testable v0.1](docs/product/0001-market-testable-v0.1.md)
+- [ADR 0027: Read-only visualization scope](docs/adr/0027-read-only-visualization-scope.md)
 - [v0.1.0 release handoff](docs/v0.1.0-release-handoff.md)
 - [Install guide](docs/install.md)
 - [Architecture decision records](docs/adr/)

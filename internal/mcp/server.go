@@ -39,7 +39,21 @@ import (
 // is fine for getServer to return the same server repeatedly, since no per-connection
 // workspace state exists to isolate.
 func Handler(router *throughlinerouter.Router) http.Handler {
-	server := NewServer(router)
+	return HandlerWithHub(router, nil)
+}
+
+// Invalidator is notified with a workspace_id immediately after a workspace-scoped write
+// tool commits, so an external subscriber (the dashboard SSE hub) can react without
+// polling. It must not block: implementations are expected to use a non-blocking,
+// coalescing signal (see internal/dashboard.Hub). A nil Invalidator is a valid no-op.
+type Invalidator interface {
+	Invalidate(workspaceID string)
+}
+
+// HandlerWithHub is Handler with an optional Invalidator wired into every workspace-scoped
+// write tool. hub may be nil, in which case behavior is identical to Handler.
+func HandlerWithHub(router *throughlinerouter.Router, hub Invalidator) http.Handler {
+	server := NewServerWithHub(router, hub)
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
 }
 
@@ -47,6 +61,11 @@ func Handler(router *throughlinerouter.Router) http.Handler {
 // pre-resolved workspace; every workspace-scoped tool call resolves workspace_id through
 // router for that request alone.
 func NewServer(router *throughlinerouter.Router) *mcp.Server {
+	return NewServerWithHub(router, nil)
+}
+
+// NewServerWithHub is NewServer with an optional Invalidator; see HandlerWithHub.
+func NewServerWithHub(router *throughlinerouter.Router, hub Invalidator) *mcp.Server {
 	instructions := serverInstructions
 	if model, err := semanticmodel.Load(); err == nil {
 		if builtInstructions, instructionErr := semanticInstructions(model); instructionErr == nil {
@@ -59,7 +78,7 @@ func NewServer(router *throughlinerouter.Router) *mcp.Server {
 		Version:     "v1",
 		Description: "Authoritative local coordination state. Start with board_overview, then list_ready_items and get_item before claiming work.",
 	}, &mcp.ServerOptions{Instructions: instructions})
-	adapter := &adapter{router: router}
+	adapter := &adapter{router: router, hub: hub}
 	adapter.addTools(server)
 	return server
 }
@@ -76,7 +95,10 @@ func semanticInstructions(model *semanticmodel.Model) (string, error) {
 	return instructions, nil
 }
 
-type adapter struct{ router *throughlinerouter.Router }
+type adapter struct {
+	router *throughlinerouter.Router
+	hub    Invalidator
+}
 
 func (a *adapter) addTools(server *mcp.Server) {
 	a.add(server, "board_overview", "Compact orientation summary.", true, schemaFor[boardOverviewInput](), a.boardOverview)
@@ -156,6 +178,14 @@ func (a *adapter) add(server *mcp.Server, name, description string, readOnly boo
 		result, err := handler(ctx, service, request.Params.Arguments)
 		if err != nil {
 			return toolErrorResult(a.errorPayload(ctx, service, err, request.Params.Arguments)), nil
+		}
+		// The write already committed inside handler above (every Service write method
+		// commits its own transaction). Firing here — synchronously, before the response is
+		// built — is the single place every workspace-scoped write passes through, so hub
+		// subscribers never miss a change without needing a hook in each of the ~70
+		// individual Service write methods.
+		if !readOnly && a.hub != nil {
+			a.hub.Invalidate(workspaceIDValue)
 		}
 		cursor := int64(0)
 		if !readOnly {
