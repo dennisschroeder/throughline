@@ -1,0 +1,987 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Throughline — Loop dashboard</title>
+<style>
+/* Design tokens — copied out of the wireframe's design-system stylesheet per the spec's own
+   instruction ("styles.css is the authoritative token source; the shipped UI should copy the
+   tokens out of it rather than depend on it"), not loaded from it. Archivo is substituted
+   with a system stack: the daemon serves this page offline over loopback with no CDN
+   reachable, and the spec explicitly allows that substitution. */
+:root{
+  --color-ground:#f3f2f2;
+  --color-text:#201e1d;
+  --color-accent:#ec3013;
+  --color-divider:color-mix(in srgb, #201e1d 40%, transparent);
+  --color-neutral-100:#f8f4f4; --color-neutral-200:#eae7e7; --color-neutral-300:#d7d3d3;
+  --color-neutral-400:#bab6b6; --color-neutral-500:#9b9797; --color-neutral-600:#7d7979;
+  --color-neutral-700:#605d5d; --color-neutral-800:#444141; --color-neutral-900:#2d2b2b;
+  --color-accent-100:#fff2ef; --color-accent-200:#ffe0d9; --color-accent-300:#ffc4b8;
+  --color-accent-400:#ff9783; --color-accent-500:#ff563c; --color-accent-600:#dd2b0f;
+  --color-accent-700:#ae1800; --color-accent-800:#7c1405; --color-accent-900:#4d170e;
+  --color-panel:#ffffff;
+  --color-scrim:color-mix(in srgb, #201e1d 45%, transparent);
+  --shadow-lg:0 12px 32px color-mix(in srgb,#2d2b2b 22%,transparent);
+  --font-sans:Archivo,Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --font-mono:ui-monospace,Menlo,monospace;
+  --radius:0;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--color-ground); color:var(--color-text); font-family:var(--font-sans);
+  font-size:12px; line-height:1.4; -webkit-font-smoothing:antialiased;
+}
+button{font-family:inherit;cursor:pointer}
+button:focus-visible, [tabindex]:focus-visible, a:focus-visible{
+  outline:2px solid var(--color-accent); outline-offset:2px;
+}
+.mono{font-family:var(--font-mono)}
+.hidden{display:none !important}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* ---- shell ---- */
+#app{display:flex;flex-direction:column;min-height:100vh}
+.topbar{
+  display:flex;align-items:center;gap:12px;padding:10px 16px;
+  background:var(--color-neutral-200);border-bottom:2px solid var(--color-text);position:relative;z-index:20;
+}
+.brand{font-weight:800;font-size:12px;letter-spacing:.06em;text-transform:uppercase}
+.obj-label{font-weight:600;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600)}
+.switcher-btn{
+  background:transparent;border:1px solid transparent;padding:5px 8px;font-weight:600;font-size:12px;
+  color:var(--color-text);display:flex;align-items:center;gap:6px;
+}
+.switcher-btn:hover,.switcher-btn.open{border-color:var(--color-text);background:#fff}
+.spacer{flex:1}
+.topbar-meta{font-family:var(--font-mono);font-size:10px;color:var(--color-neutral-600)}
+.switcher-panel{
+  position:absolute;top:100%;left:16px;width:540px;max-width:calc(100vw - 32px);background:#fff;
+  border:2px solid var(--color-text);box-shadow:var(--shadow-lg);z-index:30;
+}
+.switcher-header{padding:9px 12px;border-bottom:1px solid var(--color-divider);display:flex;justify-content:space-between;align-items:baseline}
+.switcher-header .t{font-weight:600;font-size:12px}
+.switcher-header .m{font-family:var(--font-mono);font-size:10px;color:var(--color-neutral-600)}
+.switcher-row{
+  width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-divider);
+  padding:9px 12px;display:flex;align-items:center;gap:9px;
+}
+.switcher-row:last-child{border-bottom:0}
+.switcher-row:hover{background:var(--color-accent-100)}
+.dot{width:8px;height:8px;flex:0 0 auto;background:var(--color-neutral-500)}
+.dot.current{background:var(--color-accent)}
+.switcher-row .body{flex:1;min-width:0}
+.switcher-row .title{font-weight:600;font-size:11.5px}
+.switcher-row .meta{font-family:var(--font-mono);font-size:10px;color:var(--color-neutral-600)}
+.badge{font-weight:600;font-size:10px;font-family:var(--font-mono);padding:2px 6px;border:1px solid var(--color-neutral-400)}
+.badge.hot{background:var(--color-accent);border-color:var(--color-accent);color:#fff}
+.switcher-footer{padding:8px 12px;font-size:10px;color:var(--color-neutral-600);border-top:1px solid var(--color-divider)}
+
+.countrow{display:flex;background:#fff;border-bottom:2px solid var(--color-text)}
+.countcell{flex:1;padding:9px 12px;border-right:1px solid var(--color-divider)}
+.countcell:last-child{border-right:0}
+.countcell .lbl{font-weight:600;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600);display:block;margin-bottom:2px}
+.countcell .num{font-weight:800;font-size:18px}
+.countcell .num.hot{color:var(--color-accent)}
+
+.tabs{display:flex;background:var(--color-neutral-200);border-bottom:2px solid var(--color-text)}
+.tab{
+  padding:10px 18px;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em;
+  background:none;border:0;border-right:1px solid var(--color-divider);color:var(--color-text);
+  display:flex;align-items:center;gap:8px;
+}
+.tab.active{background:var(--color-text);color:#fff}
+.tab .pill{font-weight:600;font-size:10px;font-family:var(--font-mono);padding:1px 5px;background:var(--color-accent);color:#fff}
+.tab-hint{margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--color-neutral-600);padding:0 14px;display:flex;align-items:center}
+
+.main{flex:1;display:flex;min-height:0}
+
+/* ---- needs-you tab ---- */
+.queue-layout{display:flex;flex:1;min-height:0}
+.queue-col{flex:1;padding:14px 16px;display:flex;flex-direction:column;gap:11px;min-width:0}
+.rail{width:300px;flex:0 0 auto;background:var(--color-neutral-100);border-left:2px solid var(--color-text)}
+
+.resume-block{border:2px solid var(--color-text);background:var(--color-neutral-100)}
+.resume-item{padding:9px 12px;border-bottom:1px solid var(--color-divider)}
+.resume-item:last-child{border-bottom:0}
+.resume-item .row1{display:flex;align-items:baseline;gap:9px}
+.chip{font-family:var(--font-mono);font-size:10px;font-weight:600;padding:2px 6px;border:1px solid var(--color-neutral-400);background:#fff}
+.chip.hi{background:var(--color-accent-100);border-color:var(--color-accent-400);color:var(--color-accent-800)}
+.mini{font-size:10px;color:var(--color-neutral-600)}
+.gate-ids{font-family:var(--font-mono);font-size:10px;color:var(--color-neutral-700);margin-top:4px}
+.prompt-block{
+  margin-top:7px;background:var(--color-text);color:#f3f2f2;padding:9px 10px;font-family:var(--font-mono);
+  font-size:10.5px;white-space:pre-wrap;word-break:break-word;
+}
+.acts{display:flex;gap:8px;margin-top:7px}
+.b{border:1px solid var(--color-text);background:#fff;padding:7px 12px;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.05em}
+.b.p{background:var(--color-text);color:#fff}
+.b.p.accent{background:var(--color-accent);border-color:var(--color-accent)}
+.b.g{background:#fff}
+.b.danger{border-color:var(--color-accent);color:var(--color-accent-800)}
+.b:disabled{opacity:.45;cursor:not-allowed}
+
+.id-copy{
+  border:1px solid var(--color-neutral-400);background:#fff;color:var(--color-neutral-700);
+  font-family:var(--font-mono);font-size:9px;line-height:1;padding:2px 4px;margin-left:2px;
+  cursor:pointer;flex:0 0 auto;
+}
+.id-copy:hover{border-color:var(--color-accent);color:var(--color-accent-800)}
+.id-copy.copied{border-color:var(--color-accent);background:var(--color-accent-100);color:var(--color-accent-800)}
+
+.live-note{padding:7px 2px;border-left:2px solid var(--color-divider);padding-left:9px;font-size:11px}
+
+.head-gate{border:2px solid var(--color-accent);background:#fff}
+.head-gate .hdr{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--color-divider)}
+.type-chip{background:var(--color-accent);color:#fff;font-weight:600;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;padding:3px 7px}
+.head-gate .id{font-family:var(--font-mono);font-size:11px;font-weight:600}
+.head-gate .waiting{margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--color-neutral-600)}
+.head-gate .body{padding:12px}
+.head-gate .title{font-weight:600;font-size:14.5px;text-wrap:pretty;margin:0 0 8px}
+.held-by{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.wf-lbl{font-weight:600;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600)}
+.key{font-family:var(--font-mono);font-weight:600;font-size:11px}
+.evidence-hint{font-family:var(--font-mono);font-size:10px;color:var(--color-neutral-700);margin-bottom:10px}
+
+.gate-row{
+  width:100%;text-align:left;display:flex;align-items:center;gap:10px;border:1px solid var(--color-neutral-400);
+  background:#fff;padding:10px 12px;font-size:12px;cursor:pointer;
+}
+.gate-row:hover{border-color:var(--color-accent)}
+.gate-row .title{font-weight:600;font-size:12px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gate-row .meta{font-family:var(--font-mono);font-size:10px;color:var(--color-neutral-600);flex:0 0 auto}
+
+.empty-state{padding:40px 12px;text-align:center}
+.empty-state .lbl{font-weight:600;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600);display:block;margin-bottom:6px}
+.empty-state .big{font-weight:800;font-size:16px;margin-bottom:10px}
+
+.rail-section{padding:11px 12px;border-bottom:1px solid var(--color-divider);display:flex;flex-direction:column;gap:7px}
+.rail-header{font-weight:600;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;display:flex;justify-content:space-between;color:var(--color-neutral-700)}
+.rail-value{font-weight:600;font-size:12px}
+.rail-note{color:var(--color-neutral-600)}
+.actor-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.kv-grid{display:grid;grid-template-columns:104px 1fr;row-gap:3px;font-family:var(--font-mono);font-size:10.5px}
+.decision-line{font-size:10.5px}
+.decision-line .age{color:var(--color-neutral-600);font-family:var(--font-mono)}
+
+/* ---- board ---- */
+.board-banner{background:var(--color-neutral-200);border-bottom:2px solid var(--color-text);padding:10px 16px}
+.board-banner b{font-weight:800}
+.board-banner .note{color:var(--color-neutral-700);margin-left:8px}
+.board{flex:1;display:flex;overflow-x:auto}
+.board-col{flex:1;min-width:200px;border-right:1px solid var(--color-divider)}
+.board-col:last-child{border-right:0}
+.board-col-hdr{display:flex;justify-content:space-between;padding:8px 10px;border-bottom:2px solid var(--color-text);font-weight:600;font-size:11px;text-transform:uppercase}
+.board-col-hdr .n{font-family:var(--font-mono);font-size:10px}
+.board-col-body{padding:10px;display:flex;flex-direction:column;gap:10px}
+.card{
+  width:100%;text-align:left;background:#fff;border:1px solid var(--color-neutral-400);padding:9px 10px;
+  display:flex;flex-direction:column;gap:6px;cursor:pointer;
+}
+.card:hover{border-color:var(--color-accent)}
+.card.dimmed{opacity:.62}
+.card .row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.card .cid{font-family:var(--font-mono);font-weight:600;font-size:9.5px}
+.pri-chip{font-family:var(--font-mono);font-size:9px;padding:1px 5px;border:1px dashed var(--color-neutral-400)}
+.pri-chip.urgent{background:var(--color-accent-100);border:1px solid var(--color-accent-400);color:var(--color-accent-800)}
+.card .title{font-weight:600;font-size:11.5px}
+.card .meta{font-family:var(--font-mono);font-size:10px;color:var(--color-neutral-600)}
+.card .blocker{font-family:var(--font-mono);font-size:10px;color:var(--color-accent-800);border-left:2px solid var(--color-accent);padding-left:6px}
+.prog-wrap{display:flex;align-items:center;gap:6px}
+.prog-bar{flex:1;height:3px;background:var(--color-neutral-300)}
+.prog-bar > i{display:block;height:100%;background:var(--color-neutral-800)}
+
+/* ---- drawer ---- */
+.scrim{position:fixed;inset:0;background:var(--color-scrim);z-index:40}
+.drawer{
+  position:fixed;top:0;right:0;bottom:0;width:560px;max-width:100vw;background:#fff;
+  border-left:2px solid var(--color-text);box-shadow:var(--shadow-lg);z-index:41;
+  display:flex;flex-direction:column;
+}
+.drawer-hdr{background:var(--color-neutral-200);border-bottom:2px solid var(--color-text);padding:12px}
+.drawer-hdr .row1{display:flex;align-items:center;gap:8px}
+.drawer-hdr .title{font-weight:600;font-size:15px;margin:8px 0 4px}
+.drawer-hdr .sub{font-family:var(--font-mono);font-size:10px;color:var(--color-neutral-600)}
+.close-btn{margin-left:auto;width:26px;height:26px;border:1px solid var(--color-text);background:#fff;font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center}
+.drawer-body{flex:1;overflow-y:auto}
+.drawer-section{padding:12px;border-bottom:1px solid var(--color-divider)}
+.drawer-section:last-child{border-bottom:0}
+.section-lbl{font-weight:600;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600);margin-bottom:6px}
+.ask-panel{background:var(--color-accent-200);padding:10px;font-size:12px;color:var(--color-accent-800)}
+.evidence-block{border:1px solid var(--color-neutral-300);background:var(--color-neutral-100);padding:10px;font-family:var(--font-mono);font-size:10.5px;white-space:pre-wrap;word-break:break-word;max-height:280px;overflow:auto}
+.diff-line{white-space:pre-wrap;word-break:break-word}
+.diff-line.added{background:var(--color-accent-100);color:var(--color-accent-800)}
+.diff-line.removed{color:var(--color-neutral-600);text-decoration:line-through}
+.criteria-row{display:flex;gap:8px;align-items:baseline;margin-bottom:3px}
+.criteria-row .mark{font-family:var(--font-mono);font-weight:600}
+.criteria-row .mark.pass{color:var(--color-accent-800)}
+.fact-grid{display:grid;grid-template-columns:104px 1fr;row-gap:5px;font-family:var(--font-mono);font-size:10.5px}
+.dep-row,.act-row{display:flex;gap:8px;font-size:10.5px;padding:3px 0;border-bottom:1px solid var(--color-divider)}
+.dep-row:last-child,.act-row:last-child{border-bottom:0}
+.dep-row .rel,.act-row .age{color:var(--color-neutral-600);font-family:var(--font-mono);flex:0 0 auto}
+.drawer-footer{background:var(--color-neutral-100);border-top:2px solid var(--color-text);padding:12px}
+.readonly-note{display:flex;align-items:center;gap:10px}
+
+.live-region{position:absolute;width:1px;height:1px;overflow:hidden}
+
+@media (max-width:900px){
+  .drawer{width:100vw}
+  .rail{display:none}
+  .board{flex-direction:column}
+  .board-col{border-right:0;border-bottom:2px solid var(--color-text)}
+}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="live-region" class="live-region" aria-live="polite"></div>
+<script>
+(function(){
+"use strict";
+
+/* ------------------------------------------------------------------------------------
+ * State. Per the spec's State table: everything here is browser-owned UI state; every
+ * fact about queue order, blockers, liveness and allowed decisions comes straight from
+ * the server payload and is never recomputed client-side.
+ * ---------------------------------------------------------------------------------- */
+var S = {
+  tab: null,                 // "queue" | "board" — null until the first snapshot decides it
+  objectiveId: null,
+  switcherOpen: false,
+  selection: null,           // {kind:"gate"|"item", id, gateKind?, objectiveId?}
+  drawerData: null,          // loaded GateDetail or itemDetail
+  drawerLoading: false,
+  resolvedGates: {},          // gate key -> {actorId, lastCallAt}, recorded when a gate that was
+                               // present in the previous poll's snapshot is gone from the next one
+                               // (resolved elsewhere, in an agent session) — feeds the Resume block.
+  dismissedResume: {},        // actor id -> true
+  copied: {},                 // prompt key -> true (flips button label)
+  cursor: 0,
+  snapshot: null,
+  objectives: null,
+  frozenGateOrder: null,      // captured when the drawer opens; queue keeps this order until it closes
+  backoffMs: 2000,
+  pollTimer: null,
+  loadError: null,
+};
+
+function api(path){
+  return fetch(path, {credentials: "same-origin"}).then(function(r){
+    if (!r.ok) { return r.text().then(function(t){ throw new Error(t || r.statusText); }); }
+    return r.json();
+  });
+}
+
+function gateKey(kind, id){ return kind + "/" + id; }
+
+function announce(text){
+  var el = document.getElementById("live-region");
+  el.textContent = "";
+  window.setTimeout(function(){ el.textContent = text; }, 30);
+}
+
+/* ------------------------------------------------------------------------------------
+ * Bootstrapping and polling.
+ * ---------------------------------------------------------------------------------- */
+function boot(){
+  api("/dashboard/api/v1/objectives").then(function(resp){
+    S.objectives = resp;
+    var params = new URLSearchParams(window.location.search);
+    S.objectiveId = params.get("objective_id") || null;
+    return loadLoop();
+  }).catch(function(err){
+    S.loadError = String(err.message || err);
+    render();
+  });
+}
+
+function loadLoop(){
+  var qs = S.objectiveId ? ("?objective_id=" + encodeURIComponent(S.objectiveId)) : "";
+  return api("/dashboard/api/v1/loop" + qs).then(function(snap){
+    applySnapshot(snap);
+    schedulePoll();
+  }).catch(function(err){
+    S.loadError = String(err.message || err);
+    render();
+    schedulePoll();
+  });
+}
+
+function applySnapshot(snap){
+  // A gate present in the outgoing snapshot but gone from the new one was resolved
+  // somewhere outside this page (an agent session ran the mutation) — that's the moment
+  // to surface a Resume nudge for the actor who held it, if they've gone dormant since.
+  if (S.snapshot) {
+    var newKeys = {};
+    (snap.gates || []).forEach(function(g){ newKeys[gateKey(g.kind, g.id)] = true; });
+    (S.snapshot.gates || []).forEach(function(g){
+      var k = gateKey(g.kind, g.id);
+      if (!newKeys[k] && !S.resolvedGates[k]) {
+        S.resolvedGates[k] = {actorId: g.actor.id || "-", lastCallAt: g.actor.last_call_at};
+      }
+    });
+  }
+
+  S.loadError = null;
+  S.objectiveId = snap.objective.id;
+  S.snapshot = snap;
+  S.cursor = snap.cursor;
+  if (S.tab === null) {
+    S.tab = (snap.gates && snap.gates.length > 0) ? "queue" : "board";
+  }
+  if (!S.selection) { S.frozenGateOrder = null; }
+
+  // An actor's next tool call landing clears their resolved-gate entries and dismissal on
+  // its own, per spec ("should vanish on their own when that actor's next tool call lands").
+  var actorsNow = {};
+  ((snap.glance && snap.glance.actors) || []).forEach(function(a){ actorsNow[a.id] = a; });
+  Object.keys(S.resolvedGates).forEach(function(k){
+    var r = S.resolvedGates[k];
+    var a = actorsNow[r.actorId];
+    if (a && a.last_call_at && r.lastCallAt && new Date(a.last_call_at).getTime() > new Date(r.lastCallAt).getTime()) {
+      delete S.resolvedGates[k];
+      delete S.dismissedResume[r.actorId];
+    }
+  });
+
+  render();
+}
+
+function schedulePoll(){
+  if (S.pollTimer) window.clearTimeout(S.pollTimer);
+  S.pollTimer = window.setTimeout(pollOnce, S.backoffMs);
+}
+
+function pollOnce(){
+  var qs = "?objective_id=" + encodeURIComponent(S.objectiveId) + "&since=" + S.cursor;
+  api("/dashboard/api/v1/changes" + qs).then(function(resp){
+    S.backoffMs = 2000;
+    if (resp.changed) {
+      // Never reorder or replace the gate currently open in the drawer; queue reordering
+      // waits until the drawer closes (spec, Interactions & behavior).
+      if (S.selection && S.selection.kind === "gate" && !S.frozenGateOrder && S.snapshot) {
+        S.frozenGateOrder = S.snapshot.gates.map(function(g){ return gateKey(g.kind, g.id); });
+      }
+      var qs2 = "?objective_id=" + encodeURIComponent(S.objectiveId);
+      api("/dashboard/api/v1/loop" + qs2).then(function(snap){ applySnapshot(snap); schedulePoll(); })
+        .catch(function(){ schedulePoll(); });
+      return;
+    }
+    schedulePoll();
+  }).catch(function(){
+    S.backoffMs = Math.min(15000, S.backoffMs * 1.5 + 1000);
+    schedulePoll();
+  });
+}
+
+function retryNow(){ S.backoffMs = 2000; pollOnce(); }
+
+/* ------------------------------------------------------------------------------------
+ * ID-copy affordance. A small button next to every human-facing id (board card, gate
+ * row/drawer, item drawer) that copies just that id to the clipboard — the fast path for
+ * "paste this id into an agent session and ask what's up with it". Feedback is applied
+ * directly to the clicked button (no S mutation, no re-render) so it doesn't interact
+ * with polling/drawer state at all.
+ * ---------------------------------------------------------------------------------- */
+function idCopyBtn(id){
+  return "<button type=\"button\" class=\"id-copy\" data-copy-id=\"" + esc(id) + "\" title=\"Copy ID\" aria-label=\"Copy ID " + esc(id) + "\">⧉</button>";
+}
+function wireIdCopyButtons(){
+  document.querySelectorAll("[data-copy-id]").forEach(function(btn){
+    btn.addEventListener("click", function(e){
+      e.stopPropagation();
+      var id = btn.getAttribute("data-copy-id");
+      var flip = function(){
+        btn.textContent = "✓"; btn.classList.add("copied");
+        announce("Copied " + id + " to clipboard.");
+        window.setTimeout(function(){ btn.textContent = "⧉"; btn.classList.remove("copied"); }, 1200);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(id).then(flip).catch(function(){ fallbackCopy(id); flip(); });
+      } else {
+        fallbackCopy(id); flip();
+      }
+    });
+  });
+}
+
+/* ------------------------------------------------------------------------------------
+ * Resume-nudge prompt. ADR 0027 / the read-only decision: this dashboard never decides
+ * anything itself and never POSTs a mutation. Every actual decision (approve/reject/
+ * waive/pause/…) happens in an agent session, outside this page. The one prompt this
+ * page still offers is a no-decision-content nudge for a now-dormant actor whose held
+ * gate(s) were resolved elsewhere, telling it to call `get_changes` and continue.
+ * ---------------------------------------------------------------------------------- */
+function resumePrompt(actorId, workspaceId){
+  return [
+    "The decisions you were waiting on have been recorded.",
+    "Call `get_changes` on workspace " + JSON.stringify(workspaceId) + " as actor " + JSON.stringify(actorId) + " and continue your work from there.",
+  ].join("\n");
+}
+
+function copyText(key, text){
+  var done = function(){ S.copied[key] = true; render(); announce("Prompt copied to clipboard."); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(function(){ fallbackCopy(text); done(); });
+  } else {
+    fallbackCopy(text); done();
+  }
+}
+function fallbackCopy(text){
+  var ta = document.createElement("textarea");
+  ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); } catch (e) {}
+  document.body.removeChild(ta);
+}
+
+/* ------------------------------------------------------------------------------------
+ * Rendering. Plain string-templated innerHTML re-render on every state change — no
+ * framework, no virtual DOM, matching the spec's "vanilla, no UI framework" instruction
+ * at the scale an MVP dashboard needs.
+ * ---------------------------------------------------------------------------------- */
+function esc(s){
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c];
+  });
+}
+
+function render(){
+  var app = document.getElementById("app");
+  if (S.loadError && !S.snapshot) {
+    app.innerHTML = renderFatalError();
+    wireFatalError();
+    return;
+  }
+  if (!S.snapshot) { app.innerHTML = "<div style=\"padding:24px\">Loading…</div>"; return; }
+
+  var html = "";
+  html += renderTopBar();
+  html += renderCountRow();
+  html += renderTabs();
+  html += "<div class=\"main\">";
+  html += S.tab === "board" ? renderBoard() : renderQueue();
+  html += "</div>";
+  if (S.selection) html += renderDrawer();
+
+  app.innerHTML = html;
+  wireApp();
+}
+
+function renderFatalError(){
+  return "<div style=\"padding:32px;max-width:520px\">" +
+    "<div class=\"empty-state\"><span class=\"lbl\">Could not load the dashboard</span>" +
+    "<div class=\"big\">" + esc(S.loadError) + "</div>" +
+    "<button class=\"b p\" id=\"retry-fatal\">Retry</button></div></div>";
+}
+function wireFatalError(){
+  var btn = document.getElementById("retry-fatal");
+  if (btn) btn.addEventListener("click", boot);
+}
+
+function renderTopBar(){
+  var snap = S.snapshot;
+  var actorId = (S.objectives && S.objectives.actor_id) || "-";
+  var meta = "phase " + esc(snap.objective.phase) + " · actor " + esc(actorId) + " · " + esc(snap.objective.workspace_path);
+  var html = "<div class=\"topbar\">";
+  html += "<span class=\"brand\">Throughline</span>";
+  html += "<span class=\"obj-label\">objective</span>";
+  html += "<button class=\"switcher-btn" + (S.switcherOpen ? " open" : "") + "\" id=\"switcher-btn\">" +
+          esc(snap.objective.title) + " <span>" + (S.switcherOpen ? "▲" : "▼") + "</span></button>";
+  html += "<span class=\"spacer\"></span>";
+  html += "<span class=\"topbar-meta\">" + meta + "</span>";
+  html += "</div>";
+  if (S.switcherOpen && S.objectives) html += renderSwitcherPanel();
+  return html;
+}
+
+function renderSwitcherPanel(){
+  var objs = (S.objectives.objectives || []).slice().sort(function(a,b){ return b.gate_count - a.gate_count; });
+  var html = "<div class=\"switcher-panel\" role=\"dialog\" aria-label=\"Switch objective\">";
+  html += "<div class=\"switcher-header\"><span class=\"t\">Switch objective</span>" +
+          "<span class=\"m\">" + esc(S.objectives.workspace_path) + " · " + objs.length + " objective(s)</span></div>";
+  objs.forEach(function(o){
+    var badge = o.gate_count > 0 ? "<span class=\"badge hot\">" + o.gate_count + " need you</span>" :
+                (o.phase === "completed" || o.phase === "cancelled" ? "<span class=\"badge\">closed</span>" : "<span class=\"badge\">clear</span>");
+    html += "<button class=\"switcher-row\" data-objective=\"" + esc(o.id) + "\">" +
+      "<span class=\"dot" + (o.current ? " current" : "") + "\"></span>" +
+      "<span class=\"body\"><span class=\"title\">" + esc(o.title) + "</span>" +
+      "<span class=\"meta mono\">" + esc(o.id) + " · phase " + esc(o.phase) + " · " + o.item_count + " items</span></span>" +
+      badge + "</button>";
+  });
+  html += "<div class=\"switcher-footer\">Switching reloads the snapshot; gates on the objective you leave stay open.</div>";
+  html += "</div>";
+  return html;
+}
+
+function renderCountRow(){
+  var c = S.snapshot.counts;
+  var cells = [
+    ["needs you", c.needs_you, c.needs_you > 0],
+    ["proposed", c.proposed, false],
+    ["ready", c.ready, false],
+    ["in progress", c.in_progress, false],
+    ["in review", c.in_review, false],
+    ["accepted", c.accepted, false],
+    ["dormant actors", c.dormant_actors, false],
+  ];
+  var html = "<div class=\"countrow\">";
+  cells.forEach(function(cell){
+    html += "<div class=\"countcell\"><span class=\"lbl\">" + cell[0] + "</span>" +
+      "<span class=\"num" + (cell[2] ? " hot" : "") + "\">" + cell[1] + "</span></div>";
+  });
+  html += "</div>";
+  return html;
+}
+
+function renderTabs(){
+  var n = S.snapshot.gates.length;
+  var hint = S.tab === "queue" ? "click any gate to read the evidence" : "read-only · agents own status";
+  var html = "<div class=\"tabs\">";
+  html += "<button class=\"tab" + (S.tab === "queue" ? " active" : "") + "\" data-tab=\"queue\">Needs you" +
+    (n > 0 ? " <span class=\"pill\">" + n + "</span>" : "") + "</button>";
+  html += "<button class=\"tab" + (S.tab === "board" ? " active" : "") + "\" data-tab=\"board\">Board</button>";
+  html += "<span class=\"tab-hint\">" + hint + "</span>";
+  html += "</div>";
+  return html;
+}
+
+/* ---- Needs you tab ---- */
+function renderQueue(){
+  var snap = S.snapshot;
+  var open = S.frozenGateOrder ? reorderByFrozen(snap.gates, S.frozenGateOrder) : snap.gates;
+
+  var html = "<div class=\"queue-layout\"><div class=\"queue-col\">";
+  // Resume/live-actor notes are keyed off S.resolvedGates (gates that vanished from the
+  // snapshot between polls), not off what's still open, so they render even once the queue
+  // itself has fully drained — that's exactly the moment a human needs to be told to nudge
+  // the now-dormant actor whose last gate just got resolved in a session elsewhere.
+  html += renderResumeAndLiveNotes();
+  if (open.length === 0) {
+    html += renderEmptyQueue();
+  } else {
+    html += renderHeadGate(open[0]);
+    if (open.length > 1) html += renderRemainingGates(open.slice(1));
+  }
+  html += "</div>";
+  html += "<div class=\"rail\">" + renderGlance() + "</div>";
+  html += "</div>";
+  return html;
+}
+
+function reorderByFrozen(gates, order){
+  var byKey = {};
+  gates.forEach(function(g){ byKey[gateKey(g.kind, g.id)] = g; });
+  var out = [];
+  order.forEach(function(k){ if (byKey[k]) { out.push(byKey[k]); delete byKey[k]; } });
+  Object.keys(byKey).forEach(function(k){ out.push(byKey[k]); }); // newly-arrived gates go last
+  return out;
+}
+
+function renderEmptyQueue(){
+  return "<div class=\"empty-state\"><span class=\"lbl\">Nothing blocking, nobody waiting</span>" +
+    "<div class=\"big\">Queue is clear</div>" +
+    "<button class=\"b p\" id=\"look-at-board\">Look at the board</button></div>";
+}
+
+// A dormant actor whose resolved gates aren't dismissed yet gets a Resume block, one per
+// actor. A live actor whose gates were resolved gets a note only — it already knows.
+function renderResumeAndLiveNotes(){
+  var actorsNow = {};
+  ((S.snapshot.glance && S.snapshot.glance.actors) || []).forEach(function(a){ actorsNow[a.id] = a; });
+
+  var resolvedByActor = {}; // actorId -> [{gateId, lastCallAt}]
+  Object.keys(S.resolvedGates).forEach(function(k){
+    var r = S.resolvedGates[k];
+    (resolvedByActor[r.actorId] = resolvedByActor[r.actorId] || []).push({gateId: k, lastCallAt: r.lastCallAt});
+  });
+  var html = "";
+  var dormantBlocks = [];
+  var liveNotes = [];
+  Object.keys(resolvedByActor).forEach(function(actorId){
+    if (S.dismissedResume[actorId]) return;
+    var gs = resolvedByActor[actorId];
+    var a = actorsNow[actorId];
+    var live = a ? a.live : false;
+    var lastCallAt = a ? a.last_call_at : gs[0].lastCallAt;
+    if (live) { liveNotes.push({actorId: actorId, count: gs.length, seen: lastCallAt}); }
+    else { dormantBlocks.push({actorId: actorId, gates: gs, lastCallAt: lastCallAt}); }
+  });
+  if (dormantBlocks.length > 0) {
+    html += "<div class=\"resume-block\">";
+    html += "<div style=\"padding:9px 12px;border-bottom:1px solid var(--color-divider);display:flex;align-items:center;gap:9px\">" +
+      "<span class=\"wf-lbl\">Resume</span><span class=\"mini\">decisions are recorded — these actors are not listening</span></div>";
+    dormantBlocks.forEach(function(b){
+      var key = "resume/" + b.actorId;
+      var copied = !!S.copied[key];
+      var prompt = resumePrompt(b.actorId, S.snapshot.objective.workspace_path);
+      html += "<div class=\"resume-item\">" +
+        "<div class=\"row1\"><span class=\"key\">" + esc(b.actorId) + "</span>" +
+        "<span class=\"chip\">" + b.gates.length + "</span><span class=\"spacer\"></span>" +
+        "<span class=\"mini\">last call " + ageOf(b.lastCallAt) + "</span></div>" +
+        "<div class=\"gate-ids\">" + b.gates.map(function(g){ return esc(g.gateId); }).join(", ") + "</div>" +
+        "<div class=\"prompt-block\">" + esc(prompt) + "</div>" +
+        "<div class=\"acts\">" +
+        "<button class=\"b p\" data-copy-resume=\"" + esc(b.actorId) + "\">" + (copied ? "✓ Copied" : "Copy prompt") + "</button>" +
+        "<button class=\"b g\" data-dismiss-resume=\"" + esc(b.actorId) + "\">Pasted — dismiss</button>" +
+        "</div></div>";
+    });
+    html += "</div>";
+  }
+  liveNotes.forEach(function(n){
+    html += "<div class=\"live-note\">" + n.count + " recorded · session live, last call " + ageOf(n.seen) + " · no prompt needed</div>";
+  });
+  return html;
+}
+
+function renderHeadGate(gate){
+  var live = gate.actor.live;
+  var liveChip = live ? "<span class=\"chip\">session live</span>" : "<span class=\"chip hi\">dormant " + ageOf(gate.actor.last_call_at) + "</span>";
+  var html = "<div class=\"head-gate\">";
+  html += "<div class=\"hdr\"><span class=\"type-chip\">" + esc(gate.kind) + "</span>" +
+    "<span class=\"id\">" + esc(gate.id) + "</span>" + idCopyBtn(gate.id) +
+    "<span class=\"waiting\">waiting " + esc(gate.waiting_label) + "</span></div>";
+  html += "<div class=\"body\">";
+  html += "<div class=\"title\">" + esc(gate.title) + "</div>";
+  html += "<div class=\"held-by\"><span class=\"wf-lbl\">held by</span><span class=\"key\">" + esc(gate.actor.id || "-") + "</span>" +
+    "<span class=\"mini\">last call " + ageOf(gate.actor.last_call_at) + "</span>" + liveChip + "</div>";
+  if (gate.evidence_hint) html += "<div class=\"evidence-hint\">" + esc(gate.evidence_hint) + "</div>";
+  html += "<div class=\"acts\">";
+  html += "<button class=\"b p accent\" data-open-gate=\"" + esc(gateKey(gate.kind, gate.id)) + "\">Review →</button>";
+  html += "</div></div></div>";
+  return html;
+}
+
+function renderRemainingGates(gates){
+  var html = "<div style=\"display:flex;flex-direction:column;gap:8px\">";
+  gates.forEach(function(g){
+    html += "<div class=\"gate-row\" role=\"button\" tabindex=\"0\" data-open-gate=\"" + esc(gateKey(g.kind, g.id)) + "\">" +
+      "<span class=\"type-chip\" style=\"background:var(--color-neutral-700)\">" + esc(g.kind) + "</span>" +
+      "<span class=\"key\">" + esc(g.id) + "</span>" + idCopyBtn(g.id) +
+      "<span class=\"title\">" + esc(g.title) + "</span>" +
+      "<span class=\"meta\">" + esc(g.actor.id || "-") + " · " + esc(g.waiting_label) + "</span>" +
+      "</div>";
+  });
+  html += "</div>";
+  return html;
+}
+
+function renderGlance(){
+  var g = S.snapshot.glance;
+  var html = "<div class=\"rail-section\"><div class=\"rail-header\"><span>Objective at a glance</span><span>cursor " + S.snapshot.cursor + "</span></div></div>";
+  html += "<div class=\"rail-section\"><div class=\"rail-header\">Phase</div><div class=\"rail-value\">" + esc(g.phase) + "</div><div class=\"rail-note\">" + esc(g.phase_note) + "</div></div>";
+  html += "<div class=\"rail-section\"><div class=\"rail-header\">Actors</div>";
+  (g.actors || []).forEach(function(a){
+    html += "<div class=\"actor-row\"><span class=\"key\">" + esc(a.id) + "</span>" +
+      (a.live ? "<span class=\"chip\">live " + ageOf(a.last_call_at) + "</span>" : "<span class=\"chip hi\">dormant " + ageOf(a.last_call_at) + "</span>") +
+      "</div>";
+  });
+  if (!g.actors || g.actors.length === 0) html += "<div class=\"rail-note\">No actor activity observed yet.</div>";
+  html += "</div>";
+  html += "<div class=\"rail-section\"><div class=\"rail-header\">Outputs</div><div class=\"kv-grid\">" +
+    "<span>accepted</span><span>" + g.outputs.accepted + "</span>" +
+    "<span>in review</span><span>" + g.outputs.in_review + "</span>" +
+    "<span>profiles</span><span>" + g.outputs.profiles + "</span>" +
+    "</div></div>";
+  html += "<div class=\"rail-section\"><div class=\"rail-header\">Recent decisions</div>";
+  (g.recent_decisions || []).forEach(function(d){
+    html += "<div class=\"decision-line\"><span class=\"age mono\">" + ageOf(d.at) + "</span> · " + esc(d.text) + "</div>";
+  });
+  if (!g.recent_decisions || g.recent_decisions.length === 0) html += "<div class=\"rail-note\">None recorded yet.</div>";
+  html += "</div>";
+  return html;
+}
+
+/* ---- Board tab ---- */
+function renderBoard(){
+  var html = "<div style=\"display:flex;flex-direction:column;flex:1;min-width:0\">";
+  html += "<div class=\"board-banner\"><b>Board</b><span class=\"note\">Status is agent-owned. Cards cannot be dragged — click a card to read it; to change its course, decide a gate.</span></div>";
+  html += "<div class=\"board\">";
+  (S.snapshot.columns || []).forEach(function(col){
+    html += "<div class=\"board-col\"><div class=\"board-col-hdr\"><span>" + esc(col.label) + "</span><span class=\"n\">" + col.count + "</span></div>";
+    html += "<div class=\"board-col-body\">";
+    (col.cards || []).forEach(function(card){ html += renderCard(card); });
+    html += "</div></div>";
+  });
+  html += "</div></div>";
+  return html;
+}
+
+function renderCard(card){
+  var priChip = card.priority === "urgent" ? "<span class=\"pri-chip urgent\">urgent</span>" :
+    (card.priority ? "<span class=\"pri-chip\">" + esc(card.priority) + "</span>" : "");
+  var openAttr = card.gate_id ? ("data-open-gate=\"" + esc(findGateKeyById(card.gate_id)) + "\"") : ("data-open-item=\"" + esc(card.item_id) + "\"");
+  var html = "<div class=\"card" + (card.dimmed ? " dimmed" : "") + "\" role=\"button\" tabindex=\"0\" " + openAttr + ">";
+  html += "<div class=\"row\"><span class=\"cid\">" + esc(card.id) + "</span>" + idCopyBtn(card.id) + "<span class=\"chip\">" + esc(card.kind) + "</span>" + priChip + "</div>";
+  html += "<div class=\"title\">" + esc(card.title) + "</div>";
+  html += "<div class=\"meta\">" + esc(card.meta_label) + "</div>";
+  if (card.blocker) html += "<div class=\"blocker\">" + esc(card.blocker.label) + "</div>";
+  if (card.progress) {
+    var pct = card.progress.total > 0 ? Math.round(100 * card.progress.passed / card.progress.total) : 0;
+    html += "<div class=\"prog-wrap\"><span class=\"mini mono\">crit " + card.progress.passed + "/" + card.progress.total + "</span>" +
+      "<span class=\"prog-bar\"><i style=\"width:" + pct + "%\"></i></span></div>";
+  }
+  html += "</div>";
+  return html;
+}
+
+function findGateKeyById(id){
+  var g = (S.snapshot.gates || []).find(function(x){ return x.id === id; });
+  return g ? gateKey(g.kind, g.id) : "";
+}
+
+/* ---- Drawer ---- */
+function renderDrawer(){
+  var html = "<div class=\"scrim\" id=\"drawer-scrim\"></div>";
+  html += "<div class=\"drawer\" role=\"dialog\" aria-modal=\"true\" aria-label=\"Detail\">";
+  if (S.drawerLoading || !S.drawerData) {
+    html += "<div class=\"drawer-hdr\"><div class=\"row1\"><button class=\"close-btn\" id=\"drawer-close\">✕</button></div></div>";
+    html += "<div class=\"drawer-body\"><div style=\"padding:16px\">Loading…</div></div>";
+  } else if (S.selection.kind === "gate") {
+    html += renderGateDrawer(S.drawerData);
+  } else {
+    html += renderItemDrawer(S.drawerData);
+  }
+  html += "</div>";
+  return html;
+}
+
+function renderGateDrawer(detail){
+  var gate = detail.gate;
+  var html = "<div class=\"drawer-hdr\">";
+  html += "<div class=\"row1\"><span class=\"type-chip\">" + esc(gate.kind) + "</span><span class=\"id\">" + esc(gate.id) + "</span>" + idCopyBtn(gate.id) +
+    "<button class=\"close-btn\" id=\"drawer-close\" aria-label=\"Close\">✕</button></div>";
+  html += "<div class=\"title\">" + esc(gate.title) + "</div>";
+  html += "<div class=\"sub\">" + esc(gate.actor.id || "-") + " · waiting " + esc(gate.waiting_label) + " · target " + esc(gate.target_id) + "</div>";
+  html += "</div>";
+  html += "<div class=\"drawer-body\">";
+  html += "<div class=\"drawer-section\"><div class=\"section-lbl\">What is being asked</div><div class=\"ask-panel\">" + esc(detail.ask) + "</div></div>";
+  html += "<div class=\"drawer-section\"><div class=\"section-lbl\">Evidence</div>";
+  if (detail.evidence.meta) html += "<div class=\"mini\" style=\"margin-bottom:6px\">" + esc(detail.evidence.meta) + "</div>";
+  html += renderEvidence(detail.evidence);
+  html += "</div>";
+  html += "<div class=\"drawer-section\"><div class=\"section-lbl\">Facts</div><div class=\"fact-grid\">";
+  (detail.facts || []).forEach(function(f){ html += "<span>" + esc(f.label) + "</span><span>" + esc(f.value || "-") + "</span>"; });
+  html += "</div></div>";
+  if (detail.dependencies && detail.dependencies.length) {
+    html += "<div class=\"drawer-section\"><div class=\"section-lbl\">Dependencies</div>";
+    detail.dependencies.forEach(function(d){ html += "<div class=\"dep-row\"><span class=\"rel\">" + esc(d.relation) + "</span><span>" + esc(d.target) + "</span><span class=\"mini\">" + esc(d.state) + "</span></div>"; });
+    html += "</div>";
+  }
+  html += "<div class=\"drawer-section\"><div class=\"section-lbl\">Activity</div>";
+  if (detail.activity && detail.activity.length) {
+    detail.activity.forEach(function(a){ html += "<div class=\"act-row\"><span class=\"age\">" + esc(a.age) + "</span><span>" + esc(a.event) + "</span><span class=\"mini\">" + esc(a.actor || "-") + "</span></div>"; });
+  } else {
+    html += "<div class=\"mini\">No recent activity recorded.</div>";
+  }
+  html += "</div>";
+  html += "</div>";
+  html += renderGateFooter(gate);
+  return html;
+}
+
+function renderEvidence(ev){
+  if (ev.kind === "diff") {
+    var lines = (ev.diff || []).map(function(l){
+      var prefix = l.kind === "added" ? "+ " : (l.kind === "removed" ? "- " : "  ");
+      return "<div class=\"diff-line " + l.kind + "\">" + esc(prefix + l.text) + "</div>";
+    }).join("");
+    return "<div class=\"evidence-block\">" + (lines || "<span class=\"mini\">No prior revision to diff against.</span>") + "</div>";
+  }
+  if (ev.kind === "criteria") {
+    var rows = (ev.criteria || []).map(function(c){
+      return "<div class=\"criteria-row\"><span class=\"mark" + (c.passed ? " pass" : "") + "\">" + (c.passed ? "✓" : "·") + "</span><span>" + esc(c.text) + " <span class=\"mini\">(" + esc(c.status) + ")</span></span></div>";
+    }).join("");
+    return "<div class=\"evidence-block\">" + (rows || "<span class=\"mini\">No acceptance criteria defined.</span>") + "</div>";
+  }
+  return "<div class=\"evidence-block\">" + esc(ev.text || "-") + "</div>";
+}
+
+function renderGateFooter(gate){
+  var html = "<div class=\"drawer-footer\">";
+  html += "<div class=\"readonly-note\"><span class=\"badge\">read-only</span>" +
+    "<span class=\"mini\">This dashboard only shows what's being asked. Resolve it in an agent session — Throughline records the decision when the agent calls the matching MCP tool.</span></div>";
+  html += "</div>";
+  return html;
+}
+
+function renderItemDrawer(detail){
+  var wi = detail.work_item;
+  var html = "<div class=\"drawer-hdr\">";
+  html += "<div class=\"row1\"><span class=\"type-chip\" style=\"background:var(--color-neutral-700)\">" + esc(wi.kind) + "</span><span class=\"id\">" + esc(wi.key) + "</span>" + idCopyBtn(wi.key) +
+    "<button class=\"close-btn\" id=\"drawer-close\" aria-label=\"Close\">✕</button></div>";
+  html += "<div class=\"title\">" + esc(wi.title) + "</div>";
+  html += "<div class=\"sub\">" + esc(wi.execution_status) + " · " + esc(wi.commitment_state) + "</div>";
+  html += "</div>";
+  html += "<div class=\"drawer-body\">";
+  if (wi.description) html += "<div class=\"drawer-section\"><div class=\"section-lbl\">Description</div><div>" + esc(wi.description) + "</div></div>";
+  if (detail.acceptance_criteria && detail.acceptance_criteria.length) {
+    html += "<div class=\"drawer-section\"><div class=\"section-lbl\">Acceptance criteria</div>";
+    detail.acceptance_criteria.forEach(function(c){
+      html += "<div class=\"criteria-row\"><span class=\"mark" + (c.status === "satisfied" ? " pass" : "") + "\">" + (c.status === "satisfied" ? "✓" : "·") + "</span><span>" + esc(c.text) + "</span></div>";
+    });
+    html += "</div>";
+  }
+  html += "<div class=\"drawer-section\"><div class=\"section-lbl\">Facts</div><div class=\"fact-grid\">" +
+    "<span>target</span><span>" + esc(wi.id) + "</span>" +
+    "<span>version</span><span>" + wi.version + "</span>" +
+    "<span>priority</span><span>" + esc(wi.priority) + "</span>" +
+    "<span>attention state</span><span>" + esc(wi.attention_state) + "</span>" +
+    "<span>execution policy</span><span>" + esc(wi.execution_policy) + "</span>" +
+    "<span>objective</span><span>" + esc(wi.objective_id) + "</span>" +
+    "<span>claim</span><span>" + (detail.claim ? (esc(detail.claim.actor_id) + (detail.claim.expired ? " · expired" : " · ttl " + Math.max(0, detail.claim.seconds_remaining) + "s")) : "unclaimed") + "</span>" +
+    "</div></div>";
+  if ((detail.depends_on && detail.depends_on.length) || (detail.required_by && detail.required_by.length)) {
+    html += "<div class=\"drawer-section\"><div class=\"section-lbl\">Dependencies</div>";
+    (detail.depends_on || []).forEach(function(d){ html += "<div class=\"dep-row\"><span class=\"rel\">depends on</span><span>" + esc(d.title || d.item_id) + "</span><span class=\"mini\">" + esc(d.execution_status || "") + "</span></div>"; });
+    (detail.required_by || []).forEach(function(d){ html += "<div class=\"dep-row\"><span class=\"rel\">required by</span><span>" + esc(d.title || d.item_id) + "</span><span class=\"mini\">" + esc(d.execution_status || "") + "</span></div>"; });
+    html += "</div>";
+  }
+  if (detail.external_actions && detail.external_actions.length) {
+    html += "<div class=\"drawer-section\"><div class=\"section-lbl\">External actions</div>";
+    detail.external_actions.forEach(function(ea){
+      html += "<div style=\"margin-bottom:8px\"><div><b>" + esc(ea.title || ea.action_type) + "</b> <span class=\"mini\">(" + esc(ea.state) + ")</span></div>";
+      (ea.grants || []).forEach(function(g){
+        if (g.revoked) { html += "<div class=\"mini\">grant to " + esc(g.principal_actor_id) + " — revoked</div>"; return; }
+        html += "<div class=\"mini\">grant to " + esc(g.principal_actor_id) + " — active</div>";
+      });
+      html += "</div>";
+    });
+    html += "</div>";
+  }
+  html += "<div class=\"drawer-section\"><div class=\"section-lbl\">Activity</div>";
+  (detail.progress || []).slice(0, 4).forEach(function(p){
+    html += "<div class=\"act-row\"><span class=\"age\">" + ageOf(p.created_at) + "</span><span>" + esc(p.summary) + "</span><span class=\"mini\">" + esc(p.actor_id) + "</span></div>";
+  });
+  if (!detail.progress || detail.progress.length === 0) html += "<div class=\"mini\">No progress recorded yet.</div>";
+  html += "</div></div>";
+
+  html += "<div class=\"drawer-footer\">";
+  html += "<div class=\"readonly-note\"><span class=\"badge\">read-only</span>" +
+    "<span class=\"mini\">No open gate on this item. Status and progress are written by its actor.</span></div>";
+  html += "</div>";
+  return html;
+}
+
+/* ------------------------------------------------------------------------------------
+ * Helpers.
+ * ---------------------------------------------------------------------------------- */
+function ageOf(iso){
+  if (!iso) return "-";
+  var ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0) ms = 0;
+  var s = Math.floor(ms / 1000);
+  if (s < 60) return s + "s";
+  var m = Math.floor(s / 60);
+  if (m < 60) return m + "m";
+  var h = Math.floor(m / 60);
+  if (h < 24) return h + "h";
+  return Math.floor(h / 24) + "d";
+}
+
+/* ------------------------------------------------------------------------------------
+ * Event wiring. Re-wired after every render() since we re-render via innerHTML.
+ * ---------------------------------------------------------------------------------- */
+function wireApp(){
+  var switcherBtn = document.getElementById("switcher-btn");
+  if (switcherBtn) switcherBtn.addEventListener("click", function(){ S.switcherOpen = !S.switcherOpen; render(); });
+
+  document.querySelectorAll("[data-objective]").forEach(function(el){
+    el.addEventListener("click", function(){
+      S.objectiveId = el.getAttribute("data-objective");
+      S.switcherOpen = false;
+      S.tab = null;
+      S.selection = null;
+      window.history.replaceState(null, "", "?objective_id=" + encodeURIComponent(S.objectiveId));
+      loadLoop();
+    });
+  });
+
+  document.querySelectorAll("[data-tab]").forEach(function(el){
+    el.addEventListener("click", function(){ S.tab = el.getAttribute("data-tab"); render(); });
+  });
+
+  var lookBoard = document.getElementById("look-at-board");
+  if (lookBoard) lookBoard.addEventListener("click", function(){ S.tab = "board"; render(); });
+
+  document.querySelectorAll("[data-open-gate]").forEach(function(el){
+    el.addEventListener("click", function(){ openGate(el.getAttribute("data-open-gate")); });
+  });
+  document.querySelectorAll("[data-open-item]").forEach(function(el){
+    el.addEventListener("click", function(){ openItem(el.getAttribute("data-open-item")); });
+  });
+  // Board cards and remaining-gate rows are role="button" divs (a real <button> can't
+  // nest the id-copy button inside it), so they need their own Enter/Space activation —
+  // a native <button> like the head gate's "Review →" already gets this for free.
+  document.querySelectorAll("[role=\"button\"][data-open-gate], [role=\"button\"][data-open-item]").forEach(function(el){
+    el.addEventListener("keydown", function(e){
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); el.click(); }
+    });
+  });
+
+  wireIdCopyButtons();
+
+  document.querySelectorAll("[data-copy-resume]").forEach(function(el){
+    el.addEventListener("click", function(){
+      var actorId = el.getAttribute("data-copy-resume");
+      copyText("resume/" + actorId, resumePrompt(actorId, S.snapshot.objective.workspace_path));
+    });
+  });
+  document.querySelectorAll("[data-dismiss-resume]").forEach(function(el){
+    el.addEventListener("click", function(){
+      var actorId = el.getAttribute("data-dismiss-resume");
+      S.dismissedResume[actorId] = true;
+      render();
+    });
+  });
+
+  var scrim = document.getElementById("drawer-scrim");
+  if (scrim) scrim.addEventListener("click", closeDrawer);
+  var closeBtn = document.getElementById("drawer-close");
+  if (closeBtn) closeBtn.addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", onKeyDown);
+}
+
+function openGate(key){
+  var parts = key.split("/");
+  var kind = parts[0], id = parts.slice(1).join("/");
+  S.selection = {kind: "gate", id: id, gateKind: kind};
+  S.drawerData = null; S.drawerLoading = true;
+  S.frozenGateOrder = S.snapshot.gates.map(function(g){ return gateKey(g.kind, g.id); });
+  render();
+  var qs = "?kind=" + encodeURIComponent(kind) + "&id=" + encodeURIComponent(id) + "&objective_id=" + encodeURIComponent(S.objectiveId);
+  api("/dashboard/api/v1/gate" + qs).then(function(detail){
+    S.drawerData = detail; S.drawerLoading = false; render();
+  }).catch(function(){
+    S.drawerLoading = false; S.selection = null; render();
+  });
+}
+
+function openItem(id){
+  S.selection = {kind: "item", id: id};
+  S.drawerData = null; S.drawerLoading = true;
+  render();
+  api("/dashboard/api/v1/item?id=" + encodeURIComponent(id)).then(function(detail){
+    S.drawerData = detail; S.drawerLoading = false; render();
+  }).catch(function(){
+    S.drawerLoading = false; S.selection = null; render();
+  });
+}
+
+function closeDrawer(){
+  S.selection = null; S.drawerData = null;
+  S.frozenGateOrder = null;
+  render();
+}
+
+function onKeyDown(e){
+  if (e.key === "Escape" && S.selection) { closeDrawer(); }
+}
+
+boot();
+})();
+</script>
+</body>
+</html>

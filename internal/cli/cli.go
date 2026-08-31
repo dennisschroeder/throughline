@@ -25,6 +25,7 @@ import (
 	"github.com/dennisschroeder/throughline/internal/credential"
 	"github.com/dennisschroeder/throughline/internal/daemon"
 	"github.com/dennisschroeder/throughline/internal/daemonhttp"
+	"github.com/dennisschroeder/throughline/internal/dashboard"
 	"github.com/dennisschroeder/throughline/internal/hermesconfig"
 	"github.com/dennisschroeder/throughline/internal/launchd"
 	throughlinemcp "github.com/dennisschroeder/throughline/internal/mcp"
@@ -197,18 +198,60 @@ func runMCP(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 	defer workspaceRouter.Close()
 
 	resolvedVersion, _, _ := versionInfo()
+
+	// dashboardHub is the invalidation hub the MCP write path (via HandlerWithHub) fires
+	// into after every workspace-scoped write commits, and that the dashboard SSE handler
+	// subscribes to for push updates. See internal/dashboard for the read-only live
+	// dashboard surface this daemon also serves.
+	dashboardHub := dashboard.NewHub()
+	dashboardHandlers := dashboard.NewHandlers(dashboard.Config{
+		Router:       workspaceRouter,
+		Hub:          dashboardHub,
+		AllowedHosts: allowedHosts,
+		Logger:       slog.New(slog.NewJSONHandler(stderr, nil)),
+	})
+
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", throughlinemcp.Handler(workspaceRouter))
+	mux.Handle("/mcp", throughlinemcp.HandlerWithHub(workspaceRouter, dashboardHub))
 	mux.Handle("/health", daemonhttp.HealthHandler(resolvedVersion))
+	// /dashboard/token mints a single-use dashboard login link; it is intentionally left
+	// under the bearer-token boundary below, exactly like /mcp, since only an
+	// already-authenticated MCP client may mint one.
+	mux.Handle("/dashboard/token", dashboardHandlers.MintLoginTokenHandler())
 	protected := daemonhttp.Protect(daemonhttp.Config{
 		Token:        token,
 		AllowedHosts: allowedHosts,
 		Logger:       slog.New(slog.NewJSONHandler(stderr, nil)),
 	}, mux)
 
+	// The dashboard's browser-facing routes cannot present a bearer token (a browser tab
+	// has none), so they sit outside the bearer boundary and authenticate instead via the
+	// session cookie ExchangeLoginTokenHandler sets — see internal/dashboard's own
+	// host/origin check, which still restricts them to loopback. Go's ServeMux prefers the
+	// more specific pattern, so these routes take precedence over the "/" catch-all into
+	// the bearer-protected mux above. /dashboard/token is registered here too, pointing
+	// back at protected: without it, the "/dashboard/" subtree pattern below (registered
+	// for the static page) would shadow it, since a subtree pattern outranks "/" for any
+	// path under it, bearer-protected or not.
+	top := http.NewServeMux()
+	top.Handle("/", protected)
+	top.Handle("/dashboard/token", protected)
+	top.Handle("/dashboard/login", dashboardHandlers.ExchangeLoginTokenHandler())
+	// Iteration 5: the browser-facing API moved from an SSE push stream to the spec's
+	// poll model (GET /api/v1/changes every 2s, reload the snapshot only when the cursor
+	// moved) and from a single ad hoc snapshot to one view-model payload per region. All
+	// of these are GET-only per ADR 0027 — the dashboard reads through the same Router
+	// seam as MCP, calls no write/mutation application-service method, and never mutates.
+	top.Handle("/dashboard/api/v1/objectives", dashboardHandlers.ObjectivesHandler())
+	top.Handle("/dashboard/api/v1/loop", dashboardHandlers.LoopHandler())
+	top.Handle("/dashboard/api/v1/changes", dashboardHandlers.ChangesHandler())
+	top.Handle("/dashboard/api/v1/gate", dashboardHandlers.GateDetailHandler())
+	top.Handle("/dashboard/api/v1/item", dashboardHandlers.ItemDetailHandler())
+	top.Handle("/dashboard/", dashboardHandlers.StaticHandler())
+
 	server := &http.Server{
 		Addr:              *addr,
-		Handler:           protected,
+		Handler:           top,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

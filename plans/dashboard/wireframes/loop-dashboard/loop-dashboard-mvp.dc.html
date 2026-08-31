@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<meta name="design_doc_mode" content="canvas">
+<link rel="stylesheet" href="_ds/modernist-604fc0f9-19a5-44ed-b0b0-a55509307aab/styles.css">
+<script src="_ds/modernist-604fc0f9-19a5-44ed-b0b0-a55509307aab/_ds_bundle.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;800&display=swap">
+<style>
+body{margin:0;background:#e6e4e2;font-family:var(--font-body)}
+a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
+.pg{padding:40px 44px 60px;display:flex;flex-direction:column;gap:12px;align-items:flex-start}
+.pg-h{display:flex;align-items:baseline;gap:10px}
+.pg-id{font:600 10px/1 ui-monospace,Menlo,monospace;padding:4px 7px;background:var(--color-text);color:#fff}
+.pg-n{font:800 13px/1.2 var(--font-heading);letter-spacing:.02em}
+.pg-note{margin:0 0 14px;font:400 12px/1.5 var(--font-body);color:var(--color-neutral-700);max-width:78ch}
+.frame{background:var(--color-bg);border:2px solid var(--color-text);overflow:hidden;position:relative}
+.wf{color:var(--color-text);font:400 12px/1.4 var(--font-body);height:100%;display:flex;flex-direction:column}
+.wf-top{display:flex;align-items:center;gap:var(--space-3);padding:10px var(--space-4);border-bottom:2px solid var(--color-text);background:var(--color-neutral-200);flex:none}
+.wf-brand{font:800 12px/1 var(--font-heading);letter-spacing:.06em;text-transform:uppercase}
+.wf-obj{font:600 12px/1 var(--font-body)}
+.wf-lbl{font:600 9.5px/1 var(--font-body);letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600)}
+.wf-spacer{flex:1}
+.mini{font:400 10px/1.4 ui-monospace,Menlo,monospace;color:var(--color-neutral-600)}
+.key{font:600 9.5px/1 ui-monospace,Menlo,monospace;color:var(--color-neutral-700)}
+.chip{font:600 9px/1 var(--font-body);letter-spacing:.05em;text-transform:uppercase;padding:3px 5px;background:var(--color-neutral-200);border:1px solid var(--color-neutral-400);color:var(--color-neutral-800)}
+.chip.hi{background:var(--color-accent-200);border-color:var(--color-accent-400);color:var(--color-accent-800)}
+.chip.att{background:var(--color-accent);border-color:var(--color-accent);color:#fff}
+.chip.pol{background:transparent;border-style:dashed}
+.b{appearance:none;font:600 10px/1 var(--font-body);letter-spacing:.05em;text-transform:uppercase;padding:8px 11px;border:1px solid var(--color-text);background:transparent;color:var(--color-text);cursor:pointer;text-align:left}
+.b:hover{background:var(--color-accent-100)}
+.b.p{background:var(--color-accent);border-color:var(--color-accent);color:#fff}
+.b.p:hover{background:var(--color-accent-600)}
+.b.g{border-color:var(--color-neutral-400);color:var(--color-neutral-700)}
+.b:disabled{opacity:.45;cursor:not-allowed}
+.b:focus-visible{outline:2px solid var(--color-accent);outline-offset:2px}
+.acts{display:flex;gap:7px;flex-wrap:wrap}
+.objbtn{appearance:none;border:1px solid transparent;background:transparent;font:inherit;color:inherit;cursor:pointer;display:flex;align-items:center;gap:8px;padding:5px 8px;text-align:left}
+.objbtn:hover{border-color:var(--color-text);background:#fff}
+.objbtn[data-open="true"]{border-color:var(--color-text);background:#fff}
+.objmenu{position:absolute;top:100%;left:150px;width:540px;background:#fff;border:2px solid var(--color-text);box-shadow:var(--shadow-lg);z-index:9;display:flex;flex-direction:column}
+.orow{display:flex;flex-direction:column;gap:5px;padding:11px 12px;border:0;border-bottom:1px solid var(--color-divider);background:transparent;text-align:left;font:inherit;color:inherit;cursor:pointer}
+.orow:hover{background:var(--color-accent-100)}
+.dot{width:8px;height:8px;background:var(--color-neutral-500);flex:none}
+.dot.on{background:var(--color-accent)}
+.stat{display:flex;border-bottom:2px solid var(--color-text);flex:none;background:#fff}
+.statc{flex:1;padding:9px 12px;border-right:1px solid var(--color-divider);display:flex;flex-direction:column;gap:5px}
+.statc:last-child{border-right:0}
+.statc b{font:800 18px/1 var(--font-heading)}
+.tabs{display:flex;border-bottom:2px solid var(--color-text);flex:none;background:var(--color-neutral-200)}
+.tab{appearance:none;border:0;border-right:1px solid var(--color-divider);background:transparent;padding:10px 18px;font:600 11px/1 var(--font-body);letter-spacing:.04em;text-transform:uppercase;color:var(--color-neutral-700);cursor:pointer;text-align:left}
+.tab:hover{background:var(--color-accent-100)}
+.tab[data-on="1"]{background:var(--color-text);color:#fff}
+.tab .n{display:inline-block;margin-left:8px;padding:1px 5px;background:var(--color-accent);color:#fff;font:600 10px/1.4 ui-monospace,monospace}
+.body{flex:1;display:flex;min-height:0}
+.qcol{flex:1;min-width:0;padding:14px 16px;display:flex;flex-direction:column;gap:11px;overflow:hidden}
+.rail{width:300px;flex:none;border-left:2px solid var(--color-text);background:var(--color-neutral-100);display:flex;flex-direction:column;overflow:hidden}
+.railh{padding:9px 12px;border-bottom:2px solid var(--color-text);display:flex;align-items:center;gap:8px}
+.sec{padding:11px 12px;border-bottom:1px solid var(--color-divider);display:flex;flex-direction:column;gap:7px}
+.kv{display:grid;grid-template-columns:104px 1fr;gap:5px 10px;font:400 10.5px/1.4 ui-monospace,Menlo,monospace}
+.kv span:nth-child(odd){color:var(--color-neutral-600)}
+.head{border:2px solid var(--color-accent);background:#fff}
+.gaterow{display:flex;align-items:center;gap:10px;border:1px solid var(--color-neutral-400);background:#fff;padding:10px 12px;text-align:left;font:inherit;color:inherit;cursor:pointer;width:100%;box-sizing:border-box}
+.gaterow:hover{border-color:var(--color-accent)}
+.board{flex:1;display:grid;grid-template-columns:repeat(5,1fr);min-height:0}
+.col{border-right:1px solid var(--color-divider);display:flex;flex-direction:column;min-width:0}
+.col:last-child{border-right:0}
+.colh{display:flex;align-items:baseline;gap:6px;padding:8px 10px;border-bottom:2px solid var(--color-text)}
+.colh .n{font:600 10px/1 ui-monospace,monospace;color:var(--color-neutral-600)}
+.colb{padding:10px;display:flex;flex-direction:column;gap:10px;overflow:hidden}
+.card{background:#fff;border:1px solid var(--color-neutral-400);padding:9px 10px;display:flex;flex-direction:column;gap:6px;cursor:pointer;text-align:left;font:inherit;color:inherit;width:100%;box-sizing:border-box}
+.card:hover{border-color:var(--color-accent)}
+.crow{display:flex;flex-wrap:wrap;align-items:center;gap:5px}
+.ctitle{font:600 11.5px/1.3 var(--font-body);text-wrap:pretty}
+.blk{font:400 9.5px/1.35 ui-monospace,Menlo,monospace;color:var(--color-accent-700);border-left:2px solid var(--color-accent);padding-left:6px}
+.prog{display:flex;align-items:center;gap:6px;font:400 9.5px/1 ui-monospace,Menlo,monospace;color:var(--color-neutral-600)}
+.bar{flex:1;height:3px;background:var(--color-neutral-300)}
+.bar i{display:block;height:100%;background:var(--color-neutral-800)}
+.dim{position:absolute;inset:0;background:color-mix(in srgb,#201e1d 45%,transparent);z-index:10}
+.drawer{position:absolute;top:0;right:0;bottom:0;width:560px;background:#fff;border-left:2px solid var(--color-text);box-shadow:var(--shadow-lg);display:flex;flex-direction:column;z-index:11}
+.dhead{padding:12px 14px;border-bottom:2px solid var(--color-text);display:flex;flex-direction:column;gap:8px;background:var(--color-neutral-200);flex:none}
+.dbody{flex:1;overflow:auto;display:flex;flex-direction:column}
+.dfoot{border-top:2px solid var(--color-text);background:var(--color-neutral-100);padding:12px 14px;display:flex;flex-direction:column;gap:9px;flex:none}
+.diff{font:400 10.5px/1.6 ui-monospace,Menlo,monospace;background:var(--color-neutral-100);border:1px solid var(--color-neutral-400)}
+.dl{padding:1px 8px;white-space:pre-wrap}
+.dl.add{background:color-mix(in srgb,var(--color-accent-200) 60%,#fff);color:var(--color-accent-800)}
+.dl.del{color:var(--color-neutral-600);text-decoration:line-through}
+.ev{display:flex;gap:9px;font:400 10px/1.5 ui-monospace,Menlo,monospace;color:var(--color-neutral-700)}
+.ev b{font-weight:400;color:var(--color-text);flex:1}
+.ta{width:100%;box-sizing:border-box;border:1px solid var(--color-neutral-500);background:#fff;padding:8px;font:400 11.5px/1.45 var(--font-body);resize:none;color:var(--color-text)}
+.ta:focus-visible{outline:2px solid var(--color-accent);outline-offset:1px}
+.xb{appearance:none;border:1px solid var(--color-text);background:transparent;width:26px;height:26px;cursor:pointer;font:600 12px/1 var(--font-body);color:var(--color-text)}
+.xb:hover{background:var(--color-accent-100)}
+.code{font:400 10.5px/1.6 ui-monospace,Menlo,monospace;background:var(--color-text);color:#f3f2f2;padding:10px 12px;white-space:pre-wrap}
+.spec{width:1240px;background:var(--color-bg);border:2px solid var(--color-text);display:flex;flex-direction:column}
+.spech{padding:12px 16px;border-bottom:2px solid var(--color-text);background:var(--color-neutral-200);display:flex;align-items:baseline;gap:10px}
+.specg{display:grid;grid-template-columns:1fr 1fr 1fr}
+.specc{padding:14px 16px;border-right:1px solid var(--color-divider);display:flex;flex-direction:column;gap:9px}
+.specc:last-child{border-right:0}
+.specc h4{margin:0;font:600 9.5px/1 var(--font-body);letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600)}
+.specc p{margin:0;font:400 11.5px/1.5 var(--font-body);text-wrap:pretty}
+.specc ul{margin:0;padding-left:15px;display:flex;flex-direction:column;gap:6px;font:400 11.5px/1.45 var(--font-body)}
+.specrow{display:flex;gap:12px;padding:9px 16px;border-top:1px solid var(--color-divider);font:400 11px/1.45 var(--font-body);align-items:baseline}
+.specrow code{font:400 10.5px/1.4 ui-monospace,Menlo,monospace;color:var(--color-accent-700);flex:none;width:210px}
+</style>
+</helmet>
+
+<div class="pg">
+
+<div class="pg-h"><span class="pg-id">MVP</span><span class="pg-n">Throughline loop dashboard — implementation candidate</span></div>
+<p class="pg-note">One screen, two tabs, one detail surface. The objective switcher and the at-a-glance rail come from 3a. Every gate row and every board card opens the same drawer — the drawer is what makes a decision informed, and it carries the decision buttons only when the target actually has an open gate. Board status stays agent-owned and read-only. Try it: open a gate, read the evidence, decide; click any board card for the read-only version.</p>
+
+<div class="frame" style="width:1240px;height:840px">
+<div class="wf">
+
+  <div class="wf-top" style="position:relative;z-index:8">
+    <span class="wf-brand">Throughline</span>
+    <span class="wf-lbl">objective</span>
+    <button class="objbtn" data-open="{{ objOpen }}" onClick="{{ toggleObj }}">
+      <span class="wf-obj">{{ obj.title }}</span>
+      <span class="mini">{{ obj.id }}</span>
+      <span style="font:600 10px/1 var(--font-body)">{{ caret }}</span>
+    </button>
+    <span class="wf-spacer"></span>
+    <span class="mini">{{ topMeta }}</span>
+    <sc-if value="{{ objOpen }}" hint-placeholder-val="{{ true }}">
+    <div class="objmenu">
+      <div style="padding:9px 12px;border-bottom:1px solid var(--color-divider);display:flex;align-items:center;gap:9px"><span class="wf-lbl">Switch objective</span><span class="wf-spacer"></span><span class="mini">/ws/throughline · 3 objectives</span></div>
+      <sc-for list="{{ objs }}" as="o" hint-placeholder-count="3">
+        <button class="orow" onClick="{{ o.pick }}">
+          <div style="display:flex;align-items:center;gap:11px">
+            <span class="{{ o.mark }}"></span>
+            <div style="flex:1;min-width:0">
+              <div style="font:600 11.5px/1.3 var(--font-body)">{{ o.title }}</div>
+              <div class="mini">{{ o.meta }}</div>
+            </div>
+            <span class="{{ o.badgeClass }}">{{ o.badge }}</span>
+          </div>
+        </button>
+      </sc-for>
+      <div class="mini" style="padding:9px 12px">Switching reloads the snapshot for that objective. Open gates on the one you leave stay open.</div>
+    </div>
+    </sc-if>
+  </div>
+
+  <div class="stat">
+    <sc-for list="{{ stats }}" as="s" hint-placeholder-count="6">
+      <div class="statc"><span class="wf-lbl">{{ s.label }}</span><b style="{{ s.style }}">{{ s.val }}</b></div>
+    </sc-for>
+  </div>
+
+  <div class="tabs">
+    <button class="tab" data-on="{{ onQueue }}" onClick="{{ showQueue }}">Needs you <sc-if value="{{ hasGates }}" hint-placeholder-val="{{ true }}"><span class="n">{{ gateCount }}</span></sc-if></button>
+    <button class="tab" data-on="{{ onBoard }}" onClick="{{ showBoard }}">Board</button>
+    <span class="wf-spacer"></span>
+    <span class="mini" style="align-self:center;padding-right:14px">{{ tabHint }}</span>
+  </div>
+
+  <div class="body">
+
+    <sc-if value="{{ onQueueBool }}" hint-placeholder-val="{{ true }}">
+    <div class="qcol">
+
+      <sc-if value="{{ resumeHas }}" hint-placeholder-val="{{ false }}">
+      <div style="border:2px solid var(--color-text);background:var(--color-neutral-100)">
+        <div style="padding:9px 12px;border-bottom:1px solid var(--color-divider);display:flex;align-items:center;gap:9px"><span class="wf-lbl">Resume</span><span class="mini">decisions are recorded — these actors are not listening</span></div>
+        <sc-for list="{{ resume }}" as="r" hint-placeholder-count="1">
+          <div style="padding:11px 12px;border-bottom:1px solid var(--color-divider);display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;align-items:baseline;gap:9px"><span class="key">{{ r.actor }}</span><span class="chip">{{ r.count }}</span><span class="wf-spacer"></span><span class="mini">last call {{ r.seen }}</span></div>
+            <div class="mini">{{ r.ids }}</div>
+            <div class="code">{{ r.prompt }}</div>
+            <div class="acts"><button class="b p" onClick="{{ r.copy }}">{{ r.copyLabel }}</button><button class="b g" onClick="{{ r.dismiss }}">Pasted — dismiss</button></div>
+          </div>
+        </sc-for>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ autoHas }}" hint-placeholder-val="{{ false }}">
+        <sc-for list="{{ auto }}" as="a" hint-placeholder-count="1">
+          <div style="border-left:2px solid var(--color-neutral-500);background:var(--color-neutral-100);padding:8px 11px;display:flex;align-items:baseline;gap:9px"><span class="key">{{ a.actor }}</span><span class="mini">{{ a.note }}</span></div>
+        </sc-for>
+      </sc-if>
+
+      <sc-if value="{{ headHas }}" hint-placeholder-val="{{ true }}">
+      <div class="head">
+        <div style="display:flex;gap:10px;align-items:baseline;padding:11px 13px;border-bottom:1px solid var(--color-divider)"><span class="chip att">{{ head.type }}</span><span class="key">{{ head.id }}</span><span class="wf-spacer"></span><span class="mini">{{ head.age }}</span></div>
+        <div style="padding:12px 13px;display:flex;flex-direction:column;gap:10px">
+          <div style="font:600 14.5px/1.3 var(--font-body);text-wrap:pretty">{{ head.title }}</div>
+          <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap"><span class="wf-lbl">held by</span><span class="key">{{ head.actor }}</span><span class="mini">last call {{ head.seen }}</span><span class="{{ head.liveClass }}">{{ head.liveLabel }}</span></div>
+          <div class="mini">{{ head.evidenceHint }}</div>
+          <div class="acts">
+            <button class="b p" onClick="{{ head.open }}">Review &amp; decide →</button>
+            <button class="b" onClick="{{ head.quickApprove }}">{{ head.primary }}</button>
+            <button class="b g" onClick="{{ head.open }}">{{ head.secondary }}</button>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ restHas }}" hint-placeholder-val="{{ true }}">
+        <sc-for list="{{ rest }}" as="g" hint-placeholder-count="4">
+          <button class="gaterow" onClick="{{ g.open }}"><span class="chip">{{ g.type }}</span><span class="key">{{ g.id }}</span><span style="font:600 12px/1.3 var(--font-body);flex:1;min-width:0">{{ g.title }}</span><span class="mini">{{ g.actor }}</span><span class="mini">{{ g.age }}</span></button>
+        </sc-for>
+      </sc-if>
+
+      <sc-if value="{{ clear }}" hint-placeholder-val="{{ false }}">
+        <div style="border:1px solid var(--color-neutral-400);background:var(--color-neutral-100);padding:22px;display:flex;flex-direction:column;gap:9px">
+          <span class="wf-lbl">Nothing blocking, nobody waiting</span>
+          <div style="font:800 16px/1.25 var(--font-heading);max-width:44ch">Every decision is recorded and every actor is either live or resumed.</div>
+          <div class="acts"><button class="b" onClick="{{ showBoard }}">Look at the board</button><button class="b g" onClick="{{ reset }}">↺ replay demo</button></div>
+        </div>
+      </sc-if>
+    </div>
+
+    <div class="rail">
+      <div class="railh"><span class="wf-lbl">Objective at a glance</span><span class="wf-spacer"></span><span class="mini">{{ glance.cursor }}</span></div>
+      <div class="sec">
+        <span class="wf-lbl">Phase</span>
+        <div style="font:600 12px/1.3 var(--font-body)">{{ glance.phase }}</div>
+        <div class="mini">{{ glance.phaseNote }}</div>
+      </div>
+      <div class="sec">
+        <span class="wf-lbl">Actors</span>
+        <sc-for list="{{ glance.actors }}" as="a" hint-placeholder-count="3">
+          <div style="display:flex;align-items:baseline;gap:8px"><span class="key" style="flex:1">{{ a.id }}</span><span class="{{ a.cls }}">{{ a.state }}</span></div>
+        </sc-for>
+      </div>
+      <div class="sec">
+        <span class="wf-lbl">Outputs</span>
+        <div class="kv"><span>accepted</span><span>{{ glance.accepted }}</span><span>in review</span><span>{{ glance.review }}</span><span>profiles</span><span>{{ glance.profiles }}</span></div>
+      </div>
+      <div class="sec" style="border-bottom:0">
+        <span class="wf-lbl">Recent decisions</span>
+        <sc-for list="{{ glance.recent }}" as="d" hint-placeholder-count="3">
+          <div class="ev"><span>{{ d.at }}</span><b>{{ d.text }}</b></div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ onBoardBool }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+      <div style="background:var(--color-neutral-200);border-bottom:2px solid var(--color-text);padding:8px 16px;display:flex;align-items:center;gap:10px"><span class="wf-lbl">Board</span><span class="mini">Status is agent-owned. Cards cannot be dragged — click a card to read it; to change its course, decide a gate.</span></div>
+      <div class="board">
+        <sc-for list="{{ cols }}" as="c" hint-placeholder-count="5">
+          <div class="col">
+            <div class="colh"><span class="wf-lbl">{{ c.label }}</span><span class="n">{{ c.n }}</span></div>
+            <div class="colb">
+              <sc-for list="{{ c.cards }}" as="k" hint-placeholder-count="2">
+                <button class="card" style="{{ k.style }}" onClick="{{ k.open }}">
+                  <div class="crow"><span class="key">{{ k.id }}</span><span class="chip">{{ k.kind }}</span><span class="{{ k.priClass }}">{{ k.pri }}</span></div>
+                  <div class="ctitle">{{ k.title }}</div>
+                  <div class="mini">{{ k.meta }}</div>
+                  <sc-if value="{{ k.blocked }}" hint-placeholder-val="{{ false }}"><div class="blk">{{ k.blk }}</div></sc-if>
+                  <sc-if value="{{ k.hasProg }}" hint-placeholder-val="{{ true }}"><div class="prog"><span>{{ k.progLabel }}</span><div class="bar"><i style="{{ k.progStyle }}"></i></div></div></sc-if>
+                </button>
+              </sc-for>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
+  </div>
+
+  <sc-if value="{{ drawerOpen }}" hint-placeholder-val="{{ false }}">
+    <div class="dim" onClick="{{ closeDrawer }}"></div>
+    <div class="drawer">
+      <div class="dhead">
+        <div style="display:flex;align-items:center;gap:9px"><span class="{{ d.chipClass }}">{{ d.chip }}</span><span class="key">{{ d.id }}</span><span class="wf-spacer"></span><button class="xb" onClick="{{ closeDrawer }}">✕</button></div>
+        <div style="font:600 15px/1.3 var(--font-body);text-wrap:pretty">{{ d.title }}</div>
+        <div class="mini">{{ d.sub }}</div>
+      </div>
+      <div class="dbody">
+        <sc-if value="{{ d.hasAsk }}" hint-placeholder-val="{{ true }}">
+        <div class="sec" style="background:var(--color-accent-200);gap:6px">
+          <span class="wf-lbl" style="color:var(--color-accent-800)">What is being asked</span>
+          <div style="font:400 12px/1.5 var(--font-body);color:var(--color-accent-800);text-wrap:pretty">{{ d.ask }}</div>
+        </div>
+        </sc-if>
+        <div class="sec">
+          <span class="wf-lbl">{{ d.evidenceLabel }}</span>
+          <div class="mini">{{ d.evidenceMeta }}</div>
+          <div class="diff">
+            <sc-for list="{{ d.lines }}" as="l" hint-placeholder-count="6">
+              <div class="{{ l.cls }}">{{ l.text }}</div>
+            </sc-for>
+          </div>
+          <sc-if value="{{ d.hasEvidenceNote }}" hint-placeholder-val="{{ false }}"><div class="mini">{{ d.evidenceNote }}</div></sc-if>
+        </div>
+        <div class="sec">
+          <span class="wf-lbl">Facts</span>
+          <div class="kv">
+            <sc-for list="{{ d.facts }}" as="f" hint-placeholder-count="8">
+              <span>{{ f.k }}</span><span>{{ f.v }}</span>
+            </sc-for>
+          </div>
+        </div>
+        <div class="sec">
+          <span class="wf-lbl">Dependencies</span>
+          <sc-for list="{{ d.deps }}" as="p" hint-placeholder-count="3">
+            <div class="ev"><span>{{ p.rel }}</span><b>{{ p.text }}</b><span>{{ p.state }}</span></div>
+          </sc-for>
+        </div>
+        <div class="sec" style="border-bottom:0">
+          <span class="wf-lbl">Activity</span>
+          <sc-for list="{{ d.activity }}" as="e" hint-placeholder-count="4">
+            <div class="ev"><span>{{ e.at }}</span><b>{{ e.text }}</b><span>{{ e.actor }}</span></div>
+          </sc-for>
+        </div>
+      </div>
+      <div class="dfoot">
+        <sc-if value="{{ d.decidable }}" hint-placeholder-val="{{ true }}">
+          <sc-if value="{{ d.needsText }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:7px">
+              <span class="wf-lbl">{{ d.textLabel }}</span>
+              <textarea class="ta" rows="3" placeholder="{{ d.textPlaceholder }}" value="{{ text }}" onChange="{{ setText }}"></textarea>
+            </div>
+          </sc-if>
+          <div class="acts">
+            <button class="b p" disabled="{{ d.primaryDisabled }}" onClick="{{ d.submit }}">{{ d.primaryLabel }}</button>
+            <sc-if value="{{ d.hasReject }}" hint-placeholder-val="{{ true }}"><button class="b" onClick="{{ d.reject }}">{{ d.rejectLabel }}</button></sc-if>
+            <button class="b g" onClick="{{ closeDrawer }}">Not now</button>
+          </div>
+          <div class="mini">{{ d.footNote }}</div>
+        </sc-if>
+        <sc-if value="{{ d.readOnly }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;gap:10px"><span class="chip">read-only</span><span class="mini" style="flex:1">No open gate on this item. Status and progress are written by its actor.</span><button class="b g" onClick="{{ closeDrawer }}">Close</button></div>
+        </sc-if>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</div>
+
+<div class="spec" style="margin-top:26px">
+  <div class="spech"><span class="pg-id">SPEC</span><span class="pg-n">MVP scope — recorded decisions</span><span class="wf-spacer"></span><span class="mini">handoff</span></div>
+  <div class="specg">
+    <div class="specc">
+      <h4>Shell — from 3a</h4>
+      <p>The objective name in the top bar is the switcher. Launch auto-resolves to the objective with the most blocking gates; no picker screen. Count row sits above the tabs. "Objective at a glance" is a persistent 300px rail on the Needs-you tab.</p>
+    </div>
+    <div class="specc">
+      <h4>One detail surface</h4>
+      <p>Gate rows and board cards open the same 560px drawer. It leads with what is being asked, then the evidence the decision turns on — the revision itself, diffed against the last accepted one — then facts, dependencies and activity. Decision buttons appear only when the target has an open gate.</p>
+    </div>
+    <div class="specc">
+      <h4>Out of MVP</h4>
+      <ul>
+        <li>Inline MCP chat blocks (turn 5) — postponed</li>
+        <li>Drag, manual status, board editing</li>
+        <li>Multi-objective board, search, filters</li>
+        <li>Notifications outside the app</li>
+      </ul>
+    </div>
+  </div>
+  <div class="specrow"><code>get_objective_context</code><span>Fills the switcher, the count row and the whole at-a-glance rail. One call per objective switch, cursor kept for deltas.</span></div>
+  <div class="specrow"><code>list_items · get_item</code><span>Board columns, and the drawer body when the target is a work item. Drawer opens on the cached row and refreshes from get_item.</span></div>
+  <div class="specrow"><code>get_changes(since)</code><span>Polls the cursor. Updates counts, actor liveness (last tool call per actor) and the queue without reordering the gate the human is reading.</span></div>
+  <div class="specrow"><code>request_approval → decide</code><span>Approve/Reject writes state against expected_version. 409 refuses the decision instead of overwriting; the drawer reloads and says what changed.</span></div>
+  <div class="specrow"><code>request_attention</code><span>Question and review gates. Answering records the answer and clears the attention state in one write.</span></div>
+  <div class="specrow"><code>on rejection</code><span>The item does not move. The gate closes, the rationale is written to the target, and the item keeps its column with a "revision requested" blocker line until its actor re-proposes.</span></div>
+  <div class="specrow" style="border-bottom:0"><code>thresholds</code><span>Claim TTL is shown in the drawer only — cards stay quiet, an expired claim reads as unclaimed. An actor is dormant after 60s without a tool call; that is what triggers a resume prompt.</span></div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1340,&quot;height&quot;:1100}}">
+const OBJS = [
+  {id:"OBJ-WORKSPACE-ROUTING", title:"Route every MCP call by stable workspace_id", phase:"execution", items:"18 items", needs:5, cur:true},
+  {id:"OBJ-INSTALL-FLOW", title:"One-command install and daemon bootstrap", phase:"planning", items:"9 items", needs:1},
+  {id:"OBJ-SEMANTIC-MODEL", title:"Publish the embedded semantic model", phase:"accepted", items:"12 items", needs:0}
+];
+
+const GATES = [
+  {
+    id:"APR-118", type:"plan approval", title:"Workspace routing spec — revision 3", actor:"agent:planner",
+    seen:"3h", live:false, age:"waiting 3h 12m", target:"WI-009",
+    evidenceHint:"Revision 3 changes the fallback rule and adds a permissions check — read the diff before deciding.",
+    ask:"Accept revision 3 as the plan of record for WI-009. Revision 2 was accepted 2 days ago; agent:planner rewrote sections 3 and 5 after the credential-path finding.",
+    evidenceLabel:"Revision 3 · diff against accepted revision 2",
+    evidenceMeta:"docs/routing-spec.md · +4 −2 · authored agent:planner 3h ago",
+    lines:[
+      {cls:"dl", text:"§3 Resolution"},
+      {cls:"dl del", text:"- workspace_id is read from the nearest config.toml at call time"},
+      {cls:"dl add", text:"+ workspace_id is resolved before any handler-level decoding"},
+      {cls:"dl add", text:"+ resolution failures return a stable routing code; no fallback workspace"},
+      {cls:"dl", text:"§5 Credentials"},
+      {cls:"dl del", text:"- credential files are read on first use"},
+      {cls:"dl add", text:"+ credential file permissions are checked at daemon start (0600)"},
+      {cls:"dl add", text:"+ a failed check refuses the workspace rather than degrading"}
+    ],
+    evidenceNote:"Revision 2 is retained; accepting supersedes it without deleting it.",
+    facts:[["target","WI-009 · spec"],["version","7"],["requested","agent:planner · 3h ago"],["attention","needs_human_decision"],["profile","routing_decision =1"],["objective","OBJ-WORKSPACE-ROUTING"],["supersedes","revision 2 (accepted)"],["blocks","WI-014, WI-023"]],
+    deps:[["blocks","WI-014 · Resolve workspace_id from nearest config.toml","waiting"],["blocks","WI-023 · Router: per-workspace SQLite handle cache","in progress"],["depends on","WI-002 · Daemon bearer credential format","accepted"]],
+    activity:[["3h 12m","revision 3 proposed","agent:planner"],["3h 12m","request_approval","agent:planner"],["2d","revision 2 accepted","human:reviewer"],["2d","revision 2 proposed","agent:planner"]],
+    primary:"Accept revision 3", secondary:"Request changes", rejectLabel:"Request changes",
+    textLabel:"Rationale — required to request changes", textPlaceholder:"What has to change, and why",
+    footNote:"Accepting writes the grant against expected_version 7. It does not notify anyone."
+  },
+  {
+    id:"GATE-71", type:"external action", title:"Authorize brew install throughline/tap/throughline", actor:"agent:builder",
+    seen:"12s", live:true, age:"waiting 40s", target:"ACT-88",
+    evidenceHint:"One command, one host, no network beyond the tap. Grant is bound to agent:builder and this action revision.",
+    ask:"Grant agent:builder permission to execute one install command on this machine. Throughline records the execution; it never runs the effect itself.",
+    evidenceLabel:"Action revision · exactly what will run",
+    evidenceMeta:"ACT-88 revision 1 · subject hash 7f31c0a9 · principal human:reviewer",
+    lines:[
+      {cls:"dl", text:"$ brew install throughline/tap/throughline"},
+      {cls:"dl", text:"host        local"},
+      {cls:"dl", text:"network     tap fetch only"},
+      {cls:"dl", text:"writes      /opt/homebrew/*, ~/Library/LaunchAgents"},
+      {cls:"dl", text:"reverts     brew uninstall throughline"}
+    ],
+    facts:[["target","ACT-88 · external action"],["version","1"],["approved for","agent:builder"],["constraints","single execution"],["subject hash","7f31c0a9"],["expires","on revision change"],["requested","40s ago"],["objective","OBJ-WORKSPACE-ROUTING"]],
+    deps:[["blocks","WI-031 · Install smoke test on a clean machine","waiting"],["depends on","ACT-84 · Tap published","succeeded"]],
+    activity:[["40s","request_action_approval","agent:builder"],["1m","action revision 1 proposed","agent:builder"],["12s","get_changes","agent:builder"]],
+    primary:"Grant", secondary:"Deny", rejectLabel:"Deny",
+    textLabel:"Reason — required to deny", textPlaceholder:"Why this must not run",
+    footNote:"The grant is bound to this revision. Any change to the command invalidates it."
+  },
+  {
+    id:"Q-118", type:"question", title:"On workspace_pending — fail closed, or queue the call?", actor:"agent:writer",
+    seen:"8m", live:true, age:"waiting 22m", target:"Q-118",
+    evidenceHint:"An answer is required; there is no default. The answer becomes a decision record the other actors read.",
+    ask:"registry.ErrWorkspacePending is retryable, so the router can either refuse immediately or hold the call until the workspace resolves. Pick one and the spec follows it.",
+    evidenceLabel:"What the agent has already established",
+    evidenceMeta:"context records CTX-901, CTX-903 · no accepted decision yet",
+    lines:[
+      {cls:"dl", text:"A  fail closed — return workspace_pending, retryable true"},
+      {cls:"dl", text:"   simple, no state; every caller writes retry logic"},
+      {cls:"dl", text:"B  queue — hold up to 5s, then fail closed"},
+      {cls:"dl", text:"   hides a common startup race; adds a holding path to test"},
+      {cls:"dl", text:"observed  pending resolves in 120–400ms on a warm daemon"}
+    ],
+    facts:[["target","Q-118 · open question"],["version","2"],["attention","needs_human_decision"],["asked","agent:writer · 22m ago"],["objective","OBJ-WORKSPACE-ROUTING"],["blocks","WI-044"],["answers","0"],["kind","design question"]],
+    deps:[["blocks","WI-044 · Concurrency test for change cursor","waiting"],["relates","WI-014 · Resolve workspace_id","ready"]],
+    activity:[["22m","request_attention · needs_human_decision","agent:writer"],["24m","CTX-903 recorded","agent:writer"],["8m","get_changes","agent:writer"]],
+    primary:"Record answer", secondary:"", rejectLabel:"",
+    needsTextAlways:true,
+    textLabel:"Answer — recorded as a decision", textPlaceholder:"e.g. Fail closed. Callers retry; no holding path.",
+    footNote:"The answer is stored as a decision record and clears the attention state in one write."
+  },
+  {
+    id:"APR-124", type:"output approval", title:"Accept routing_decision v1 produced by WI-023", actor:"agent:builder",
+    seen:"12s", live:true, age:"waiting 6m", target:"OUT-311",
+    evidenceHint:"Structure and semantics passed automatically. Acceptance is the human half.",
+    ask:"Accept output revision OUT-311 against profile routing_decision =1, making it reusable by other work items.",
+    evidenceLabel:"Output revision · validation evidence",
+    evidenceMeta:"OUT-311 · profile routing_decision =1 · 3 of 3 criteria passed",
+    lines:[
+      {cls:"dl add", text:"+ structure   passed   schema matches profile =1"},
+      {cls:"dl add", text:"+ semantics   passed   every route names a workspace_id"},
+      {cls:"dl add", text:"+ coverage    passed   9 of 9 routing codes covered"},
+      {cls:"dl", text:"  produced by  WI-023 · agent:builder"}
+    ],
+    facts:[["target","OUT-311 · output revision"],["version","1"],["profile","routing_decision =1"],["produced by","WI-023"],["validations","3 passed, 0 failed"],["requested","6m ago"],["objective","OBJ-WORKSPACE-ROUTING"],["reusable by","any item in this workspace"]],
+    deps:[["produced by","WI-023 · Router: per-workspace SQLite handle cache","in progress"],["required by","WI-013 · Route table docs","backlog"]],
+    activity:[["6m","request_approval","agent:builder"],["7m","record_validation · coverage passed","agent:builder"],["9m","OUT-311 recorded","agent:builder"]],
+    primary:"Accept output", secondary:"Reject", rejectLabel:"Reject",
+    textLabel:"Rationale — required to reject", textPlaceholder:"What fails, and against which criterion",
+    footNote:"Acceptance makes the revision discoverable through list_outputs."
+  },
+  {
+    id:"ATT-9", type:"review", title:"Review credential file permissions check", actor:"agent:researcher",
+    seen:"41m", live:false, age:"waiting 41m", target:"WI-016",
+    evidenceHint:"Read-through review; nothing is blocked downstream yet.",
+    ask:"agent:researcher asks for a human read of the permissions check before it becomes part of the spec.",
+    evidenceLabel:"Proposed check",
+    evidenceMeta:"WI-016 · draft, not yet an output revision",
+    lines:[
+      {cls:"dl", text:"at daemon start, for each workspace credential file:"},
+      {cls:"dl", text:"  refuse the workspace if mode is not 0600"},
+      {cls:"dl", text:"  refuse if owner is not the daemon user"},
+      {cls:"dl", text:"  log the refusal with a request_id, never the path"}
+    ],
+    facts:[["target","WI-016 · implementation"],["version","3"],["attention","needs_human_review"],["requested","41m ago"],["objective","OBJ-WORKSPACE-ROUTING"],["blocks","—"],["outputs","0 of 1"],["claim","expired"]],
+    deps:[["relates","APR-118 · Workspace routing spec revision 3","waiting"]],
+    activity:[["41m","request_attention · needs_human_review","agent:researcher"],["44m","claim expired","system"],["1h","WI-016 claimed","agent:researcher"]],
+    primary:"Looks right", secondary:"Leave a note", rejectLabel:"Leave a note",
+    textLabel:"Note — optional", textPlaceholder:"Anything the actor should know",
+    footNote:"Reviewing clears the attention state; it does not change the item's status."
+  }
+];
+
+const ITEMS = [
+  {col:0, id:"WI-041", kind:"docs", pri:"low", title:"Document loopback-only listen flag", meta:"unclaimed", pol:"agent_may_propose",
+   facts:[["status","backlog"],["version","1"],["claim","none"],["objective","OBJ-WORKSPACE-ROUTING"],["outputs","0 of 1"],["policy","agent_may_propose"],["updated","1d ago"],["blocks","—"]],
+   lines:[{cls:"dl",text:"acceptance criteria"},{cls:"dl",text:"  1  flag documented in install.md"},{cls:"dl",text:"  2  default stated as loopback-only"}],
+   deps:[["depends on","WI-009 · Workspace routing spec revision 3","waiting"]],
+   activity:[["1d","proposed","agent:planner"]]},
+  {col:0, id:"WI-044", kind:"test", pri:"medium", title:"Concurrency test for change cursor", meta:"unclaimed", blk:"blocked · Q-118 unanswered",
+   facts:[["status","backlog"],["version","2"],["claim","none"],["blocked by","Q-118"],["outputs","0 of 1"],["objective","OBJ-WORKSPACE-ROUTING"],["updated","22m ago"],["blocks","—"]],
+   lines:[{cls:"dl",text:"cannot start until the pending-workspace behaviour is decided"},{cls:"dl",text:"see Q-118 in the queue"}],
+   deps:[["depends on","Q-118 · fallback on workspace_pending","needs human"]],
+   activity:[["22m","blocked on Q-118","agent:writer"],["2d","proposed","agent:writer"]]},
+  {col:1, id:"WI-014", kind:"implementation", pri:"urgent", title:"Resolve workspace_id from nearest config.toml", meta:"ready · unclaimed", prog:[0,5],
+   facts:[["status","ready"],["version","4"],["claim","none"],["criteria","0 of 5"],["objective","OBJ-WORKSPACE-ROUTING"],["depends on","WI-009"],["updated","3h ago"],["blocks","WI-023"]],
+   lines:[{cls:"dl",text:"criteria"},{cls:"dl",text:"  1  resolution happens before typed decode"},{cls:"dl",text:"  2  missing workspace_id returns workspace_required"},{cls:"dl",text:"  3  invalid id returns workspace_invalid"},{cls:"dl",text:"  4  no fallback workspace on any path"},{cls:"dl",text:"  5  covered by server_test.go"}],
+   deps:[["depends on","WI-009 · spec revision 3","waiting on APR-118"],["blocks","WI-023 · handle cache","in progress"]],
+   activity:[["3h","became ready","system"],["3h","WI-009 revision 3 proposed","agent:planner"]]},
+  {col:2, id:"WI-023", kind:"implementation", pri:"high", title:"Router: per-workspace SQLite handle cache", meta:"agent:builder · live", prog:[3,5],
+   facts:[["status","in progress"],["version","9"],["claim","agent:builder · ttl 11m"],["criteria","3 of 5"],["outputs","OUT-311 pending"],["objective","OBJ-WORKSPACE-ROUTING"],["updated","12s ago"],["blocks","WI-013"]],
+   lines:[{cls:"dl add",text:"+ 1  one handle per workspace, reused"},{cls:"dl add",text:"+ 2  handle closed on workspace removal"},{cls:"dl add",text:"+ 3  concurrent callers serialise on the handle"},{cls:"dl",text:"  4  cache eviction under memory pressure"},{cls:"dl",text:"  5  benchmark against per-call open"}],
+   deps:[["depends on","WI-014 · Resolve workspace_id","ready"],["produces","OUT-311 · routing_decision v1","awaiting approval"]],
+   activity:[["12s","get_changes","agent:builder"],["6m","request_approval OUT-311","agent:builder"],["9m","OUT-311 recorded","agent:builder"]]},
+  {col:2, id:"WI-027", kind:"test", pri:"medium", title:"Host / Origin header validation suite", meta:"agent:researcher · dormant 41m", prog:[1,4],
+   facts:[["status","in progress"],["version","5"],["claim","expired 26m ago"],["criteria","1 of 4"],["objective","OBJ-WORKSPACE-ROUTING"],["outputs","0 of 1"],["updated","41m ago"],["blocks","—"]],
+   lines:[{cls:"dl add",text:"+ 1  rejects mismatched Origin"},{cls:"dl",text:"  2  rejects missing Host"},{cls:"dl",text:"  3  accepts loopback"},{cls:"dl",text:"  4  covered in daemonhttp tests"}],
+   deps:[["relates","WI-016 · credential permissions","in review"]],
+   activity:[["26m","claim expired","system"],["41m","last tool call","agent:researcher"]]},
+  {col:3, id:"WI-009", kind:"spec", pri:"high", title:"Workspace routing spec — revision 3", meta:"agent:planner · dormant 3h", blk:"gated · APR-118 needs you", gate:"APR-118",
+   facts:[["status","review"],["version","7"],["claim","none"],["gate","APR-118"],["objective","OBJ-WORKSPACE-ROUTING"],["revisions","3"],["updated","3h ago"],["blocks","WI-014, WI-023"]],
+   lines:[],
+   deps:[],
+   activity:[]},
+  {col:3, id:"WI-016", kind:"implementation", pri:"", title:"Credential file permissions check", meta:"agent:researcher · dormant 41m", blk:"gated · ATT-9 review", gate:"ATT-9",
+   facts:[],lines:[],deps:[],activity:[]},
+  {col:4, id:"WI-002", kind:"spec", pri:"", title:"Daemon bearer credential format", meta:"accepted 2d ago", done:true,
+   facts:[["status","accepted"],["version","6"],["accepted by","human:reviewer"],["objective","OBJ-WORKSPACE-ROUTING"],["outputs","1 of 1"],["profile","credential_format =1"],["updated","2d ago"],["blocks","—"]],
+   lines:[{cls:"dl add",text:"+ accepted · 4 of 4 criteria passed"}],
+   deps:[["required by","WI-009 · spec revision 3","waiting"]],
+   activity:[["2d","accepted","human:reviewer"],["2d","request_approval","agent:planner"]]}
+];
+
+const COLS = ["Backlog","Ready","In progress","Review","Done"];
+const COUNTS = [6,3,2,2,11];
+
+class Component extends DCLogic {
+  state = {tab:"queue", objOpen:false, obj:0, sel:null, selKind:null, done:{}, text:"", rejecting:false, copied:{}, dismissed:{}};
+
+  gatesLeft(){ return GATES.filter(g => !this.state.done[g.id]); }
+
+  open(kind, id){ this.setState({sel:id, selKind:kind, text:"", rejecting:false}); }
+  close = () => this.setState({sel:null, selKind:null, text:"", rejecting:false});
+
+  decide(id){
+    const done = Object.assign({}, this.state.done);
+    done[id] = true;
+    this.setState({done, sel:null, selKind:null, text:"", rejecting:false});
+  }
+
+  fmt(pairs){ return (pairs || []).map(p => ({k:p[0], v:p[1]})); }
+  dep(list){ return (list || []).map(p => ({rel:p[0], text:p[1], state:p[2]})); }
+  act(list){ return (list || []).map(p => ({at:p[0], text:p[1], actor:p[2]})); }
+
+  drawerForGate(g){
+    const needsText = !!g.needsTextAlways || this.state.rejecting;
+    return {
+      chip:g.type, chipClass:"chip att", id:g.id, title:g.title,
+      sub:g.actor + " · " + g.age + " · target " + g.target,
+      hasAsk:true, ask:g.ask,
+      evidenceLabel:g.evidenceLabel, evidenceMeta:g.evidenceMeta, lines:g.lines,
+      hasEvidenceNote:!!g.evidenceNote, evidenceNote:g.evidenceNote || "",
+      facts:this.fmt(g.facts), deps:this.dep(g.deps), activity:this.act(g.activity),
+      decidable:true, readOnly:false,
+      needsText, textLabel:g.textLabel, textPlaceholder:g.textPlaceholder,
+      primaryLabel:this.state.rejecting ? "Confirm " + (g.rejectLabel || "reject").toLowerCase() : g.primary,
+      primaryDisabled:(needsText && this.state.text.trim().length < 3) || undefined,
+      hasReject:!!g.rejectLabel && !this.state.rejecting,
+      rejectLabel:g.rejectLabel,
+      submit:() => this.decide(g.id),
+      reject:() => this.setState({rejecting:true}),
+      footNote:this.state.rejecting ? "Rejecting records the rationale on the target and returns it to " + g.actor + "." : g.footNote
+    };
+  }
+
+  drawerForItem(it){
+    const gate = it.gate ? GATES.find(g => g.id === it.gate && !this.state.done[g.id]) : null;
+    if (gate) return this.drawerForGate(gate);
+    return {
+      chip:it.kind, chipClass:"chip", id:it.id, title:it.title,
+      sub:COLS[it.col] + " · " + it.meta,
+      hasAsk:false, ask:"",
+      evidenceLabel:"Acceptance criteria", evidenceMeta:it.prog ? it.prog[0] + " of " + it.prog[1] + " passed" : "no criteria recorded yet",
+      lines:it.lines || [], hasEvidenceNote:false, evidenceNote:"",
+      facts:this.fmt(it.facts), deps:this.dep(it.deps), activity:this.act(it.activity),
+      decidable:false, readOnly:true,
+      needsText:false, textLabel:"", textPlaceholder:"",
+      primaryLabel:"", primaryDisabled:true, hasReject:false, rejectLabel:"",
+      submit:this.close, reject:this.close, footNote:""
+    };
+  }
+
+  renderVals(){
+    const s = this.state;
+    const left = this.gatesLeft();
+    const head = left[0];
+    const rest = left.slice(1);
+    const decided = GATES.filter(g => s.done[g.id]);
+    const dormant = decided.filter(g => !g.live && !s.dismissed[g.actor]);
+    const liveDone = decided.filter(g => g.live);
+
+    const byActor = {};
+    dormant.forEach(g => { (byActor[g.actor] = byActor[g.actor] || []).push(g); });
+    const resume = Object.keys(byActor).map(actor => {
+      const gs = byActor[actor];
+      return {
+        actor, count:gs.length + (gs.length === 1 ? " decision" : " decisions"),
+        seen:gs[0].seen, ids:gs.map(g => g.id).join(", "),
+        prompt:"Throughline: decisions are recorded in /ws/throughline for " + actor + ".\nCall get_changes, then continue where you stopped.",
+        copyLabel:s.copied[actor] ? "✓ Copied" : "Copy prompt",
+        copy:() => { try { navigator.clipboard.writeText("Throughline: decisions are recorded in /ws/throughline for " + actor + ". Call get_changes, then continue where you stopped."); } catch(e) {} const c = Object.assign({}, s.copied); c[actor] = true; this.setState({copied:c}); },
+        dismiss:() => { const d = Object.assign({}, s.dismissed); d[actor] = true; this.setState({dismissed:d}); }
+      };
+    });
+
+    const liveByActor = {};
+    liveDone.forEach(g => { (liveByActor[g.actor] = liveByActor[g.actor] || []).push(g); });
+    const auto = Object.keys(liveByActor).map(actor => ({
+      actor, note:liveByActor[actor].length + " recorded · session live, last call " + liveByActor[actor][0].seen + " · no prompt needed"
+    }));
+
+    const cols = COLS.map((label, i) => ({
+      label, n:COUNTS[i],
+      cards:ITEMS.filter(it => it.col === i).map(it => {
+        const gateOpen = it.gate && !s.done[it.gate];
+        return {
+          id:it.id, kind:it.kind, title:it.title, meta:it.meta,
+          pri:it.pri || "", priClass:it.pri === "urgent" ? "chip hi" : (it.pri ? "chip" : "chip pol"),
+          blocked:!!(it.blk && (!it.gate || gateOpen)), blk:it.blk || "",
+          hasProg:!!it.prog, progLabel:it.prog ? "crit " + it.prog[0] + "/" + it.prog[1] : "",
+          progStyle:it.prog ? "width:" + Math.round(100 * it.prog[0] / it.prog[1]) + "%" : "width:0",
+          style:it.done ? "opacity:.62" : "",
+          open:() => this.open("item", it.id)
+        };
+      })
+    }));
+
+    const obj = OBJS[s.obj];
+    let d;
+    if (s.selKind === "gate") { const g = GATES.find(x => x.id === s.sel); d = g ? this.drawerForGate(g) : null; }
+    else if (s.selKind === "item") { const it = ITEMS.find(x => x.id === s.sel); d = it ? this.drawerForItem(it) : null; }
+
+    return {
+      obj, objOpen:s.objOpen, caret:s.objOpen ? "▲" : "▼",
+      toggleObj:() => this.setState({objOpen:!s.objOpen}),
+      topMeta:"phase " + obj.phase + " · actor human:reviewer · /ws/throughline",
+      objs:OBJS.map((o, i) => ({
+        title:o.title, meta:o.id + " · phase " + o.phase + " · " + o.items,
+        mark:i === s.obj ? "dot on" : "dot",
+        badge:o.needs > 0 ? o.needs + " need you" : (o.phase === "accepted" ? "closed" : "clear"),
+        badgeClass:o.needs > 0 ? "chip att" : "chip",
+        pick:() => this.setState({obj:i, objOpen:false, sel:null})
+      })),
+
+      stats:[
+        {label:"needs you", val:left.length, style:left.length ? "color:var(--color-accent)" : ""},
+        {label:"proposed", val:3, style:""},
+        {label:"ready", val:3, style:""},
+        {label:"in progress", val:2, style:""},
+        {label:"in review", val:2, style:""},
+        {label:"accepted", val:11, style:""},
+        {label:"dormant actors", val:2, style:""}
+      ],
+
+      onQueue:s.tab === "queue" ? "1" : "0", onBoard:s.tab === "board" ? "1" : "0",
+      onQueueBool:s.tab === "queue", onBoardBool:s.tab === "board",
+      showQueue:() => this.setState({tab:"queue"}), showBoard:() => this.setState({tab:"board"}),
+      hasGates:left.length > 0, gateCount:left.length,
+      tabHint:s.tab === "queue" ? "click any gate to read the evidence" : "read-only · agents own status",
+
+      resumeHas:resume.length > 0, resume,
+      autoHas:auto.length > 0, auto,
+
+      headHas:!!head,
+      head:head ? {
+        type:head.type, id:head.id, title:head.title, actor:head.actor, seen:head.seen, age:head.age,
+        liveClass:head.live ? "chip" : "chip hi", liveLabel:head.live ? "session live" : "dormant " + head.seen,
+        evidenceHint:head.evidenceHint,
+        primary:head.primary, secondary:head.secondary || "Open",
+        open:() => this.open("gate", head.id),
+        quickApprove:() => (head.needsTextAlways ? this.open("gate", head.id) : this.decide(head.id))
+      } : null,
+
+      restHas:rest.length > 0,
+      rest:rest.map(g => ({type:g.type, id:g.id, title:g.title, actor:g.actor, age:g.age, open:() => this.open("gate", g.id)})),
+      clear:left.length === 0,
+      reset:() => this.setState({done:{}, dismissed:{}, copied:{}, tab:"queue", sel:null}),
+
+      glance:{
+        cursor:"cursor 8841",
+        phase:obj.phase, phaseNote:"Execution continues while gates are open; blocked items do not advance.",
+        actors:[
+          {id:"agent:builder", state:"live 12s", cls:"chip"},
+          {id:"agent:writer", state:"live 8m", cls:"chip"},
+          {id:"agent:planner", state:"dormant 3h", cls:"chip hi"},
+          {id:"agent:researcher", state:"dormant 41m", cls:"chip hi"}
+        ],
+        accepted:"11 of 18", review:"OUT-311 pending", profiles:"routing_decision =1",
+        recent:[
+          {at:"2d", text:"WI-002 accepted"},
+          {at:"2d", text:"routing spec revision 2 accepted"},
+          {at:"4d", text:"workspace_id chosen as the routing key"}
+        ]
+      },
+
+      cols,
+      drawerOpen:!!d, d:d || {}, closeDrawer:this.close,
+      text:s.text, setText:(e) => this.setState({text:e.target.value})
+    };
+  }
+}
+</script>
+</body>
+</html>

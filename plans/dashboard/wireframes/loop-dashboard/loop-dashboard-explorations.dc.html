@@ -1,0 +1,1063 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<meta name="design_doc_mode" content="canvas">
+<link rel="stylesheet" href="_ds/modernist-604fc0f9-19a5-44ed-b0b0-a55509307aab/styles.css">
+<script src="_ds/modernist-604fc0f9-19a5-44ed-b0b0-a55509307aab/_ds_bundle.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;800&display=swap">
+<style>
+body{margin:0;background:#e6e4e2;font-family:var(--font-body)}
+a{color:var(--color-accent-700)}a:hover{color:var(--color-accent)}
+.dv-turn{padding:40px 44px 32px;border-bottom:2px solid var(--color-divider);scroll-margin-top:16px}
+.dv-thd{display:flex;align-items:baseline;gap:10px;margin:0 0 8px}
+.dv-tid{font:600 10px/1 ui-monospace,Menlo,monospace;padding:4px 7px;background:var(--color-text);color:#fff;text-decoration:none}
+.dv-tname{font:800 13px/1.2 var(--font-heading);letter-spacing:.02em;color:var(--color-text)}
+.dv-tnote{margin:0 0 24px;font:400 12px/1.5 var(--font-body);color:var(--color-neutral-700);max-width:70ch}
+.dv-opts{display:flex;flex-wrap:wrap;gap:36px;align-items:flex-start}
+.dv-opt{flex:none;display:flex;flex-direction:column;gap:9px;scroll-margin-top:16px}
+.dv-oid{font:600 10.5px/1 ui-monospace,Menlo,monospace;padding:4px 7px;background:var(--color-neutral-300);color:var(--color-text);text-decoration:none}
+.dv-olabel{display:flex;align-items:baseline;gap:8px;font:400 11.5px/1.3 var(--font-body);color:var(--color-neutral-700)}
+.dv-olabel b{font:600 11.5px/1.3 var(--font-body);color:var(--color-text)}
+.dv-card{max-width:100%;background:var(--color-bg);border:2px solid var(--color-text);overflow:hidden;position:relative}
+.dv-opt:target .dv-oid{background:var(--color-accent);color:#fff}
+.dv-next{margin:26px 0 0;font:12px/1.6 var(--font-body);color:var(--color-neutral-700)}
+
+.wf{color:var(--color-text);font:400 12px/1.4 var(--font-body);height:100%;display:flex;flex-direction:column}
+.wf-top{display:flex;align-items:center;gap:var(--space-3);padding:10px var(--space-4);border-bottom:2px solid var(--color-text);background:var(--color-neutral-200);flex:none}
+.wf-brand{font:800 12px/1 var(--font-heading);letter-spacing:.06em;text-transform:uppercase}
+.wf-obj{font:600 12px/1 var(--font-body)}
+.wf-lbl{font:600 9.5px/1 var(--font-body);letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600)}
+.wf-spacer{flex:1}
+.tabs{display:flex;gap:0;border-bottom:2px solid var(--color-text);flex:none;background:var(--color-neutral-200)}
+.tab{appearance:none;border:0;border-right:1px solid var(--color-divider);background:transparent;padding:9px 16px;font:600 11px/1 var(--font-body);letter-spacing:.04em;text-transform:uppercase;color:var(--color-neutral-700);cursor:pointer;text-align:left}
+.tab:hover{background:var(--color-accent-100)}
+.tab[data-on="1"]{background:var(--color-text);color:#fff}
+.tab .n{display:inline-block;margin-left:8px;padding:1px 5px;background:var(--color-accent);color:#fff;font:600 10px/1.4 ui-monospace,monospace}
+.board{flex:1;display:grid;grid-template-columns:repeat(5,1fr);min-height:0}
+.col{border-right:1px solid var(--color-divider);display:flex;flex-direction:column;min-width:0}
+.col:last-child{border-right:0}
+.colh{display:flex;align-items:baseline;gap:6px;padding:8px 10px;border-bottom:2px solid var(--color-text)}
+.colh .n{font:600 10px/1 ui-monospace,monospace;color:var(--color-neutral-600)}
+.colb{padding:10px;display:flex;flex-direction:column;gap:10px;overflow:hidden}
+.card{background:#fff;border:1px solid var(--color-neutral-400);padding:9px 10px;display:flex;flex-direction:column;gap:6px;cursor:pointer}
+.card:hover{border-color:var(--color-accent)}
+.card[data-sel="1"]{outline:2px solid var(--color-accent);outline-offset:-1px}
+.crow{display:flex;flex-wrap:wrap;align-items:center;gap:5px}
+.key{font:600 9.5px/1 ui-monospace,Menlo,monospace;color:var(--color-neutral-700)}
+.ctitle{font:600 11.5px/1.3 var(--font-body);text-wrap:pretty}
+.chip{font:600 9px/1 var(--font-body);letter-spacing:.05em;text-transform:uppercase;padding:3px 5px;background:var(--color-neutral-200);border:1px solid var(--color-neutral-400);color:var(--color-neutral-800)}
+.chip.hi{background:var(--color-accent-200);border-color:var(--color-accent-400);color:var(--color-accent-800)}
+.chip.att{background:var(--color-accent);border-color:var(--color-accent);color:#fff}
+.chip.pol{background:transparent;border-style:dashed}
+.blk{font:400 9.5px/1.35 ui-monospace,Menlo,monospace;color:var(--color-accent-700);border-left:2px solid var(--color-accent);padding-left:6px}
+.prog{display:flex;align-items:center;gap:6px;font:400 9.5px/1 ui-monospace,Menlo,monospace;color:var(--color-neutral-600)}
+.bar{flex:1;height:3px;background:var(--color-neutral-300)}
+.bar i{display:block;height:100%;background:var(--color-neutral-800)}
+.rail{width:280px;flex:none;border-left:2px solid var(--color-text);display:flex;flex-direction:column;background:var(--color-neutral-100)}
+.railh{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:2px solid var(--color-text);background:var(--color-accent);color:#fff}
+.railh .wf-lbl{color:#fff}
+.gates{display:flex;flex-direction:column}
+.gate{display:flex;flex-direction:column;gap:5px;padding:10px 12px;border-bottom:1px solid var(--color-divider);cursor:pointer;background:transparent;border-left:0;border-right:0;border-top:0;text-align:left;font:inherit;color:inherit}
+.gate:hover{background:var(--color-accent-100)}
+.gate-t{font:600 11.5px/1.3 var(--font-body)}
+.gate-m{font:400 9.5px/1.3 ui-monospace,Menlo,monospace;color:var(--color-neutral-600)}
+.acts{display:flex;gap:6px;margin-top:2px}
+.b{appearance:none;font:600 10px/1 var(--font-body);letter-spacing:.05em;text-transform:uppercase;padding:7px 10px;border:1px solid var(--color-text);background:transparent;color:var(--color-text);cursor:pointer;text-align:left}
+.b:hover{background:var(--color-accent-100)}
+.b.p{background:var(--color-accent);border-color:var(--color-accent);color:#fff}
+.b.p:hover{background:var(--color-accent-600)}
+.b:disabled{opacity:.45;cursor:not-allowed}
+.b.g{border-color:var(--color-neutral-400);color:var(--color-neutral-700)}
+.ph{height:8px;background:var(--color-neutral-300)}
+.drawer{position:absolute;top:0;right:0;bottom:0;width:400px;background:#fff;border-left:2px solid var(--color-text);box-shadow:var(--shadow-lg);display:flex;flex-direction:column}
+.dim{position:absolute;inset:0;background:color-mix(in srgb,#201e1d 45%,transparent)}
+.sec{padding:12px 14px;border-bottom:1px solid var(--color-divider);display:flex;flex-direction:column;gap:7px}
+.kv{display:grid;grid-template-columns:110px 1fr;gap:4px 10px;font:400 10.5px/1.4 ui-monospace,Menlo,monospace}
+.kv span:nth-child(odd){color:var(--color-neutral-600)}
+.modal{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:460px;background:#fff;border:2px solid var(--color-text);box-shadow:var(--shadow-lg);display:flex;flex-direction:column}
+.ta{width:100%;box-sizing:border-box;border:1px solid var(--color-neutral-500);background:var(--color-neutral-100);padding:8px;font:400 11px/1.4 var(--font-body);resize:none;color:var(--color-text)}
+.ta:focus-visible{outline:2px solid var(--color-accent);outline-offset:1px}
+.warn{background:var(--color-accent-200);border-bottom:2px solid var(--color-accent);padding:9px 12px;font:600 10.5px/1.4 var(--font-body);color:var(--color-accent-800);display:flex;gap:8px;align-items:flex-start}
+.pick{padding:var(--space-6);display:flex;flex-direction:column;gap:14px}
+.pickrow{display:flex;align-items:center;gap:14px;padding:12px;border:1px solid var(--color-neutral-400);background:#fff;cursor:pointer}
+.pickrow:hover{border-color:var(--color-accent)}
+.pickrow.cur{border-color:var(--color-text);border-width:2px;background:var(--color-neutral-100)}
+.objbtn{appearance:none;border:1px solid transparent;background:transparent;font:inherit;color:inherit;cursor:pointer;display:flex;align-items:center;gap:8px;padding:5px 8px;text-align:left}
+.objbtn:hover{border-color:var(--color-text);background:#fff}
+.objbtn[data-open="true"]{border-color:var(--color-text);background:#fff}
+.objmenu{position:absolute;top:100%;left:0;width:520px;background:#fff;border:2px solid var(--color-text);box-shadow:var(--shadow-lg);z-index:5;display:flex;flex-direction:column}
+.dot{width:8px;height:8px;background:var(--color-neutral-500);flex:none}
+.dot.on{background:var(--color-accent)}
+.mini{font:400 10px/1.4 ui-monospace,Menlo,monospace;color:var(--color-neutral-600)}
+.seg{display:flex;border:1px solid var(--color-text);flex:none}
+.segb{appearance:none;flex:1;border:0;border-right:1px solid var(--color-divider);background:transparent;padding:9px 4px;font:600 9.5px/1 var(--font-body);letter-spacing:.03em;text-transform:uppercase;cursor:pointer;color:var(--color-neutral-700)}
+.segb:last-child{border-right:0}
+.segb[data-on="1"]{background:var(--color-text);color:#fff}
+.empty{flex:1;display:flex;flex-direction:column;justify-content:center;gap:14px;padding:0 var(--space-8);max-width:520px}
+.code{font:400 11px/1.6 ui-monospace,Menlo,monospace;background:var(--color-text);color:#f3f2f2;padding:10px 12px}
+.stat{display:flex;gap:0;border-bottom:2px solid var(--color-text);flex:none}
+.statc{flex:1;padding:9px 12px;border-right:1px solid var(--color-divider)}
+.statc:last-child{border-right:0}
+.statc b{display:block;font:800 18px/1.1 var(--font-heading)}
+
+.chat{background:#ffffff;padding:18px 20px;display:flex;flex-direction:column;gap:12px;font:400 12px/1.55 var(--font-body)}
+.chat-who{font:600 9.5px/1 var(--font-body);letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600)}
+.chat-p{margin:0;max-width:62ch;text-wrap:pretty}
+.il{border:2px solid var(--color-text);background:var(--color-bg);display:flex;flex-direction:column}
+.il-h{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:2px solid var(--color-text);background:var(--color-neutral-200);flex:none}
+.il-tool{font:600 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.02em}
+.il-src{font:600 8.5px/1 var(--font-body);letter-spacing:.12em;text-transform:uppercase;color:var(--color-neutral-600)}
+.il-b{padding:11px 12px;display:flex;flex-direction:column;gap:9px}
+.il-t{font:600 13px/1.3 var(--font-body);text-wrap:pretty;margin:0}
+.il-g{display:grid;grid-template-columns:auto 1fr auto 1fr;gap:0;border-top:1px solid var(--color-divider);font:400 10.5px/1 ui-monospace,Menlo,monospace}
+.il-g>*{padding:6px 8px;border-bottom:1px solid var(--color-divider);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.il-g>.k{color:var(--color-neutral-600);letter-spacing:.02em;background:var(--color-neutral-100)}
+.il-r{display:flex;align-items:center;gap:8px;padding:7px 8px;border-bottom:1px solid var(--color-divider);font:400 10.5px/1.3 ui-monospace,Menlo,monospace}
+.il-r:last-child{border-bottom:0}
+.il-r b{font:600 11.5px/1.3 var(--font-body);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.il-list{display:flex;flex-direction:column;border-top:1px solid var(--color-divider)}
+.il-f{padding:7px 10px;border-top:2px solid var(--color-text);background:var(--color-neutral-100);display:flex;align-items:center;gap:10px;font:400 9.5px/1.3 ui-monospace,Menlo,monospace;color:var(--color-neutral-700)}
+.il-cta{font:600 9.5px/1 var(--font-body);letter-spacing:.05em;text-transform:uppercase;color:var(--color-accent-700);text-decoration:none;border-bottom:1px solid var(--color-accent);padding-bottom:1px}
+.il.err{border-color:var(--color-accent)}
+.il.err .il-h{background:var(--color-accent);border-bottom-color:var(--color-accent);color:#fff}
+.il.err .il-src{color:#fff}
+</style>
+</helmet>
+
+<section class="dv-turn" id="t5">
+<div class="dv-thd"><a class="dv-tid" href="#t5">5</a><span class="dv-tname">Inline returns — the loop rendered into the agent's chat</span></div>
+<p class="dv-tnote">Agent-first control means most of the loop is read in the transcript, not the dashboard. So every tool return that a human might read gets a rendered block: fixed 600px column, no scrolling, no JS, no hover state, and the same information as the JSON so the block can be pasted or read aloud. Blocks never carry buttons — a chat transcript cannot hold a decision, so the only affordance is a deep link into the dashboard. <a class="dv-oid" href="#5a">5a</a> shows one in place; <a class="dv-oid" href="#5b">5b</a>–<a class="dv-oid" href="#5g">5g</a> are the block set alone.</p>
+<div class="dv-opts">
+
+<div class="dv-opt" id="5a">
+<div class="dv-olabel"><a class="dv-oid" href="#5a">5a</a><b>In context</b> <span class="mini">— request_approval blocks the agent; the block is its receipt</span></div>
+<div class="dv-card" style="width:640px">
+<div class="chat">
+  <span class="chat-who">agent:researcher</span>
+  <p class="chat-p">The routing change touches the credential path, so it needs a human grant before I execute. Requesting approval and stopping here.</p>
+  <div class="il">
+    <div class="il-h"><span class="il-src">Throughline</span><span class="il-tool">request_approval</span><span class="wf-spacer"></span><span class="chip att">blocked</span></div>
+    <div class="il-b">
+      <p class="il-t">Approve routing of credential reads through workspace_id</p>
+      <span class="mini">Waiting on a human decision. State is written; nothing proceeds until it lands.</span>
+    </div>
+    <div class="il-g">
+      <span class="k">approval</span><span>APR-4182</span><span class="k">target</span><span>WI-2207</span>
+      <span class="k">state</span><span>needs_human_decision</span><span class="k">version</span><span>7</span>
+      <span class="k">requested</span><span>agent:researcher</span><span class="k">at</span><span>14:22:06</span>
+    </div>
+    <div class="il-f"><span>/ws/throughline</span><span class="wf-spacer"></span><a class="il-cta" href="#5a">Decide in dashboard →</a></div>
+  </div>
+  <span class="chat-who">agent:researcher</span>
+  <p class="chat-p">I'll pick the decision up on my next poll — no need to relay it to me.</p>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="5b">
+<div class="dv-olabel"><a class="dv-oid" href="#5b">5b</a><b>Objective context</b> — where the loop stands, in six lines</div>
+<div class="dv-card" style="width:600px;border-width:0">
+<div class="il">
+  <div class="il-h"><span class="il-src">Throughline</span><span class="il-tool">get_objective_context</span><span class="wf-spacer"></span><span class="mini">cursor 8841</span></div>
+  <div class="il-b">
+    <p class="il-t">OBJ-WORKSPACE-ROUTING · Route every MCP call by stable workspace_id</p>
+    <span class="mini">phase: execution · 2 gates blocking · 1 actor dormant 6m</span>
+  </div>
+  <div class="stat" style="border-top:1px solid var(--color-divider);border-bottom:0">
+    <div class="statc"><b>3</b><span class="wf-lbl">proposed</span></div>
+    <div class="statc"><b>2</b><span class="wf-lbl">ready</span></div>
+    <div class="statc"><b>4</b><span class="wf-lbl">active</span></div>
+    <div class="statc"><b>2</b><span class="wf-lbl">gated</span></div>
+    <div class="statc"><b>6</b><span class="wf-lbl">accepted</span></div>
+  </div>
+  <div class="il-list">
+    <div class="il-r"><span class="chip att">gate</span><b>Approve routing of credential reads</b><span>APR-4182</span></div>
+    <div class="il-r"><span class="chip att">gate</span><b>Which fallback on workspace_pending?</b><span>Q-118</span></div>
+  </div>
+  <div class="il-f"><span>/ws/throughline</span><span class="wf-spacer"></span><a class="il-cta" href="#5b">Open board →</a></div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="5c">
+<div class="dv-olabel"><a class="dv-oid" href="#5c">5c</a><b>Work item</b> — nine fields, ruled pairs instead of the crowded card face</div>
+<div class="dv-card" style="width:600px;border-width:0">
+<div class="il">
+  <div class="il-h"><span class="il-src">Throughline</span><span class="il-tool">get_item</span><span class="wf-spacer"></span><span class="chip hi">active</span></div>
+  <div class="il-b">
+    <p class="il-t">WI-2207 · Resolve workspace_id before handler decoding</p>
+    <div class="prog"><span>outputs 1/3</span><span class="bar"><i style="width:33%"></i></span><span>33%</span></div>
+  </div>
+  <div class="il-g">
+    <span class="k">claimed by</span><span>agent:researcher</span><span class="k">claim ttl</span><span>14m</span>
+    <span class="k">version</span><span>7</span><span class="k">updated</span><span>14:22:06</span>
+    <span class="k">depends on</span><span>WI-2201 ✓</span><span class="k">blocks</span><span>WI-2211, WI-2213</span>
+    <span class="k">profile</span><span>routing_decision =1</span><span class="k">objective</span><span>OBJ-WORKSPACE-ROUTING</span>
+  </div>
+  <div class="il-b" style="gap:6px">
+    <span class="wf-lbl">blocked by</span>
+    <span class="blk">APR-4182 · needs_human_decision · 8m</span>
+  </div>
+  <div class="il-f"><span>expected_version 7 · pass on write</span><span class="wf-spacer"></span><a class="il-cta" href="#5c">Open card →</a></div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="5d">
+<div class="dv-olabel"><a class="dv-oid" href="#5d">5d</a><b>Ready work</b> — candidates, unclaimed; the agent reads and picks</div>
+<div class="dv-card" style="width:600px;border-width:0">
+<div class="il">
+  <div class="il-h"><span class="il-src">Throughline</span><span class="il-tool">list_ready_items</span><span class="wf-spacer"></span><span class="mini">actor agent:researcher · 3 of 3</span></div>
+  <div class="il-list" style="border-top:0">
+    <div class="il-r"><span>WI-2211</span><b>Emit stable routing codes for registry failures</b><span class="chip">unclaimed</span></div>
+    <div class="il-r"><span>WI-2213</span><b>Validate workspace_id ahead of typed decode</b><span class="chip">unclaimed</span></div>
+    <div class="il-r"><span>WI-2218</span><b>Cover workspace_busy retry in server tests</b><span class="chip">unclaimed</span></div>
+  </div>
+  <div class="il-f"><span>claim expires 15m after claim_item</span><span class="wf-spacer"></span><span>no human action</span></div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="5e">
+<div class="dv-olabel"><a class="dv-oid" href="#5e">5e</a><b>Changes</b> — cursor delta, newest last, one line each</div>
+<div class="dv-card" style="width:600px;border-width:0">
+<div class="il">
+  <div class="il-h"><span class="il-src">Throughline</span><span class="il-tool">get_changes</span><span class="wf-spacer"></span><span class="mini">since 8792 → 8841</span></div>
+  <div class="il-list" style="border-top:0">
+    <div class="il-r"><span>8801</span><b>WI-2201 accepted</b><span>human:reviewer</span></div>
+    <div class="il-r"><span>8814</span><b>WI-2207 claimed</b><span>agent:researcher</span></div>
+    <div class="il-r"><span>8829</span><b>APR-4182 requested</b><span>agent:researcher</span></div>
+    <div class="il-r"><span>8841</span><b>Q-118 needs_human_decision</b><span>agent:writer</span></div>
+  </div>
+  <div class="il-f"><span>pass cursor 8841 to the next call</span><span class="wf-spacer"></span><span>4 events</span></div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="5f">
+<div class="dv-olabel"><a class="dv-oid" href="#5f">5f</a><b>Refusal</b> — the error envelope, rendered; code, retryability, correlation id</div>
+<div class="dv-card" style="width:600px;border-width:0">
+<div style="display:flex;flex-direction:column;gap:14px">
+<div class="il err">
+  <div class="il-h"><span class="il-src">Throughline</span><span class="il-tool">record_validation</span><span class="wf-spacer"></span><span class="il-tool">refused</span></div>
+  <div class="il-b">
+    <p class="il-t">workspace_pending</p>
+    <span class="mini">Retrying unchanged may succeed. No fallback workspace was used.</span>
+  </div>
+  <div class="il-g">
+    <span class="k">code</span><span>workspace_pending</span><span class="k">retryable</span><span>true</span>
+    <span class="k">request_id</span><span>req_7f31c0a9</span><span class="k">requirements</span><span>—</span>
+  </div>
+</div>
+<div class="il err">
+  <div class="il-h"><span class="il-src">Throughline</span><span class="il-tool">record_decision</span><span class="wf-spacer"></span><span class="il-tool">conflict 409</span></div>
+  <div class="il-b">
+    <p class="il-t">expected_version 6, current 7</p>
+    <span class="mini">Nothing was overwritten. Re-read the item, then resubmit against version 7.</span>
+  </div>
+  <div class="il-g">
+    <span class="k">code</span><span>version_conflict</span><span class="k">retryable</span><span>false</span>
+    <span class="k">changed by</span><span>human:reviewer</span><span class="k">request_id</span><span>req_5b02de41</span>
+  </div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="5g">
+<div class="dv-olabel"><a class="dv-oid" href="#5g">5g</a><b>Write receipts</b> — one line, no block; most calls do not deserve a card</div>
+<div class="dv-card" style="width:600px;border-width:0">
+<div class="il" style="border-width:1px;border-color:var(--color-neutral-400);background:#fff">
+  <div class="il-r" style="gap:10px"><span class="chip">ok</span><b style="font-family:ui-monospace,Menlo,monospace;font-weight:400;font-size:10.5px">record_context</b><span>CTX-903 · v1</span></div>
+  <div class="il-r" style="gap:10px"><span class="chip">ok</span><b style="font-family:ui-monospace,Menlo,monospace;font-weight:400;font-size:10.5px">record_decision</b><span>DEC-441 · v1</span></div>
+  <div class="il-r" style="gap:10px"><span class="chip">ok</span><b style="font-family:ui-monospace,Menlo,monospace;font-weight:400;font-size:10.5px">claim_item</b><span>WI-2211 · v3 · ttl 15m</span></div>
+  <div class="il-r" style="gap:10px"><span class="chip pol">replay</span><b style="font-family:ui-monospace,Menlo,monospace;font-weight:400;font-size:10.5px">record_validation</b><span>idempotent · no change</span></div>
+</div>
+</div>
+</div>
+
+</div>
+<p class="dv-next">Open: whether the host can render HTML at all — if it can only take text, these need a plain-text twin with the same field order. And whether the deep link carries a gate id (deciding straight from the transcript) or only the objective.</p>
+</section>
+
+<section class="dv-turn" id="t4">
+<div class="dv-thd"><a class="dv-tid" href="#t4">4</a><span class="dv-tname">Deciding writes state; resuming is a separate act</span></div>
+<p class="dv-tnote">Approve records the grant — it cannot wake anybody. So the queue tracks when each actor last called a tool: live actors pick the decision up on their own, dormant ones need a doorbell. The prompt carries no decision, only workspace, actor and an instruction to read state, so the truth stays in one place. Doorbells group by actor, not by gate. <a class="dv-oid" href="#4a">4a</a> is the queue with both paths; decide the head gate repeatedly to walk it. <a class="dv-oid" href="#4b">4b</a> makes the board's read-only nature visible.</p>
+<div class="dv-opts">
+
+<div class="dv-opt" id="4a">
+<div class="dv-olabel"><a class="dv-oid" href="#4a">4a</a><b>Queue with resume</b> <span class="mini">— Approve/Reject advances; Copy prompt writes to your real clipboard</span></div>
+<div class="dv-card" style="width:720px;height:760px">
+<div class="wf">
+  <div class="wf-top"><span class="wf-brand">Throughline</span><span class="wf-obj">OBJ-WORKSPACE-ROUTING</span><span class="wf-spacer"></span><span class="mini">{{ q4Tally }}</span><button class="b g" onClick="{{ q4Reset }}" title="wireframe control">↺ replay demo</button></div>
+
+  <div style="flex:1;padding:14px 16px;display:flex;flex-direction:column;gap:11px;overflow:hidden">
+
+    <sc-if value="{{ q4ResumeHas }}" hint-placeholder-val="{{ false }}">
+    <div style="border:2px solid var(--color-text);background:var(--color-neutral-100)">
+      <div style="padding:9px 12px;border-bottom:1px solid var(--color-divider);display:flex;align-items:center;gap:9px"><span class="wf-lbl">Resume</span><span class="mini">decisions are recorded — these actors are not listening</span></div>
+      <sc-for list="{{ q4Resume }}" as="r" hint-placeholder-count="1">
+        <div style="padding:11px 12px;border-bottom:1px solid var(--color-divider);display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;align-items:baseline;gap:9px"><span class="key">{{ r.actor }}</span><span class="chip">{{ r.count }}</span><span class="wf-spacer"></span><span class="mini">last seen {{ r.seen }}</span></div>
+          <div class="mini">{{ r.idList }}</div>
+          <div class="code" style="white-space:pre-wrap;font-size:10px">{{ r.prompt }}</div>
+          <div class="acts"><button class="b p" onClick="{{ r.copy }}">{{ r.copyLabel }}</button><button class="b g" onClick="{{ r.dismiss }}">Pasted — dismiss</button></div>
+        </div>
+      </sc-for>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ q4AutoHas }}" hint-placeholder-val="{{ false }}">
+      <sc-for list="{{ q4Auto }}" as="r" hint-placeholder-count="1">
+        <div style="border-left:2px solid var(--color-neutral-500);padding:8px 11px;background:var(--color-neutral-100);display:flex;align-items:baseline;gap:9px"><span class="key">{{ r.actor }}</span><span class="mini">{{ r.count }} recorded · session live, last call {{ r.seen }} · no prompt needed</span></div>
+      </sc-for>
+    </sc-if>
+
+    <sc-if value="{{ q4Has }}" hint-placeholder-val="{{ true }}">
+    <div style="border:2px solid var(--color-accent);background:#fff">
+      <div style="display:flex;gap:10px;align-items:baseline;padding:11px 13px;border-bottom:1px solid var(--color-divider)"><span class="chip att">{{ q4Head.type }}</span><span class="key">{{ q4Head.id }}</span><span class="wf-spacer"></span><span class="mini">{{ q4Head.age }}</span></div>
+      <div style="padding:12px 13px;display:flex;flex-direction:column;gap:9px">
+        <div style="font:600 14.5px/1.3 var(--font-body);text-wrap:pretty">{{ q4Head.title }}</div>
+        <div style="display:flex;align-items:baseline;gap:8px"><span class="wf-lbl">held by</span><span class="key">{{ q4Head.actor }}</span><span class="mini">last call {{ q4Head.seen }}</span><sc-if value="{{ q4Head.live }}" hint-placeholder-val="{{ true }}"><span class="chip">session live</span></sc-if></div>
+        <div class="acts"><button class="b p" onClick="{{ q4Decide }}">{{ q4Head.primary }}</button><button class="b" onClick="{{ q4Decide }}">{{ q4Head.secondary }}</button></div>
+      </div>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ q4RestHas }}" hint-placeholder-val="{{ true }}">
+      <sc-for list="{{ q4Rest }}" as="g" hint-placeholder-count="4">
+        <div style="border:1px solid var(--color-neutral-400);background:#fff;padding:10px 12px;display:flex;align-items:center;gap:10px"><span class="chip">{{ g.type }}</span><span class="key">{{ g.id }}</span><span style="font:600 12px/1.3 var(--font-body);flex:1;min-width:0">{{ g.title }}</span><span class="mini">{{ g.actor }}</span></div>
+      </sc-for>
+    </sc-if>
+
+    <sc-if value="{{ q4Clear }}" hint-placeholder-val="{{ false }}">
+      <div style="border:1px solid var(--color-neutral-400);background:var(--color-neutral-100);padding:20px;display:flex;flex-direction:column;gap:8px"><span class="wf-lbl">Nothing blocking, nobody waiting</span><div style="font:800 16px/1.2 var(--font-heading)">Every decision recorded and every actor either live or resumed.</div></div>
+    </sc-if>
+  </div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="4b">
+<div class="dv-olabel"><a class="dv-oid" href="#4b">4b</a><b>Read-only board</b> — no drag, no manual status change, and it says so</div>
+<div class="dv-card" style="width:1240px;height:420px">
+<div class="wf">
+  <div class="wf-top"><span class="wf-brand">Throughline</span><span class="wf-obj">OBJ-WORKSPACE-ROUTING</span><span class="wf-spacer"></span><span class="mini">read-only · agents own status</span></div>
+  <div style="background:var(--color-neutral-200);border-bottom:2px solid var(--color-text);padding:8px 16px;display:flex;align-items:center;gap:10px"><span class="wf-lbl">Board</span><span class="mini">Status is agent-owned. Cards cannot be dragged — to change an item's course, decide a gate or leave a clarification.</span></div>
+  <div class="board" style="cursor:default">
+    <div class="col"><div class="colh"><span class="wf-lbl">Backlog</span><span class="n">6</span></div><div class="colb">
+      <div class="card" style="cursor:default"><div class="crow"><span class="key">WI-041</span><span class="chip">docs</span><span class="chip">low</span></div><div class="ctitle">Document loopback-only listen flag</div><div class="crow"><span class="chip pol">agent_may_propose</span></div></div>
+      <div class="card" style="cursor:default"><div class="crow"><span class="key">WI-044</span><span class="chip">test</span><span class="chip">medium</span></div><div class="ctitle">Concurrency test for change cursor</div><div class="blk">plan_not_approved</div></div>
+    </div></div>
+    <div class="col"><div class="colh"><span class="wf-lbl">Ready</span><span class="n">3</span></div><div class="colb">
+      <div class="card" style="cursor:default"><div class="crow"><span class="key">WI-014</span><span class="chip">implementation</span><span class="chip hi">urgent</span></div><div class="ctitle">Resolve workspace_id from nearest config.toml</div><div class="prog"><span>crit 0/5</span><div class="bar"><i style="width:0"></i></div></div></div>
+    </div></div>
+    <div class="col"><div class="colh"><span class="wf-lbl">In progress</span><span class="n">2</span></div><div class="colb">
+      <div class="card" style="cursor:default"><div class="crow"><span class="key">WI-023</span><span class="chip">implementation</span><span class="chip">high</span></div><div class="ctitle">Router: per-workspace SQLite handle cache</div><div style="display:flex;align-items:baseline;gap:6px"><span class="mini">agent:builder</span><span class="chip">live</span></div><div class="prog"><span>crit 3/5</span><div class="bar"><i style="width:60%"></i></div></div></div>
+      <div class="card" style="cursor:default"><div class="crow"><span class="key">WI-027</span><span class="chip">test</span><span class="chip">medium</span></div><div class="ctitle">Host / Origin header validation suite</div><div class="prog"><span>crit 1/4</span><div class="bar"><i style="width:25%"></i></div></div></div>
+    </div></div>
+    <div class="col"><div class="colh"><span class="wf-lbl">Review</span><span class="n">2</span></div><div class="colb">
+      <div class="card" style="cursor:default"><div class="crow"><span class="key">WI-009</span><span class="chip">spec</span><span class="chip">high</span></div><div class="ctitle">Workspace routing spec — revision 3</div><div style="display:flex;align-items:baseline;gap:6px"><span class="mini">agent:planner</span><span class="chip">dormant 3h</span></div></div>
+      <div class="card" style="cursor:default"><div class="crow"><span class="key">WI-016</span><span class="chip">implementation</span></div><div class="ctitle">Credential file permissions check</div><div class="blk">open_question · unanswered</div></div>
+    </div></div>
+    <div class="col"><div class="colh"><span class="wf-lbl">Done</span><span class="n">11</span></div><div class="colb">
+      <div class="card" style="cursor:default;opacity:.6"><div class="crow"><span class="key">WI-002</span><span class="chip">spec</span></div><div class="ctitle">Daemon bearer credential format</div></div>
+    </div></div>
+  </div>
+</div>
+</div>
+</div>
+
+</div>
+</section>
+
+<section class="dv-turn" id="t3">
+<div class="dv-thd"><a class="dv-tid" href="#t3">3</a><span class="dv-tname">Objective switching</span></div>
+<p class="dv-tnote">The objective name in the top bar is the control. It is the only mount — launch auto-resolves to the objective with the most blocking gates (or the last one used), so the full-page picker <a class="dv-oid" href="#1d">1d</a> is cut from scope. Switching reloads the snapshot and lands by the <a class="dv-oid" href="#2b">2b</a> rule — gates open → queue, none → board. The rows are live: pick one and the top bar, stat row and tab count follow.</p>
+<div class="dv-opts">
+
+<div class="dv-opt" id="3a">
+<div class="dv-olabel"><a class="dv-oid" href="#3a">3a</a><b>Top-bar switcher</b> <span class="mini">— click the objective name to open; pick a row to switch</span></div>
+<div class="dv-card" style="width:1240px;height:560px">
+<div class="wf">
+  <div class="wf-top" style="position:relative;z-index:6">
+    <span class="wf-brand">Throughline</span>
+    <span class="wf-lbl">objective</span>
+    <button class="objbtn" data-open="{{ objOpen }}" onClick="{{ toggleObj }}">
+      <span class="wf-obj">{{ objTitle }}</span>
+      <span class="mini">{{ objId }}</span>
+      <span style="font:600 10px/1 var(--font-body)">{{ objCaret }}</span>
+    </button>
+    <span class="wf-spacer"></span>
+    <span class="mini">{{ objPhase }} · actor human:reviewer</span>
+    <sc-if value="{{ objOpen }}" hint-placeholder-val="{{ true }}">
+    <div class="objmenu" style="left:150px">
+      <div style="padding:9px 12px;border-bottom:1px solid var(--color-divider);display:flex;align-items:center;gap:9px"><span class="wf-lbl">Switch objective</span><span class="wf-spacer"></span><span class="mini">/ws/throughline · 3 objectives</span></div>
+      <sc-for list="{{ objs }}" as="o" hint-placeholder-count="3">
+        <button class="gate" style="{{ o.dim }}" onClick="{{ o.pick }}">
+          <div style="display:flex;align-items:center;gap:11px">
+            <span class="{{ o.mark }}"></span>
+            <div style="flex:1;min-width:0">
+              <div class="gate-t">{{ o.title }}</div>
+              <div class="gate-m">{{ o.id }} · phase {{ o.phase }} · {{ o.items }}</div>
+            </div>
+            <sc-if value="{{ o.hot }}" hint-placeholder-val="{{ true }}"><span class="chip att">{{ o.needs }} need you</span></sc-if>
+            <sc-if value="{{ o.cold }}" hint-placeholder-val="{{ false }}"><span class="chip">{{ o.label }}</span></sc-if>
+          </div>
+        </button>
+      </sc-for>
+      <div style="padding:9px 12px;border-top:1px solid var(--color-divider)" class="mini">Switching reloads the snapshot for that objective. Open gates on the one you leave stay open.</div>
+    </div>
+    </sc-if>
+  </div>
+
+  <div class="stat">
+    <sc-for list="{{ objStats }}" as="s" hint-placeholder-count="7">
+      <div class="statc"><span class="wf-lbl">{{ s.label }}</span><b style="{{ s.style }}">{{ s.val }}</b></div>
+    </sc-for>
+  </div>
+  <div class="tabs">
+    <button class="tab" data-on="{{ objQueueOn }}">Needs you <sc-if value="{{ objHasGates }}" hint-placeholder-val="{{ true }}"><span class="n">{{ objNeeds }}</span></sc-if></button>
+    <button class="tab" data-on="{{ objBoardOn }}">Board</button>
+  </div>
+  <div style="flex:1;display:flex;min-height:0;filter:grayscale(1);opacity:.45;position:relative">
+    <div style="position:absolute;top:8px;left:16px;z-index:2" class="wf-lbl">body as drawn in 2a — placeholder here</div>
+    <div style="flex:1;padding:30px 16px 14px;display:flex;flex-direction:column;gap:11px">
+      <div style="border:2px solid var(--color-accent);background:#fff;padding:12px 13px;display:flex;flex-direction:column;gap:8px"><div class="crow"><span class="chip att">external action</span><span class="key">GATE-71</span></div><div style="font:600 14px/1.3 var(--font-body)">Authorize brew install …/throughline</div><div class="ph" style="width:78%"></div><div class="ph" style="width:62%"></div></div>
+      <div style="border:1px solid var(--color-neutral-400);background:#fff;padding:11px 13px"><div class="ph" style="width:55%"></div></div>
+      <div style="border:1px solid var(--color-neutral-400);background:#fff;padding:11px 13px"><div class="ph" style="width:40%"></div></div>
+    </div>
+    <div class="rail" style="width:300px;background:var(--color-bg)"><div style="padding:9px 12px;border-bottom:2px solid var(--color-text)"><span class="wf-lbl">Objective at a glance</span></div><div class="sec"><div class="ph" style="width:70%"></div><div class="ph" style="width:52%"></div></div></div>
+  </div>
+</div>
+</div>
+</div>
+
+</div>
+</section>
+
+<section class="dv-turn" id="t2">
+<div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Queue-first, state-dependent landing</span></div>
+<p class="dv-tnote">The split board is gone. <a class="dv-oid" href="#2a">2a</a> folds the agreed flow into <a class="dv-oid" href="#1b">1b</a>: Activity tab dropped, counts moved above the tabs, and the landing tab derives from state rather than being fixed. The head gate is expanded and decidable — work the stack down and the frame walks itself to the empty state, where Board is preselected instead of leaving a dead end.</p>
+<div class="dv-opts">
+
+<div class="dv-opt" id="2a">
+<div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><b>Needs you, first and by default</b> <span class="mini">— decide the head gate to advance the stack; empty queue preselects Board</span></div>
+<div class="dv-card" style="width:1240px;height:700px">
+<div class="wf">
+  <div class="wf-top"><span class="wf-brand">Throughline</span><span class="wf-lbl">objective</span><span class="wf-obj">OBJ-WORKSPACE-ROUTING · Route every MCP call by stable workspace_id</span><span class="wf-spacer"></span><span class="mini">phase execution · actor human:reviewer</span><button class="b g" onClick="{{ q2Reset }}" title="wireframe control, not a product feature">↺ replay demo</button></div>
+
+  <div class="stat">
+    <div class="statc"><span class="wf-lbl">Blocking you</span><b style="color:var(--color-accent)">{{ q2Blocking }}</b></div>
+    <div class="statc"><span class="wf-lbl">Oldest wait</span><b>{{ q2Oldest }}</b></div>
+    <div class="statc"><span class="wf-lbl">Expiring &lt;1h</span><b>{{ q2Expiring }}</b></div>
+    <div class="statc"><span class="wf-lbl">In progress</span><b>2</b></div>
+    <div class="statc"><span class="wf-lbl">Ready</span><b>3</b></div>
+    <div class="statc"><span class="wf-lbl">Review</span><b>2</b></div>
+    <div class="statc"><span class="wf-lbl">Done</span><b>11</b></div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab" data-on="{{ q2QueueOn }}" onClick="{{ q2ShowQueue }}">{{ q2TabLabel }} <sc-if value="{{ q2Has }}" hint-placeholder-val="{{ true }}"><span class="n">{{ q2Count }}</span></sc-if></button>
+    <button class="tab" data-on="{{ q2BoardOn }}" onClick="{{ q2ShowBoard }}">Board</button>
+  </div>
+
+  <sc-if value="{{ q2Queue }}" hint-placeholder-val="{{ true }}">
+  <div style="flex:1;display:flex;min-height:0">
+    <div style="flex:1;display:flex;flex-direction:column;min-width:0;padding:14px 16px;gap:11px;overflow:hidden">
+      <sc-if value="{{ q2Has }}" hint-placeholder-val="{{ true }}">
+      <div style="border:2px solid var(--color-accent);background:#fff">
+        <div style="display:flex;gap:10px;align-items:baseline;padding:11px 13px;border-bottom:1px solid var(--color-divider)"><span class="chip att">{{ q2Head.type }}</span><span class="key">{{ q2Head.id }}</span><span class="wf-spacer"></span><span class="mini">{{ q2Head.age }}</span></div>
+        <div style="padding:12px 13px;display:flex;flex-direction:column;gap:9px">
+          <div style="font:600 14.5px/1.3 var(--font-body);text-wrap:pretty">{{ q2Head.title }}</div>
+          <div style="display:flex;flex-direction:column;gap:3px">
+            <sc-for list="{{ q2Head.pairs }}" as="p" hint-placeholder-count="4">
+              <div style="display:flex;gap:10px;font:400 10.5px/1.4 ui-monospace,Menlo,monospace"><span style="width:110px;flex:none;color:var(--color-neutral-600)">{{ p.k }}</span><span>{{ p.v }}</span></div>
+            </sc-for>
+          </div>
+          <div style="background:var(--color-neutral-200);padding:8px 10px" class="mini">{{ q2Head.note }}</div>
+          <div class="acts"><button class="b p" onClick="{{ q2Decide }}">{{ q2Head.primary }}</button><button class="b" onClick="{{ q2Decide }}">{{ q2Head.secondary }}</button><span class="wf-spacer"></span><button class="b g">Open WI in board →</button></div>
+        </div>
+      </div>
+      </sc-if>
+
+      <sc-for list="{{ q2Rest }}" as="g" hint-placeholder-count="4">
+        <div style="border:1px solid var(--color-neutral-400);background:#fff;padding:11px 13px;display:flex;align-items:center;gap:12px"><span class="chip">{{ g.type }}</span><span class="key">{{ g.id }}</span><span style="font:600 12.5px/1.3 var(--font-body)">{{ g.title }}</span><span class="wf-spacer"></span><span class="mini">{{ g.age }}</span><span class="b">Open</span></div>
+      </sc-for>
+
+      <sc-if value="{{ q2Empty }}" hint-placeholder-val="{{ false }}">
+        <div style="border:1px solid var(--color-neutral-400);background:var(--color-neutral-100);padding:20px;display:flex;flex-direction:column;gap:9px">
+          <span class="wf-lbl">Nothing blocking</span>
+          <div style="font:800 17px/1.2 var(--font-heading)">The agents have everything they need.</div>
+          <div class="mini">Board was preselected for you. Five decisions cleared this session · newest gate will surface here and bump the tab count.</div>
+        </div>
+      </sc-if>
+    </div>
+
+    <div class="rail" style="width:300px;background:var(--color-bg)">
+      <div style="padding:9px 12px;border-bottom:2px solid var(--color-text)"><span class="wf-lbl">Objective at a glance</span></div>
+      <div class="sec"><span class="wf-lbl">Active claims</span><div class="kv"><span>WI-023</span><span>agent:builder 22m</span><span>WI-027</span><span>agent:builder 41m</span></div></div>
+      <div class="sec"><span class="wf-lbl">Blockers</span><div class="blk">dependency_incomplete · 2</div><div class="blk">plan_not_approved · 1</div><div class="blk">approval_pending · 1</div></div>
+      <div class="sec"><span class="wf-lbl">Recent activity</span><div class="mini">14:02 agent:builder claimed WI-023<br>13:41 agent:planner proposed PLAN-04 r3<br>12:19 human:reviewer approved WI-005</div></div>
+      <div style="flex:1"></div>
+      <div style="padding:10px 12px;border-top:1px solid var(--color-divider)" class="mini">cursor 4812 · polled 2s ago</div>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ q2Board }}" hint-placeholder-val="{{ false }}">
+  <div class="board">
+    <div class="col"><div class="colh"><span class="wf-lbl">Backlog</span><span class="n">6</span></div><div class="colb">
+      <div class="card"><div class="crow"><span class="key">WI-041</span><span class="chip">docs</span><span class="chip">low</span></div><div class="ctitle">Document loopback-only listen flag</div><div class="crow"><span class="chip pol">agent_may_propose</span></div></div>
+      <div class="card"><div class="crow"><span class="key">WI-044</span><span class="chip">test</span><span class="chip">medium</span></div><div class="ctitle">Concurrency test for change cursor</div><div class="blk">plan_not_approved</div></div>
+    </div></div>
+    <div class="col"><div class="colh"><span class="wf-lbl">Ready</span><span class="n">3</span></div><div class="colb">
+      <div class="card"><div class="crow"><span class="key">WI-014</span><span class="chip">implementation</span><span class="chip hi">urgent</span></div><div class="ctitle">Resolve workspace_id from nearest config.toml</div><div class="crow"><span class="chip pol">approval_required</span></div><div class="prog"><span>crit 0/5</span><div class="bar"><i style="width:0"></i></div></div></div>
+      <div class="card"><div class="crow"><span class="key">WI-019</span><span class="chip">implementation</span><span class="chip">high</span></div><div class="ctitle">Reject non-loopback listen addresses</div><div class="crow"><span class="chip pol">autonomous_with_report</span></div></div>
+    </div></div>
+    <div class="col"><div class="colh"><span class="wf-lbl">In progress</span><span class="n">2</span></div><div class="colb">
+      <div class="card"><div class="crow"><span class="key">WI-023</span><span class="chip">implementation</span><span class="chip">high</span></div><div class="ctitle">Router: per-workspace SQLite handle cache</div><div class="crow"><span class="chip pol">approval_required</span></div><div class="prog"><span>crit 3/5</span><div class="bar"><i style="width:60%"></i></div></div><div class="prog"><span>out&nbsp; 1/2</span><div class="bar"><i style="width:50%"></i></div></div></div>
+      <div class="card"><div class="crow"><span class="key">WI-027</span><span class="chip">test</span><span class="chip">medium</span></div><div class="ctitle">Host / Origin header validation suite</div><div class="prog"><span>crit 1/4</span><div class="bar"><i style="width:25%"></i></div></div></div>
+    </div></div>
+    <div class="col"><div class="colh"><span class="wf-lbl">Review</span><span class="n">2</span></div><div class="colb">
+      <div class="card"><div class="crow"><span class="key">WI-009</span><span class="chip">spec</span><span class="chip">high</span></div><div class="ctitle">Workspace routing spec — revision 3</div><div class="prog"><span>crit 5/5</span><div class="bar"><i style="width:100%"></i></div></div></div>
+      <div class="card"><div class="crow"><span class="key">WI-016</span><span class="chip">implementation</span><span class="chip">medium</span></div><div class="ctitle">Credential file permissions check</div><div class="prog"><span>crit 2/3</span><div class="bar"><i style="width:66%"></i></div></div></div>
+    </div></div>
+    <div class="col"><div class="colh"><span class="wf-lbl">Done</span><span class="n">11</span></div><div class="colb">
+      <div class="card" style="opacity:.6"><div class="crow"><span class="key">WI-002</span><span class="chip">spec</span></div><div class="ctitle">Daemon bearer credential format</div></div>
+      <div class="card" style="opacity:.6"><div class="crow"><span class="key">WI-005</span><span class="chip">implementation</span></div><div class="ctitle">launchd / systemd unit generation</div></div>
+    </div></div>
+  </div>
+  </sc-if>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="2b">
+<div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a><b>Entry flow</b> — what decides the landing view</div>
+<div class="dv-card" style="width:400px;height:700px">
+<div class="wf" style="padding:16px 18px;gap:0;overflow:hidden">
+  <span class="wf-lbl">Launch</span>
+  <div class="code" style="margin-top:7px">throughline ui --actor human:reviewer</div>
+
+  <div style="height:14px"></div>
+  <div style="border-left:2px solid var(--color-text);padding-left:14px;display:flex;flex-direction:column;gap:14px">
+    <div><div class="wf-lbl">1 · resolve objective</div><div style="font:400 11.5px/1.5 var(--font-body);margin-top:4px">Never asks. <span style="font-family:ui-monospace,monospace">--objective</span> wins, else last used, else most blocking gates. Correct it from the top bar <a class="dv-oid" href="#3a">3a</a>.</div></div>
+    <div><div class="wf-lbl">2 · read the queue</div><div style="font:400 11.5px/1.5 var(--font-body);margin-top:4px">Gates open → land on <b>Needs you</b>, head gate expanded. None → same shell, Board preselected.</div></div>
+    <div><div class="wf-lbl">3 · decide</div><div style="font:400 11.5px/1.5 var(--font-body);margin-top:4px">Item stays put, count decrements, next gate expands. Reject needs a rationale <a class="dv-oid" href="#1f">1f</a>.</div></div>
+    <div><div class="wf-lbl">4 · drill down</div><div style="font:400 11.5px/1.5 var(--font-body);margin-top:4px">A gate's item key jumps to the board card with the drawer open <a class="dv-oid" href="#1e">1e</a>.</div></div>
+    <div><div class="wf-lbl">5 · leave</div><div style="font:400 11.5px/1.5 var(--font-body);margin-top:4px">Queue empty is the exit condition, not the board.</div></div>
+  </div>
+
+  <div style="height:16px"></div>
+  <div class="hr" style="background:var(--color-text);height:2px"></div>
+  <div style="height:14px"></div>
+  <span class="wf-lbl">Side entrance</span>
+  <div style="font:400 11.5px/1.5 var(--font-body);margin-top:5px">The inline MCP gate card <a class="dv-oid" href="#1g">1g</a> deep-links past all of it — opens on that one gate, queue behind it, board untouched.</div>
+
+  <div style="height:14px"></div>
+  <div style="background:var(--color-accent-200);border-left:2px solid var(--color-accent);padding:10px 12px;font:400 11px/1.5 var(--font-body);color:var(--color-accent-800)">The count badge is the navigation. The board answers "is this going anywhere," which is a second-order question.</div>
+</div>
+</div>
+</div>
+
+</div>
+</section>
+
+<section class="dv-turn" id="t1">
+<div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Throughline loop dashboard — first pass</span></div>
+<p class="dv-tnote">Single objective per view, lo-fi in Modernist tokens. <a class="dv-oid" href="#1a">1a</a>–<a class="dv-oid" href="#1b">1b</a> were the first two answers to "what does the human land on first?". <a class="dv-oid" href="#1d">1d</a>–<a class="dv-oid" href="#1j">1j</a> are the supporting screens and states, drawn once against the <a class="dv-oid" href="#1a">1a</a> shell. Vocabulary, statuses and reason codes are taken from <span class="mini">internal/domain/work/types.go</span> and the loop-visualization MVP plan.</p>
+<div class="dv-opts">
+
+<div class="dv-opt" id="1a">
+<div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><b>Board first</b> — five columns own the page, "Needs you" is a persistent right rail</div>
+<div class="dv-card" style="width:1240px;height:660px">
+<div class="wf">
+  <div class="wf-top"><span class="wf-brand">Throughline</span><span class="wf-lbl">objective</span><span class="wf-obj">OBJ-WORKSPACE-ROUTING · Route every MCP call by stable workspace_id</span><span class="wf-spacer"></span><span class="mini">phase execution · actor human:reviewer</span><button class="b g">Pause objective</button></div>
+  <div style="display:flex;flex:1;min-height:0">
+    <div class="board">
+      <div class="col"><div class="colh"><span class="wf-lbl">Backlog</span><span class="n">6</span></div><div class="colb">
+        <div class="card"><div class="crow"><span class="key">WI-041</span><span class="chip">docs</span><span class="chip">low</span></div><div class="ctitle">Document loopback-only listen flag</div><div class="crow"><span class="chip pol">agent_may_propose</span></div><div class="prog"><span>crit 0/3</span><div class="bar"><i style="width:0"></i></div></div></div>
+        <div class="card"><div class="crow"><span class="key">WI-044</span><span class="chip">test</span><span class="chip">medium</span></div><div class="ctitle">Concurrency test for change cursor</div><div class="crow"><span class="chip pol">approval_required</span></div><div class="blk">plan_not_approved</div></div>
+        <div class="card" style="opacity:.5"><div class="crow"><span class="key">WI-047</span><span class="chip">spec</span></div><div class="ctitle">Placeholder item</div><div class="ph" style="width:70%"></div></div>
+      </div></div>
+      <div class="col"><div class="colh"><span class="wf-lbl">Ready</span><span class="n">3</span></div><div class="colb">
+        <div class="card"><div class="crow"><span class="key">WI-014</span><span class="chip">implementation</span><span class="chip hi">urgent</span></div><div class="ctitle">Resolve workspace_id from nearest .throughline/config.toml</div><div class="crow"><span class="chip pol">approval_required</span></div><div class="prog"><span>crit 0/5</span><div class="bar"><i style="width:0"></i></div></div><div class="prog"><span>out&nbsp; 0/2</span><div class="bar"><i style="width:0"></i></div></div></div>
+        <div class="card"><div class="crow"><span class="key">WI-019</span><span class="chip">implementation</span><span class="chip">high</span></div><div class="ctitle">Reject non-loopback listen addresses</div><div class="crow"><span class="chip pol">autonomous_with_report</span></div><div class="prog"><span>crit 0/2</span><div class="bar"><i style="width:0"></i></div></div></div>
+      </div></div>
+      <div class="col"><div class="colh"><span class="wf-lbl">In progress</span><span class="n">2</span></div><div class="colb">
+        <div class="card" data-sel="1"><div class="crow"><span class="key">WI-023</span><span class="chip">implementation</span><span class="chip">high</span></div><div class="ctitle">Router: per-workspace SQLite handle cache</div><div class="crow"><span class="chip pol">approval_required</span><span class="chip att">needs_human_decision</span></div><div class="blk">approval_pending · external_action</div><div class="prog"><span>crit 3/5</span><div class="bar"><i style="width:60%"></i></div></div><div class="prog"><span>out&nbsp; 1/2</span><div class="bar"><i style="width:50%"></i></div></div></div>
+        <div class="card"><div class="crow"><span class="key">WI-027</span><span class="chip">test</span><span class="chip">medium</span></div><div class="ctitle">Host / Origin header validation suite</div><div class="crow"><span class="chip pol">autonomous_with_report</span></div><div class="prog"><span>crit 1/4</span><div class="bar"><i style="width:25%"></i></div></div></div>
+      </div></div>
+      <div class="col"><div class="colh"><span class="wf-lbl">Review</span><span class="n">2</span></div><div class="colb">
+        <div class="card"><div class="crow"><span class="key">WI-009</span><span class="chip">spec</span><span class="chip">high</span></div><div class="ctitle">Workspace routing spec — revision 3</div><div class="crow"><span class="chip pol">approval_required</span><span class="chip att">needs_human_review</span></div><div class="prog"><span>crit 5/5</span><div class="bar"><i style="width:100%"></i></div></div><div class="prog"><span>out&nbsp; 1/1</span><div class="bar"><i style="width:100%"></i></div></div></div>
+        <div class="card"><div class="crow"><span class="key">WI-016</span><span class="chip">implementation</span><span class="chip">medium</span></div><div class="ctitle">Credential file permissions check</div><div class="crow"><span class="chip pol">approval_required</span><span class="chip att">needs_clarification</span></div><div class="blk">open_question · unanswered</div></div>
+      </div></div>
+      <div class="col"><div class="colh"><span class="wf-lbl">Done</span><span class="n">11</span></div><div class="colb">
+        <div class="card" style="opacity:.6"><div class="crow"><span class="key">WI-002</span><span class="chip">spec</span></div><div class="ctitle">Daemon bearer credential format</div><div class="prog"><span>crit 4/4</span><div class="bar"><i style="width:100%"></i></div></div></div>
+        <div class="card" style="opacity:.6"><div class="crow"><span class="key">WI-005</span><span class="chip">implementation</span></div><div class="ctitle">launchd / systemd unit generation</div><div class="prog"><span>crit 3/3</span><div class="bar"><i style="width:100%"></i></div></div></div>
+      </div></div>
+    </div>
+    <div class="rail">
+      <div class="railh"><span class="wf-lbl">Needs you</span><span class="wf-spacer"></span><span style="font:600 11px/1 ui-monospace,monospace">5</span></div>
+      <div class="gates">
+        <button class="gate"><div class="gate-t">Authorize external action</div><div class="gate-m">GATE-71 · WI-023 · agent:builder<br>subject brew.install · expires 12m</div><div class="acts"><span class="b p">Approve</span><span class="b">Reject</span></div></button>
+        <button class="gate"><div class="gate-t">Approve plan revision 3</div><div class="gate-m">GATE-68 · PLAN-04 · agent:planner<br>expected_version 7</div><div class="acts"><span class="b p">Approve</span><span class="b">Reject</span></div></button>
+        <button class="gate"><div class="gate-t">Answer open question</div><div class="gate-m">GATE-66 · WI-016 · agent:builder<br>"0600 or 0400 for the token file?"</div><div class="acts"><span class="b p">Answer</span><span class="b">Waive</span></div></button>
+        <button class="gate"><div class="gate-t">Activate output profile</div><div class="gate-m">GATE-64 · PROFILE-02 · agent:planner</div><div class="acts"><span class="b p">Activate</span><span class="b">Reject</span></div></button>
+        <button class="gate"><div class="gate-t">Clear attention: needs_human_review</div><div class="gate-m">GATE-61 · WI-009</div><div class="acts"><span class="b p">Clear</span></div></button>
+      </div>
+      <div style="flex:1"></div>
+      <div style="padding:10px 12px;border-top:1px solid var(--color-divider)" class="mini">cursor 4812 · polled 2s ago</div>
+    </div>
+  </div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1b">
+<div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><b>Queue first</b> — decisions are the page; the board is a second tab <span class="mini">(tabs are clickable)</span></div>
+<div class="dv-card" style="width:1240px;height:660px">
+<div class="wf">
+  <div class="wf-top"><span class="wf-brand">Throughline</span><span class="wf-lbl">objective</span><span class="wf-obj">OBJ-WORKSPACE-ROUTING</span><span class="wf-spacer"></span><span class="mini">actor human:reviewer</span></div>
+  <div class="tabs">
+    <button class="tab" data-on="{{ tabQueue }}" onClick="{{ showQueue }}">Needs you <span class="n">5</span></button>
+    <button class="tab" data-on="{{ tabBoard }}" onClick="{{ showBoard }}">Board</button>
+    <button class="tab" data-on="0">Activity</button>
+  </div>
+  <sc-if value="{{ isQueue }}" hint-placeholder-val="{{ true }}">
+  <div style="flex:1;display:flex;min-height:0">
+    <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+      <div class="stat">
+        <div class="statc"><span class="wf-lbl">Blocking now</span><b>5</b></div>
+        <div class="statc"><span class="wf-lbl">Oldest wait</span><b>2d</b></div>
+        <div class="statc"><span class="wf-lbl">Expiring &lt;1h</span><b style="color:var(--color-accent)">1</b></div>
+        <div class="statc"><span class="wf-lbl">In progress</span><b>2</b></div>
+        <div class="statc"><span class="wf-lbl">Ready</span><b>3</b></div>
+      </div>
+      <div style="padding:14px 16px;display:flex;flex-direction:column;gap:12px;overflow:hidden">
+        <div style="border:2px solid var(--color-accent);background:#fff">
+          <div style="display:flex;gap:10px;align-items:baseline;padding:11px 13px;border-bottom:1px solid var(--color-divider)"><span class="chip att">external action</span><span class="key">GATE-71</span><span class="wf-spacer"></span><span class="mini">expires in 12m</span></div>
+          <div style="padding:12px 13px;display:flex;flex-direction:column;gap:9px">
+            <div style="font:600 14px/1.3 var(--font-body)">Authorize <span style="font-family:ui-monospace,monospace">brew install dennisschroeder/throughline/throughline</span></div>
+            <div class="kv"><span>subject hash</span><span>sha256:9f31…c04a</span><span>principal</span><span>human:reviewer</span><span>requested by</span><span>agent:builder</span><span>work item</span><span>WI-023 · action_version 4</span><span>constraints</span><span>network=allow · cwd=/ws/throughline</span></div>
+            <div class="acts"><button class="b p" onClick="{{ openGate }}">Approve</button><button class="b" onClick="{{ openGate }}">Reject…</button><button class="b g">Revoke grant</button></div>
+          </div>
+        </div>
+        <div style="border:1px solid var(--color-neutral-400);background:#fff;padding:11px 13px;display:flex;align-items:center;gap:12px"><span class="chip">plan review</span><span class="key">GATE-68</span><span style="font:600 12.5px/1 var(--font-body)">Approve plan revision 3 — "Routing by logical workspace_id"</span><span class="wf-spacer"></span><span class="mini">2d</span><span class="b">Open</span></div>
+        <div style="border:1px solid var(--color-neutral-400);background:#fff;padding:11px 13px;display:flex;align-items:center;gap:12px"><span class="chip">question</span><span class="key">GATE-66</span><span style="font:600 12.5px/1 var(--font-body)">0600 or 0400 for the token file?</span><span class="wf-spacer"></span><span class="mini">1d</span><span class="b">Open</span></div>
+        <div style="border:1px solid var(--color-neutral-400);background:#fff;padding:11px 13px;display:flex;align-items:center;gap:12px"><span class="chip">output profile</span><span class="key">GATE-64</span><span style="font:600 12.5px/1 var(--font-body)">Activate PROFILE-02</span><span class="wf-spacer"></span><span class="mini">1d</span><span class="b">Open</span></div>
+        <div style="border:1px solid var(--color-neutral-400);background:#fff;padding:11px 13px;display:flex;align-items:center;gap:12px"><span class="chip">attention</span><span class="key">GATE-61</span><span style="font:600 12.5px/1 var(--font-body)">Clear needs_human_review on WI-009</span><span class="wf-spacer"></span><span class="mini">4h</span><span class="b">Open</span></div>
+      </div>
+    </div>
+    <div class="rail" style="width:300px;background:var(--color-bg)">
+      <div style="padding:9px 12px;border-bottom:2px solid var(--color-text);display:flex;gap:8px;align-items:center"><span class="wf-lbl">Objective at a glance</span></div>
+      <div class="sec"><span class="wf-lbl">Column counts</span>
+        <div class="kv"><span>backlog</span><span>6</span><span>ready</span><span>3</span><span>in_progress</span><span>2</span><span>review</span><span>2</span><span>done</span><span>11</span></div>
+      </div>
+      <div class="sec"><span class="wf-lbl">Blockers</span><div class="blk">dependency_incomplete · 2</div><div class="blk">plan_not_approved · 1</div><div class="blk">approval_pending · 1</div></div>
+      <div class="sec"><span class="wf-lbl">Recent activity</span><div class="mini">14:02 agent:builder claimed WI-023<br>13:41 agent:planner proposed PLAN-04 r3<br>12:19 human:reviewer approved WI-005</div></div>
+    </div>
+  </div>
+  </sc-if>
+  <sc-if value="{{ isBoard }}" hint-placeholder-val="{{ false }}">
+  <div class="board">
+    <div class="col"><div class="colh"><span class="wf-lbl">Backlog</span><span class="n">6</span></div><div class="colb">
+      <div class="card"><div class="crow"><span class="key">WI-041</span><span class="chip">docs</span><span class="chip">low</span></div><div class="ctitle">Document loopback-only listen flag</div></div>
+      <div class="card"><div class="crow"><span class="key">WI-044</span><span class="chip">test</span><span class="chip">medium</span></div><div class="ctitle">Concurrency test for change cursor</div><div class="blk">plan_not_approved</div></div>
+    </div></div>
+    <div class="col"><div class="colh"><span class="wf-lbl">Ready</span><span class="n">3</span></div><div class="colb">
+      <div class="card"><div class="crow"><span class="key">WI-014</span><span class="chip">implementation</span><span class="chip hi">urgent</span></div><div class="ctitle">Resolve workspace_id from nearest config.toml</div><div class="prog"><span>crit 0/5</span><div class="bar"><i style="width:0"></i></div></div></div>
+      <div class="card"><div class="crow"><span class="key">WI-019</span><span class="chip">implementation</span><span class="chip">high</span></div><div class="ctitle">Reject non-loopback listen addresses</div></div>
+    </div></div>
+    <div class="col"><div class="colh"><span class="wf-lbl">In progress</span><span class="n">2</span></div><div class="colb">
+      <div class="card"><div class="crow"><span class="key">WI-023</span><span class="chip">implementation</span><span class="chip">high</span><span class="chip att">decision</span></div><div class="ctitle">Router: per-workspace SQLite handle cache</div><div class="prog"><span>crit 3/5</span><div class="bar"><i style="width:60%"></i></div></div></div>
+      <div class="card"><div class="crow"><span class="key">WI-027</span><span class="chip">test</span><span class="chip">medium</span></div><div class="ctitle">Host / Origin header validation suite</div></div>
+    </div></div>
+    <div class="col"><div class="colh"><span class="wf-lbl">Review</span><span class="n">2</span></div><div class="colb">
+      <div class="card"><div class="crow"><span class="key">WI-009</span><span class="chip">spec</span><span class="chip att">review</span></div><div class="ctitle">Workspace routing spec — revision 3</div></div>
+      <div class="card"><div class="crow"><span class="key">WI-016</span><span class="chip">implementation</span><span class="chip att">clarify</span></div><div class="ctitle">Credential file permissions check</div></div>
+    </div></div>
+    <div class="col"><div class="colh"><span class="wf-lbl">Done</span><span class="n">11</span></div><div class="colb">
+      <div class="card" style="opacity:.6"><div class="crow"><span class="key">WI-002</span><span class="chip">spec</span></div><div class="ctitle">Daemon bearer credential format</div></div>
+    </div></div>
+  </div>
+  </sc-if>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1d">
+<div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a><b>Objective picker</b> — <span style="color:var(--color-accent-700)">cut in turn 3</span>; launch auto-resolves instead</div>
+<div class="dv-card" style="width:620px;height:440px">
+<div class="wf">
+  <div class="wf-top"><span class="wf-brand">Throughline</span><span class="wf-spacer"></span><span class="mini">/ws/throughline · human:reviewer</span></div>
+  <div class="pick">
+    <div><div style="font:800 17px/1.2 var(--font-heading)">Pick an objective</div><div class="mini" style="margin-top:6px">3 objectives in this workspace · <span style="font-family:ui-monospace,monospace">--objective</span> skips this screen</div></div>
+    <div class="pickrow"><span class="dot on"></span><div style="flex:1"><div style="font:600 13px/1.3 var(--font-body)">Route every MCP call by stable workspace_id</div><div class="mini">OBJ-WORKSPACE-ROUTING · phase execution · 24 items</div></div><div style="text-align:right"><div class="chip att">5 need you</div></div></div>
+    <div class="pickrow"><span class="dot"></span><div style="flex:1"><div style="font:600 13px/1.3 var(--font-body)">Market-testable v0.1 release</div><div class="mini">OBJ-MARKET-V01 · phase evaluation · 31 items</div></div><div class="chip">1 need you</div></div>
+    <div class="pickrow" style="opacity:.55"><span class="dot"></span><div style="flex:1"><div style="font:600 13px/1.3 var(--font-body)">Semantic model generation</div><div class="mini">OBJ-SEMANTIC-MODEL · phase paused · 9 items</div></div><div class="chip">paused</div></div>
+  </div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1e">
+<div class="dv-olabel"><a class="dv-oid" href="#1e">1e</a><b>Card detail drawer</b> — context, dependencies, progress, artifacts, revisions, activity</div>
+<div class="dv-card" style="width:900px;height:720px">
+<div class="wf">
+  <div class="wf-top"><span class="wf-brand">Throughline</span><span class="wf-obj">OBJ-WORKSPACE-ROUTING</span></div>
+  <div style="flex:1;position:relative;display:flex;min-height:0">
+    <div style="flex:1;padding:10px;display:flex;flex-direction:column;gap:10px;filter:grayscale(1);opacity:.5">
+      <div class="card"><div class="crow"><span class="key">WI-023</span><span class="chip">implementation</span></div><div class="ctitle">Router: per-workspace SQLite handle cache</div></div>
+      <div class="card"><div class="crow"><span class="key">WI-027</span><span class="chip">test</span></div><div class="ctitle">Host / Origin header validation suite</div></div>
+    </div>
+    <div class="dim" style="background:color-mix(in srgb,#201e1d 18%,transparent)"></div>
+    <div class="drawer">
+      <div style="padding:12px 14px;border-bottom:2px solid var(--color-text);display:flex;flex-direction:column;gap:7px">
+        <div class="crow"><span class="key">WI-023</span><span class="chip">implementation</span><span class="chip">high</span><span class="chip">medium scope</span><span class="wf-spacer"></span><span class="b g">Close</span></div>
+        <div style="font:800 15px/1.25 var(--font-heading)">Router: per-workspace SQLite handle cache</div>
+        <div class="crow"><span class="chip pol">approval_required</span><span class="chip">actor: agent</span><span class="chip att">needs_human_decision</span></div>
+      </div>
+      <div class="sec"><span class="wf-lbl">Context</span><div class="ph" style="width:100%"></div><div class="ph" style="width:92%"></div><div class="ph" style="width:64%"></div></div>
+      <div class="sec"><span class="wf-lbl">Claim</span><div class="kv"><span>holder</span><span>agent:builder</span><span>claimed</span><span>14:02 · 38m ago</span><span>expires</span><span style="color:var(--color-accent-700)">15:02 · in 22m</span><span>version</span><span>7</span></div></div>
+      <div class="sec"><span class="wf-lbl">Blockers</span><div class="blk">approval_pending · external_action GATE-71</div></div>
+      <div class="sec"><span class="wf-lbl">Dependencies</span><div class="mini">WI-014 ready · WI-009 review (blocking)</div></div>
+      <div class="sec"><span class="wf-lbl">Progress</span>
+        <div class="prog"><span>criteria 3/5</span><div class="bar"><i style="width:60%"></i></div></div>
+        <div class="prog"><span>outputs&nbsp; 1/2</span><div class="bar"><i style="width:50%"></i></div></div>
+        <div class="mini">✓ handle cache keyed by workspace_id · ✓ eviction on close · ✓ concurrent read view · ○ fsync policy · ○ metrics</div>
+      </div>
+      <div class="sec"><span class="wf-lbl">Artifacts &amp; output revisions</span><div class="mini">↗ internal/router/cache.go · rev 3<br>↗ docs/adr/0007-handle-cache.md · rev 1</div></div>
+      <div class="sec" style="border-bottom:0"><span class="wf-lbl">Activity</span><div class="mini">14:02 claimed by agent:builder<br>13:58 criterion 3 satisfied<br>13:12 output revision 3 submitted</div></div>
+    </div>
+  </div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1f">
+<div class="dv-olabel"><a class="dv-oid" href="#1f">1f</a><b>Gate decision modal</b> — rationale is required for reject <span class="mini">(type in the field; Reject enables)</span></div>
+<div class="dv-card" style="width:700px;height:520px">
+<div class="wf">
+  <div style="flex:1;position:relative;background:var(--color-neutral-200)">
+    <div class="dim"></div>
+    <div class="modal">
+      <div style="padding:12px 14px;border-bottom:2px solid var(--color-text);display:flex;gap:9px;align-items:center"><span class="chip att">external action</span><span class="key">GATE-71</span><span class="wf-spacer"></span><span class="mini">expires in 12m</span></div>
+      <div style="padding:14px;display:flex;flex-direction:column;gap:11px">
+        <div style="font:800 15px/1.25 var(--font-heading)">Authorize one exact external action</div>
+        <div class="code">brew install dennisschroeder/throughline/throughline</div>
+        <div class="kv"><span>subject hash</span><span>sha256:9f31…c04a</span><span>principal</span><span>human:reviewer</span><span>requested by</span><span>agent:builder</span><span>work item</span><span>WI-023</span><span>action_version</span><span>4</span><span>constraints</span><span>network=allow · cwd=/ws/throughline</span><span>grant expiry</span><span>15:02 (22m)</span></div>
+        <div style="background:var(--color-neutral-200);padding:8px 10px" class="mini">Throughline records the grant. It never performs the action; the agent reports observed evidence afterwards.</div>
+        <div><div class="wf-lbl" style="margin-bottom:5px">Rationale <span style="color:var(--color-accent)">required to reject or revoke</span></div>
+        <textarea class="ta" rows="2" placeholder="Why?" value="{{ rationale }}" onChange="{{ setRationale }}"></textarea></div>
+        <div class="acts" style="margin-top:2px"><button class="b p">Approve</button><button class="b" disabled="{{ rejectDisabled }}">Reject</button><button class="b g" disabled="{{ rejectDisabled }}">Revoke grant</button><span class="wf-spacer"></span><button class="b g">Cancel</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1g">
+<div class="dv-olabel"><a class="dv-oid" href="#1g">1g</a><b>Inline MCP Gate Card</b> — read-only <span class="mini">show_loop_gate</span> surface inside the agent host</div>
+<div class="dv-card" style="width:420px;height:400px;border-width:2px">
+<div class="wf">
+  <div style="padding:10px 12px;border-bottom:2px solid var(--color-text);display:flex;gap:8px;align-items:center;background:var(--color-neutral-200)"><span class="wf-brand" style="font-size:10px">Throughline</span><span class="wf-lbl">gate</span><span class="wf-spacer"></span><span class="key">GATE-71</span></div>
+  <div style="padding:12px;display:flex;flex-direction:column;gap:10px">
+    <div class="crow"><span class="chip att">external action</span><span class="chip">1 of 5 blocking</span></div>
+    <div style="font:800 13.5px/1.3 var(--font-heading)">Authorize brew install …/throughline</div>
+    <div class="kv" style="grid-template-columns:88px 1fr"><span>subject</span><span>sha256:9f31…c04a</span><span>principal</span><span>human:reviewer</span><span>item</span><span>WI-023 · v7</span><span>expires</span><span style="color:var(--color-accent-700)">12m</span></div>
+    <div class="acts"><span class="b p">Approve</span><span class="b">Reject…</span></div>
+    <div style="border-top:1px solid var(--color-divider);padding-top:9px" class="mini">Open the full board for the other 4 →</div>
+    <div style="background:var(--color-neutral-200);padding:8px 9px" class="mini">Fallback when the host has no MCP-App support: the same fields arrive as structured content plus a text/JSON block.</div>
+  </div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1h">
+<div class="dv-olabel"><a class="dv-oid" href="#1h">1h</a><b>Below 900px</b> — one status at a time, never five squeezed columns <span class="mini">(selector is clickable)</span></div>
+<div class="dv-card" style="width:380px;height:600px">
+<div class="wf">
+  <div class="wf-top" style="padding:9px 12px"><span class="wf-brand" style="font-size:10px">Throughline</span><span class="wf-spacer"></span><span class="chip att">5</span></div>
+  <div style="padding:10px 12px;border-bottom:1px solid var(--color-divider)"><div class="wf-lbl">Objective</div><div style="font:600 12.5px/1.3 var(--font-body);margin-top:4px">Route every MCP call by stable workspace_id</div></div>
+  <div style="padding:10px 12px 12px">
+    <div class="seg">
+      <button class="segb" data-on="{{ mBack }}" onClick="{{ pickBack }}">Back<br>6</button>
+      <button class="segb" data-on="{{ mReady }}" onClick="{{ pickReady }}">Ready<br>3</button>
+      <button class="segb" data-on="{{ mProg }}" onClick="{{ pickProg }}">Prog<br>2</button>
+      <button class="segb" data-on="{{ mRev }}" onClick="{{ pickRev }}">Review<br>2</button>
+      <button class="segb" data-on="{{ mDone }}" onClick="{{ pickDone }}">Done<br>11</button>
+    </div>
+  </div>
+  <div style="padding:0 12px;display:flex;flex-direction:column;gap:10px;overflow:hidden">
+    <div class="wf-lbl">{{ mobileLabel }}</div>
+    <sc-for list="{{ mobileCards }}" as="c" hint-placeholder-count="2">
+      <div class="card"><div class="crow"><span class="key">{{ c.key }}</span><span class="chip">{{ c.kind }}</span><span class="chip">{{ c.pri }}</span></div><div class="ctitle">{{ c.title }}</div><div class="crow"><span class="chip pol">{{ c.pol }}</span></div><div class="prog"><span>{{ c.prog }}</span><div class="bar"><i style="width:{{ c.pct }}"></i></div></div></div>
+    </sc-for>
+  </div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1i">
+<div class="dv-olabel"><a class="dv-oid" href="#1i">1i</a><b>Empty / first run</b> — workspace initialized, nothing proposed yet</div>
+<div class="dv-card" style="width:620px;height:400px">
+<div class="wf">
+  <div class="wf-top"><span class="wf-brand">Throughline</span><span class="wf-spacer"></span><span class="mini">/ws/throughline · human:reviewer</span></div>
+  <div class="empty">
+    <div class="wf-lbl">No objective yet</div>
+    <div style="font:800 20px/1.15 var(--font-heading)">The board fills itself once an agent proposes work.</div>
+    <div style="font:400 12.5px/1.6 var(--font-body);color:var(--color-neutral-700)">This workspace is initialized and the daemon is healthy. Throughline records coordination state; it does not create objectives on its own. Ask a connected agent to propose one, or check the daemon.</div>
+    <div class="code">throughline doctor</div>
+    <div class="acts"><span class="b p">Reload snapshot</span><span class="b g">Copy workspace_id</span></div>
+    <div class="mini">workspace_id ws_01J8Z…4M2 · daemon 127.0.0.1:52731 · ✓ healthy</div>
+  </div>
+</div>
+</div>
+</div>
+
+<div class="dv-opt" id="1j">
+<div class="dv-olabel"><a class="dv-oid" href="#1j">1j</a><b>Version conflict (409)</b> — the decision is refused, not overwritten <span class="mini">(reload works)</span></div>
+<div class="dv-card" style="width:560px;height:440px">
+<div class="wf">
+  <div style="flex:1;position:relative;background:var(--color-neutral-200)">
+    <div class="dim"></div>
+    <div class="modal" style="width:480px">
+      <sc-if value="{{ stale }}" hint-placeholder-val="{{ true }}">
+      <div class="warn"><span>409</span><span>version_conflict — PLAN-04 moved to revision 4 while this gate was open. Your rationale is kept; the decision was not applied.</span></div>
+      </sc-if>
+      <div style="padding:12px 14px;border-bottom:1px solid var(--color-divider);display:flex;gap:9px;align-items:center"><span class="chip">plan review</span><span class="key">GATE-68</span><span class="wf-spacer"></span><span class="mini">{{ verLine }}</span></div>
+      <div style="padding:14px;display:flex;flex-direction:column;gap:11px">
+        <div style="font:800 15px/1.25 var(--font-heading)">{{ staleTitle }}</div>
+        <div class="kv"><span>expected_version</span><span>{{ expected }}</span><span>current_version</span><span>{{ current }}</span><span>proposed by</span><span>agent:planner</span><span>idempotency key</span><span>ui_7f2c…9a1</span></div>
+        <div class="ph" style="width:100%"></div><div class="ph" style="width:88%"></div><div class="ph" style="width:52%"></div>
+        <div class="acts"><button class="b p" onClick="{{ reload }}">{{ reloadLabel }}</button><button class="b" disabled="{{ stale }}">Approve</button><button class="b" disabled="{{ stale }}">Reject</button><span class="wf-spacer"></span><button class="b g">Cancel</button></div>
+        <div class="mini">{{ staleNote }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+</div>
+
+</div>
+<p class="dv-next">Try next: "show <a class="dv-oid" href="#1a">1a</a> with a blocked-everything objective" · "new directions for the Needs you queue"</p>
+</section>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1400,&quot;height&quot;:900}}">
+const COLS = {
+  backlog: ["Backlog · 6 items", [
+    {key:"WI-041",kind:"docs",pri:"low",title:"Document loopback-only listen flag",pol:"agent_may_propose",prog:"crit 0/3",pct:"0%"},
+    {key:"WI-044",kind:"test",pri:"medium",title:"Concurrency test for change cursor",pol:"approval_required",prog:"crit 0/2",pct:"0%"}
+  ]],
+  ready: ["Ready · 3 items", [
+    {key:"WI-014",kind:"implementation",pri:"urgent",title:"Resolve workspace_id from nearest .throughline/config.toml",pol:"approval_required",prog:"crit 0/5",pct:"0%"},
+    {key:"WI-019",kind:"implementation",pri:"high",title:"Reject non-loopback listen addresses",pol:"autonomous_with_report",prog:"crit 0/2",pct:"0%"}
+  ]],
+  prog: ["In progress · 2 items", [
+    {key:"WI-023",kind:"implementation",pri:"high",title:"Router: per-workspace SQLite handle cache",pol:"approval_required",prog:"crit 3/5",pct:"60%"},
+    {key:"WI-027",kind:"test",pri:"medium",title:"Host / Origin header validation suite",pol:"autonomous_with_report",prog:"crit 1/4",pct:"25%"}
+  ]],
+  review: ["Review · 2 items", [
+    {key:"WI-009",kind:"spec",pri:"high",title:"Workspace routing spec — revision 3",pol:"approval_required",prog:"crit 5/5",pct:"100%"},
+    {key:"WI-016",kind:"implementation",pri:"medium",title:"Credential file permissions check",pol:"approval_required",prog:"crit 2/3",pct:"66%"}
+  ]],
+  done: ["Done · 11 items", [
+    {key:"WI-002",kind:"spec",pri:"medium",title:"Daemon bearer credential format",pol:"approval_required",prog:"crit 4/4",pct:"100%"},
+    {key:"WI-005",kind:"implementation",pri:"high",title:"launchd / systemd unit generation",pol:"approval_required",prog:"crit 3/3",pct:"100%"}
+  ]]
+};
+
+const GATES = [
+  {actor:"agent:builder",seen:"20s ago",live:true,id:"GATE-71",cls:"chip att",type:"external action",title:"Authorize brew install dennisschroeder/throughline/throughline",age:"expires in 12m",hot:true,
+   pairs:[{k:"subject hash",v:"sha256:9f31…c04a"},{k:"principal",v:"human:reviewer"},{k:"requested by",v:"agent:builder"},{k:"work item",v:"WI-023 · action_version 4"},{k:"constraints",v:"network=allow · cwd=/ws/throughline"}],
+   primary:"Approve",secondary:"Reject…",note:"Throughline records the grant. It never performs the action; the agent reports observed evidence afterwards."},
+  {actor:"agent:planner",seen:"3h ago",live:false,id:"GATE-68",cls:"chip",type:"plan review",title:"Approve plan revision 3 — routing by logical workspace_id",age:"waiting 2d",hot:false,
+   pairs:[{k:"plan",v:"PLAN-04 · revision 3"},{k:"expected_version",v:"7"},{k:"proposed by",v:"agent:planner"},{k:"changes",v:"4 work items added · 1 removed"}],
+   primary:"Approve",secondary:"Reject…",note:"Approving admits the revision as the active plan for this objective."},
+  {actor:"agent:builder",seen:"20s ago",live:true,id:"GATE-66",cls:"chip",type:"question",title:"0600 or 0400 for the token file?",age:"waiting 1d",hot:false,
+   pairs:[{k:"work item",v:"WI-016"},{k:"asked by",v:"agent:builder"},{k:"blocks",v:"1 item in review"}],
+   primary:"Answer",secondary:"Waive",note:"The agent set needs_clarification and stopped rather than guessing."},
+  {actor:"agent:planner",seen:"3h ago",live:false,id:"GATE-64",cls:"chip",type:"output profile",title:"Activate PROFILE-02",age:"waiting 1d",hot:false,
+   pairs:[{k:"profile",v:"PROFILE-02"},{k:"proposed by",v:"agent:planner"},{k:"supersedes",v:"PROFILE-01 (active)"}],
+   primary:"Activate",secondary:"Reject…",note:"Only one profile is active per objective."},
+  {actor:"agent:planner",seen:"3h ago",live:false,id:"GATE-61",cls:"chip",type:"attention",title:"Clear needs_human_review on WI-009",age:"waiting 4h",hot:false,
+   pairs:[{k:"work item",v:"WI-009 · review"},{k:"set by",v:"agent:planner"},{k:"criteria",v:"5/5 satisfied"}],
+   primary:"Clear",secondary:"Keep",note:"Clearing returns the item to the agent's control."}
+];
+
+const MIN = { m: 1, h: 60, d: 1440 };
+function waitMinutes(g) {
+  const m = /(\d+)\s*([mhd])/.exec(g.age);
+  if (!m) return 0;
+  return g.hot ? 0 : Number(m[1]) * MIN[m[2]];
+}
+function oldestWait(open) {
+  const worst = open.reduce((a, b) => (waitMinutes(b) > waitMinutes(a) ? b : a), open[0]);
+  return waitMinutes(worst) === 0 ? "<1h" : worst.age.replace("waiting ", "");
+}
+
+const OBJECTIVES = [
+  {id:"OBJ-WORKSPACE-ROUTING",title:"Route every MCP call by stable workspace_id",phase:"execution",items:"24 items",needs:"5",hot:true,dim:"",
+   stats:[["Blocking you","5",1],["Oldest wait","2d",0],["Expiring <1h","1",0],["In progress","2",0],["Ready","3",0],["Review","2",0],["Done","11",0]]},
+  {id:"OBJ-MARKET-V01",title:"Market-testable v0.1 release",phase:"evaluation",items:"31 items",needs:"1",hot:false,dim:"",
+   stats:[["Blocking you","1",1],["Oldest wait","6h",0],["Expiring <1h","0",0],["In progress","4",0],["Ready","7",0],["Review","1",0],["Done","19",0]]},
+  {id:"OBJ-SEMANTIC-MODEL",title:"Semantic model generation",phase:"paused",items:"9 items",needs:"",hot:false,dim:"opacity:.55",
+   stats:[["Blocking you","0",0],["Oldest wait","—",0],["Expiring <1h","0",0],["In progress","0",0],["Ready","2",0],["Review","0",0],["Done","7",0]]}
+];
+
+class Component extends DCLogic {
+  state = { tab: "queue", rationale: "", mcol: "prog", stale: true, q2Tab: null, q2Done: 0, objOpen: true, objId: "OBJ-WORKSPACE-ROUTING", q4Done: 0, copied: "", resumed: [] };
+
+  prompt(actor) {
+    return "Resume Throughline work.\nworkspace_id: ws_01J8Z…4M2\nactor: " + actor +
+      "\nCall throughline.get_next_action and follow the recorded state.\nDo not assume what changed.";
+  }
+
+  copy(actor) {
+    return () => {
+      const t = this.prompt(actor);
+      if (navigator.clipboard) navigator.clipboard.writeText(t).catch(() => {});
+      this.setState({ copied: actor });
+    };
+  }
+
+  renderVals() {
+    const col = COLS[this.state.mcol];
+    const pick = (k) => () => this.setState({ mcol: k });
+    const stale = this.state.stale;
+    const open = GATES.slice(this.state.q2Done);
+    const head = open[0] || null;
+    const q2Tab = this.state.q2Tab || (open.length ? "queue" : "board");
+
+    const cur = OBJECTIVES.find(o => o.id === this.state.objId) || OBJECTIVES[0];
+
+    const decided = GATES.slice(0, this.state.q4Done);
+    const pending = GATES.slice(this.state.q4Done);
+    const group = (list) => {
+      const out = [];
+      list.forEach(g => {
+        let e = out.find(x => x.actor === g.actor);
+        if (!e) { e = { actor: g.actor, seen: g.seen, live: g.live, ids: [], n: 0 }; out.push(e); }
+        e.ids.push(g.id); e.n += 1;
+      });
+      return out.map(e => ({
+        ...e,
+        idList: e.ids.join(" · "),
+        count: e.n === 1 ? "1 decision" : e.n + " decisions",
+        prompt: this.prompt(e.actor),
+        copyLabel: this.state.copied === e.actor ? "Copied ✓" : "Copy prompt",
+        copy: this.copy(e.actor),
+        dismiss: () => this.setState({ resumed: this.state.resumed.concat(e.actor) })
+      }));
+    };
+    const groups = group(decided);
+    const waiting = groups.filter(g => !g.live && this.state.resumed.indexOf(g.actor) === -1);
+
+    return {
+      q4Head: pending[0] || null,
+      q4Has: pending.length > 0,
+      q4Rest: pending.slice(1),
+      q4RestHas: pending.length > 1,
+      q4Count: pending.length,
+      q4Decide: () => this.setState({ q4Done: this.state.q4Done + 1 }),
+      q4Reset: () => this.setState({ q4Done: 0, copied: "", resumed: [] }),
+      q4Resume: waiting,
+      q4ResumeHas: waiting.length > 0,
+      q4Auto: groups.filter(g => g.live),
+      q4AutoHas: groups.some(g => g.live),
+      q4Clear: pending.length === 0 && waiting.length === 0,
+      q4Tally: decided.length + " decided · " + pending.length + " open",
+
+
+      objs: OBJECTIVES.map(o => ({
+        ...o,
+        on: o.id === this.state.objId,
+        cold: !o.hot,
+        label: o.phase === "paused" ? "paused" : (o.needs ? o.needs + " need you" : "nothing blocking"),
+        mark: o.id === this.state.objId ? "dot on" : "dot",
+        row: o.id === this.state.objId ? "pickrow cur" : "pickrow",
+        pick: () => this.setState({ objId: o.id, objOpen: false })
+      })),
+      objOpen: this.state.objOpen,
+      objShut: !this.state.objOpen,
+      objCaret: this.state.objOpen ? "▴" : "▾",
+      objTitle: cur.title,
+      objId: cur.id,
+      objPhase: "phase " + cur.phase,
+      objStats: cur.stats.map(s => ({ label: s[0], val: s[1], style: s[2] && s[1] !== "0" ? "color:var(--color-accent)" : "" })),
+      objNeeds: cur.needs || "0",
+      objHasGates: !!cur.needs,
+      objNoGates: !cur.needs,
+      objQueueOn: cur.needs ? "1" : "0",
+      objBoardOn: cur.needs ? "0" : "1",
+      toggleObj: () => this.setState({ objOpen: !this.state.objOpen }),
+      pickObj: (id) => () => this.setState({ objId: id, objOpen: false }),
+
+      q2Count: open.length,
+      q2Has: open.length > 0,
+      q2Empty: open.length === 0,
+      q2Queue: q2Tab === "queue",
+      q2Board: q2Tab === "board",
+      q2QueueOn: q2Tab === "queue" ? "1" : "0",
+      q2BoardOn: q2Tab === "board" ? "1" : "0",
+      q2ShowQueue: () => this.setState({ q2Tab: "queue" }),
+      q2ShowBoard: () => this.setState({ q2Tab: "board" }),
+      q2Head: head,
+      q2Rest: open.slice(1),
+      q2Decide: () => this.setState({ q2Done: this.state.q2Done + 1, q2Tab: null }),
+      q2Reset: () => this.setState({ q2Done: 0, q2Tab: null }),
+      q2TabLabel: open.length ? "Needs you" : "Needs you — clear",
+      q2Blocking: open.length,
+      q2Oldest: open.length ? oldestWait(open) : "—",
+      q2Expiring: head && head.hot ? "1" : "0",
+
+      tabQueue: this.state.tab === "queue" ? "1" : "0",
+      tabBoard: this.state.tab === "board" ? "1" : "0",
+      isQueue: this.state.tab === "queue",
+      isBoard: this.state.tab === "board",
+      showQueue: () => this.setState({ tab: "queue" }),
+      showBoard: () => this.setState({ tab: "board" }),
+
+      rationale: this.state.rationale,
+      setRationale: (e) => this.setState({ rationale: e.target.value }),
+      rejectDisabled: this.state.rationale.trim().length === 0,
+
+      mBack: this.state.mcol === "backlog" ? "1" : "0",
+      mReady: this.state.mcol === "ready" ? "1" : "0",
+      mProg: this.state.mcol === "prog" ? "1" : "0",
+      mRev: this.state.mcol === "review" ? "1" : "0",
+      mDone: this.state.mcol === "done" ? "1" : "0",
+      pickBack: pick("backlog"), pickReady: pick("ready"), pickProg: pick("prog"),
+      pickRev: pick("review"), pickDone: pick("done"),
+      mobileLabel: col[0],
+      mobileCards: col[1],
+
+      stale,
+      staleTitle: stale ? "Approve plan revision 3" : "Approve plan revision 4",
+      verLine: stale ? "stale — revision 3" : "current — revision 4",
+      expected: stale ? "7" : "9",
+      current: "9",
+      reload: () => this.setState({ stale: false }),
+      reloadLabel: stale ? "Reload gate" : "Reloaded ✓",
+      staleNote: stale
+        ? "Approve and Reject stay disabled until the gate is refreshed. Retrying the same idempotency key replays exactly, it does not force the write."
+        : "Refreshed from the current read view. The decision now carries expected_version 9."
+    };
+  }
+}
+
+</script>
+</body>
+</html>
