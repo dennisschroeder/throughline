@@ -100,7 +100,52 @@ that assumption to `invalidated`, and assert an `Attention` record exists with
 
 ## Feedback
 
-To be written at delivery, before the objective moves to evaluation. Record for each node what
-it actually consumed against its budget, which edges were taken, and where the design diverged
-from reality. The 150k per-node ceiling that drove the `N2` split is a setting, not a
-measurement — this section is what corrects it.
+Filled in as nodes deliver. The frozen design above is left untouched; divergence is recorded
+here rather than edited away.
+
+### N1 — delivered
+
+Consumed **54,162 tokens against a 25–40k budget**. The file floor was about 4.7k, so the real
+multiplier was roughly **11.5×**, not the 3–5× assumed when the plan was written. The gate passed
+on the first attempt, so no fix-loop budget was spent; the overrun is baseline cost, not rework.
+
+One measurement, and the smallest node in the graph — so 11.5× is probably an upper bound rather
+than the factor. Fixed overhead (system prompt, tool schemas, MCP definitions) is roughly constant
+per node and dominates a small one; a larger node amortizes it. The honest reading is that the
+original numbers were too low and the true factor sits somewhere between, not that 11.5× is now
+the rule.
+
+Reprojected with both bounds:
+
+| Node | Planned | at 6× | at 11.5× |
+|---|---|---|---|
+| N2a persistence | 100–150k | 138k | 265k |
+| N2b surface | 100–150k | 156k | 300k |
+| N3 attention | 60–100k | 90k | 172k |
+
+The 150k ceiling that justified splitting N2 sits inside that uncertainty. Three nodes breach it
+at the upper bound and none clearly does at the lower. That makes the ceiling the questionable
+part, not the nodes: a threshold whose verdict flips across the plausible range is not deciding
+anything. Do not re-split on these numbers alone — measure N2a first, since it is the next code
+node and will narrow the range far more than reasoning will.
+
+### N1 — what the design missed
+
+**A lifecycle change is a data migration.** Moving `success_metric` off the agreement lifecycle
+orphaned every record already written under it, including this objective's own success metric,
+which still sits at `proposed`. `TestIntentAndPlanningVerticalSlice` in `internal/sqlite` went red.
+No node in the frozen graph covered this. A node was inserted between N1 and N2a
+(`TH-PROV-06-STATUS-MIGRATION`) and N2a now depends on it.
+
+**The acceptance gate was scoped to the node, not to the repository.** Criterion 4 asked for
+`go test ./internal/domain/...`, which passed while the repository was red. The gate measured the
+node's blast radius instead of the state it left behind. Binding correction for the remaining
+nodes: green means `go test ./...` passes. It could not be applied by editing the criterion —
+acceptance criteria are write-once — so it lives as a requirement record on the objective and in
+the new node's own criteria.
+
+**Two model gates fired that the graph did not anticipate**, both at the start of execution:
+work items refuse to leave `backlog` unless the objective is in `execution`, and `claim_item`
+enforces `required_capabilities` with no MCP path to grant one. The first is useful — it is the
+only phase boundary the model enforces. The second forced clearing the requirement on N1 to
+proceed at all.
