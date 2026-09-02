@@ -114,3 +114,97 @@ func TestObjectivePhaseTransitionPausesAndResumesPriorPhase(t *testing.T) {
 		t.Fatal("expected invalid phase skip to be rejected")
 	}
 }
+
+func TestContextSuccessMetricAcceptedStatuses(t *testing.T) {
+	now := time.Date(2026, 8, 21, 14, 0, 0, 0, time.UTC)
+	tests := []struct {
+		status  ContextStatus
+		wantErr bool
+		errMsg  string
+	}{
+		{ContextUntested, false, ""},
+		{ContextValidating, false, ""},
+		{ContextValidated, false, ""},
+		{ContextInvalidated, false, ""},
+		{ContextSuperseded, false, ""},
+		{ContextWaived, false, ""},
+		{ContextProposed, true, "proposed status should be rejected"},
+		{ContextAccepted, true, "accepted status should be rejected"},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.status), func(t *testing.T) {
+			_, err := NewContextRecord(ContextRecord{
+				ID:          "metric-1",
+				ObjectiveID: "objective-1",
+				Kind:        ContextSuccessMetric,
+				Title:       "Response time < 100ms",
+				Status:      tt.status,
+				CreatedBy:   "agent:planner",
+			}, now)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("NewContextRecord returned err=%v, want err=%v (%s)", err != nil, tt.wantErr, tt.errMsg)
+			}
+		})
+	}
+}
+
+func TestContextSuccessMetricValidTransitions(t *testing.T) {
+	now := time.Date(2026, 8, 21, 14, 0, 0, 0, time.UTC)
+	tests := []struct {
+		from    ContextStatus
+		to      ContextStatus
+		allowed bool
+	}{
+		{ContextUntested, ContextValidating, true},
+		{ContextValidating, ContextValidated, true},
+		{ContextValidating, ContextInvalidated, true},
+		{ContextUntested, ContextWaived, true},
+		{ContextValidating, ContextWaived, true},
+		{ContextUntested, ContextValidated, false},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.from)+"_to_"+string(tt.to), func(t *testing.T) {
+			metric, err := NewContextRecord(ContextRecord{
+				ID:          "metric-1",
+				ObjectiveID: "objective-1",
+				Kind:        ContextSuccessMetric,
+				Title:       "Success metric",
+				Status:      tt.from,
+				CreatedBy:   "agent:planner",
+			}, now)
+			if err != nil {
+				t.Fatalf("NewContextRecord failed: %v", err)
+			}
+			_, err = TransitionContextRecord(metric, tt.to, "agent:tester", now.Add(time.Hour))
+			if (err != nil) != !tt.allowed {
+				t.Fatalf("transition %s->%s: got err=%v, want allowed=%v", tt.from, tt.to, err != nil, tt.allowed)
+			}
+		})
+	}
+}
+
+func TestContextRequirementUnchanged(t *testing.T) {
+	now := time.Date(2026, 8, 21, 14, 0, 0, 0, time.UTC)
+	req, err := NewContextRecord(ContextRecord{
+		ID:          "req-1",
+		ObjectiveID: "objective-1",
+		Kind:        ContextRequirement,
+		Title:       "Must support concurrent users",
+		Status:      ContextProposed,
+		CreatedBy:   "agent:planner",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := TransitionContextRecord(req, ContextAccepted, "agent:reviewer", now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waived, err := TransitionContextRecord(accepted, ContextWaived, "agent:reviewer", now.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waived.Status != ContextWaived {
+		t.Fatalf("requirement should still support proposed->accepted->waived lifecycle, got %s", waived.Status)
+	}
+}
