@@ -60,13 +60,13 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 		}
 	}
 	validating, err := service.TransitionContext(ctx, app.TransitionContextCommand{
-		ContextRecordID: assumption.ID, ActorID: "agent:researcher", TargetStatus: work.ContextValidating, ExpectedVersion: 1,
+		ContextRecordID: assumption.ID, ActorID: "agent:researcher", IdempotencyKey: "transition-assumption-validating", TargetStatus: work.ContextValidating, ExpectedVersion: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.TransitionContext(ctx, app.TransitionContextCommand{
-		ContextRecordID: validating.ID, ActorID: "agent:researcher", TargetStatus: work.ContextInvalidated, ExpectedVersion: 2,
+		ContextRecordID: validating.ID, ActorID: "agent:researcher", IdempotencyKey: "transition-assumption-invalidated", TargetStatus: work.ContextInvalidated, ExpectedVersion: 2,
 	}); err != nil {
 		t.Fatal(err)
 	}
