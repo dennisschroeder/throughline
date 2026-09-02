@@ -46,7 +46,7 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 		{ObjectiveID: objective.ID, ActorID: "human:sponsor", IdempotencyKey: "record-constraint", Kind: work.ContextConstraint, Title: "No external installation", Body: "This milestone records installation work but performs no side effect.", Status: work.ContextAccepted},
 		{ObjectiveID: objective.ID, ActorID: "agent:planner", IdempotencyKey: "record-assumption", Kind: work.ContextAssumption, Title: "Three methods are enough", Body: "Validate during research.", Status: work.ContextUntested, Confidence: "medium"},
 		{ObjectiveID: objective.ID, ActorID: "agent:researcher", IdempotencyKey: "record-finding", Kind: work.ContextFinding, Title: "Provenance rubrics are reusable", Body: "A rubric can be applied across dossiers.", Status: work.ContextRecorded, SourceURI: "https://example.test/provenance"},
-		{ObjectiveID: objective.ID, ActorID: "human:sponsor", IdempotencyKey: "record-success-metric", Kind: work.ContextSuccessMetric, Title: "Independent recovery", Body: "A new agent can recover the approved intent and plan.", Status: work.ContextAccepted},
+		{ObjectiveID: objective.ID, ActorID: "human:sponsor", IdempotencyKey: "record-success-metric", Kind: work.ContextSuccessMetric, Title: "Independent recovery", Body: "A new agent can recover the approved intent and plan.", Status: work.ContextUntested},
 	} {
 		record, err := service.RecordContext(ctx, command)
 		if err != nil {
@@ -60,13 +60,13 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 		}
 	}
 	validating, err := service.TransitionContext(ctx, app.TransitionContextCommand{
-		ContextRecordID: assumption.ID, ActorID: "agent:researcher", TargetStatus: work.ContextValidating, ExpectedVersion: 1,
+		ContextRecordID: assumption.ID, ActorID: "agent:researcher", IdempotencyKey: "transition-assumption-validating", TargetStatus: work.ContextValidating, ExpectedVersion: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.TransitionContext(ctx, app.TransitionContextCommand{
-		ContextRecordID: validating.ID, ActorID: "agent:researcher", TargetStatus: work.ContextInvalidated, ExpectedVersion: 2,
+		ContextRecordID: validating.ID, ActorID: "agent:researcher", IdempotencyKey: "transition-assumption-invalidated", TargetStatus: work.ContextInvalidated, ExpectedVersion: 2,
 	}); err != nil {
 		t.Fatal(err)
 	}

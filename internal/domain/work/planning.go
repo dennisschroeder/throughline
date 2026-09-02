@@ -82,7 +82,12 @@ func validContextTransition(kind ContextKind, current, target ContextStatus) boo
 	case ContextAssumption:
 		return (current == ContextUntested && target == ContextValidating) ||
 			(current == ContextValidating && (target == ContextValidated || target == ContextInvalidated))
-	case ContextRequirement, ContextConstraint, ContextRisk, ContextSuccessMetric:
+	case ContextSuccessMetric:
+		return (current == ContextUntested && target == ContextValidating) ||
+			(current == ContextValidating && (target == ContextValidated || target == ContextInvalidated)) ||
+			(current == ContextUntested && target == ContextWaived) ||
+			(current == ContextValidating && target == ContextWaived)
+	case ContextRequirement, ContextConstraint, ContextRisk:
 		return (current == ContextProposed && target == ContextAccepted) ||
 			(current == ContextAccepted && target == ContextWaived)
 	default:
@@ -118,7 +123,9 @@ func validContextStatus(kind ContextKind, status ContextStatus) bool {
 		return status == ContextUntested || status == ContextValidating || status == ContextValidated || status == ContextInvalidated || status == ContextSuperseded
 	case ContextFinding:
 		return status == ContextRecorded || status == ContextSuperseded
-	case ContextRequirement, ContextConstraint, ContextRisk, ContextSuccessMetric:
+	case ContextSuccessMetric:
+		return status == ContextUntested || status == ContextValidating || status == ContextValidated || status == ContextInvalidated || status == ContextSuperseded || status == ContextWaived
+	case ContextRequirement, ContextConstraint, ContextRisk:
 		return status == ContextProposed || status == ContextAccepted || status == ContextSuperseded || status == ContextWaived
 	default:
 		return false

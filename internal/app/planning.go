@@ -184,29 +184,38 @@ type TransitionContextCommand struct {
 	ActorID         string
 	TargetStatus    work.ContextStatus
 	ExpectedVersion int
+	IdempotencyKey  string
 }
 
 func (s *Service) TransitionContext(ctx context.Context, command TransitionContextCommand) (work.ContextRecord, error) {
 	var transitioned work.ContextRecord
 	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
-		record, err := repository.ContextRecord(ctx, command.ContextRecordID)
-		if err != nil {
-			return err
+		transition := func() (work.ContextRecord, error) {
+			record, err := repository.ContextRecord(ctx, command.ContextRecordID)
+			if err != nil {
+				return work.ContextRecord{}, err
+			}
+			if record.Version != command.ExpectedVersion {
+				return work.ContextRecord{}, ports.ErrVersionConflict
+			}
+			transitioned, err := work.TransitionContextRecord(record, command.TargetStatus, command.ActorID, s.clock.Now())
+			if err != nil {
+				return work.ContextRecord{}, err
+			}
+			if err := repository.UpdateContextRecord(ctx, transitioned, command.ExpectedVersion); err != nil {
+				return work.ContextRecord{}, err
+			}
+			if err := s.recordActivity(ctx, repository, work.Activity{
+				EntityKind: "context_record", EntityID: transitioned.ID, WorkItemID: transitioned.WorkItemID, ActorID: command.ActorID,
+				EventType: "context_record.status_changed", Summary: fmt.Sprintf("Context marked %s", transitioned.Status),
+			}); err != nil {
+				return work.ContextRecord{}, err
+			}
+			return transitioned, nil
 		}
-		if record.Version != command.ExpectedVersion {
-			return ports.ErrVersionConflict
-		}
-		transitioned, err = work.TransitionContextRecord(record, command.TargetStatus, command.ActorID, s.clock.Now())
-		if err != nil {
-			return err
-		}
-		if err := repository.UpdateContextRecord(ctx, transitioned, command.ExpectedVersion); err != nil {
-			return err
-		}
-		return s.recordActivity(ctx, repository, work.Activity{
-			EntityKind: "context_record", EntityID: transitioned.ID, WorkItemID: transitioned.WorkItemID, ActorID: command.ActorID,
-			EventType: "context_record.status_changed", Summary: fmt.Sprintf("Context marked %s", transitioned.Status),
-		})
+		var err error
+		transitioned, err = executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "transition_context", command, transition)
+		return err
 	}); err != nil {
 		return work.ContextRecord{}, fmt.Errorf("transition context: %w", err)
 	}

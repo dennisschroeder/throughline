@@ -126,6 +126,7 @@ func (a *adapter) addTools(server *mcp.Server) {
 	a.add(server, "propose_plan", "Create a proposed plan with domain-neutral work.", false, schemaFor[planInput]("objective_id", "actor_id", "idempotency_key", "title", "items"), a.proposePlan)
 	a.add(server, "review_plan", "Approve or reject a proposed plan.", false, schemaFor[reviewPlanInput]("plan_id", "actor_id", "idempotency_key", "decision", "reason", "expected_version"), a.reviewPlan)
 	a.add(server, "record_context", "Record typed objective or work-item context.", false, schemaFor[recordContextInput]("objective_id", "actor_id", "idempotency_key", "kind", "title", "status"), a.recordContext)
+	a.add(server, "transition_context", "Transition a context record through its governed kind-specific lifecycle.", false, schemaFor[transitionContextInput]("context_record_id", "actor_id", "target_status", "expected_version", "idempotency_key"), a.transitionContext)
 	a.add(server, "record_decision", "Record a durable accepted decision.", false, schemaFor[recordDecisionInput]("objective_id", "actor_id", "idempotency_key", "title", "decision"), a.recordDecision)
 	a.add(server, "ask_question", "Record a durable open question.", false, schemaFor[askQuestionInput]("objective_id", "actor_id", "idempotency_key", "question"), a.askQuestion)
 	a.add(server, "answer_question", "Answer or waive an open question.", false, schemaFor[answerQuestionInput]("question_id", "actor_id", "idempotency_key", "expected_version"), a.answerQuestion)
@@ -603,7 +604,7 @@ func resultSchema(name string) map[string]any {
 		return schemaForResult[ports.PlanContext]()
 	case "review_plan":
 		return schemaForResult[work.Plan]()
-	case "record_context":
+	case "record_context", "transition_context":
 		return schemaForResult[work.ContextRecord]()
 	case "record_decision":
 		return schemaForResult[work.Decision]()
@@ -2325,6 +2326,23 @@ func (a *adapter) recordContext(ctx context.Context, service *app.Service, raw j
 		return nil, err
 	}
 	return service.RecordContext(ctx, app.RecordContextCommand{ObjectiveID: in.ObjectiveID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Kind: in.Kind, Title: in.Title, Body: in.Body, Status: in.Status, Confidence: in.Confidence, SourceURI: in.SourceURI, SupersedesID: in.SupersedesID})
+}
+
+type transitionContextInput struct {
+	workspaceInput
+	ContextRecordID string             `json:"context_record_id"`
+	ActorID         string             `json:"actor_id"`
+	Target          work.ContextStatus `json:"target_status"`
+	ExpectedVersion int                `json:"expected_version"`
+	IdempotencyKey  string             `json:"idempotency_key"`
+}
+
+func (a *adapter) transitionContext(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
+	var in transitionContextInput
+	if err := decode(raw, &in); err != nil {
+		return nil, err
+	}
+	return service.TransitionContext(ctx, app.TransitionContextCommand{ContextRecordID: in.ContextRecordID, ActorID: in.ActorID, TargetStatus: in.Target, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey})
 }
 
 type recordDecisionInput struct {

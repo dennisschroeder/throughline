@@ -157,6 +157,64 @@ func TestCreateObjectiveReplaysAndVersionConflictIncludesCurrent(t *testing.T) {
 	}
 }
 
+// TestTransitionContextEnforcesVersionAndKindLifecycle proves transition_context reaches
+// Service.TransitionContext: a stale expected_version is rejected rather than silently
+// applied, and the kind-specific lifecycle (untested -> validating -> validated) is enforced
+// by the domain, not re-implemented in the MCP layer — a direct untested -> validated jump
+// is rejected too.
+func TestTransitionContextEnforcesVersionAndKindLifecycle(t *testing.T) {
+	ctx, session := newSession(t)
+	call := func(name string, arguments map[string]any) map[string]any {
+		t.Helper()
+		if _, ok := arguments["workspace_id"]; !ok {
+			arguments["workspace_id"] = testWorkspaceID
+		}
+		result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: name, Arguments: arguments})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(result.Content[0].(*protocol.TextContent).Text), &payload); err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+	mustOK := func(name string, arguments map[string]any) map[string]any {
+		t.Helper()
+		payload := call(name, arguments)
+		if payload["error"] != nil {
+			t.Fatalf("%s = %#v", name, payload)
+		}
+		return payload["result"].(map[string]any)
+	}
+
+	mustOK("register_actor", map[string]any{"actor_id": "agent:metrics", "kind": "agent", "display_name": "Metrics", "idempotency_key": "transition-context-actor"})
+	objective := mustOK("create_objective", map[string]any{"actor_id": "agent:metrics", "idempotency_key": "transition-context-objective", "key": "TC-1", "title": "Transition context coverage", "desired_outcome": "Prove the lifecycle is domain-enforced", "phase": "discovery"})
+
+	metric := mustOK("record_context", map[string]any{"objective_id": objective["id"], "actor_id": "agent:metrics", "idempotency_key": "transition-context-metric", "kind": "success_metric", "title": "p95 latency under 200ms", "status": "untested"})
+
+	validating := mustOK("transition_context", map[string]any{"context_record_id": metric["id"], "actor_id": "agent:metrics", "idempotency_key": "transition-context-validating", "target_status": "validating", "expected_version": metric["version"]})
+	if validating["status"] != "validating" {
+		t.Fatalf("status = %v, want validating", validating["status"])
+	}
+	if validating["version"] != float64(2) {
+		t.Fatalf("version = %v, want 2", validating["version"])
+	}
+
+	stale := call("transition_context", map[string]any{"context_record_id": metric["id"], "actor_id": "agent:metrics", "idempotency_key": "transition-context-stale", "target_status": "validated", "expected_version": 1})
+	staleError, ok := stale["error"].(map[string]any)
+	if !ok || staleError["code"] != "version_conflict" {
+		t.Fatalf("stale transition error = %#v", stale)
+	}
+
+	skipped := mustOK("record_context", map[string]any{"objective_id": objective["id"], "actor_id": "agent:metrics", "idempotency_key": "transition-context-metric-2", "kind": "success_metric", "title": "error budget respected", "status": "untested"})
+	skip := call("transition_context", map[string]any{"context_record_id": skipped["id"], "actor_id": "agent:metrics", "idempotency_key": "transition-context-skip", "target_status": "validated", "expected_version": skipped["version"]})
+	skipError, ok := skip["error"].(map[string]any)
+	if !ok || skipError["code"] != "validation_failed" || !strings.Contains(skipError["message"].(string), "cannot transition") {
+		t.Fatalf("untested->validated error = %#v", skip)
+	}
+}
+
 func TestProposePlanUsesStrictSnakeCaseNestedInput(t *testing.T) {
 	ctx, session := newSession(t)
 	call := func(name string, arguments map[string]any) map[string]any {
@@ -734,7 +792,8 @@ func TestOmittedMutationsReplayAndRejectChangedRequests(t *testing.T) {
 	question := run(replayCase{"ask_question", map[string]any{"objective_id": objective["id"], "actor_id": "agent:writer", "idempotency_key": "matrix-question", "question": "Which review path applies?"}, func(arguments map[string]any) { arguments["question"] = "Changed question" }})["result"].(map[string]any)
 	attention := run(replayCase{"request_attention", map[string]any{"target_kind": "question", "target_id": question["id"], "actor_id": "agent:writer", "idempotency_key": "matrix-attention", "expected_version": question["version"], "attention_state": "needs_human_decision"}, func(arguments map[string]any) { arguments["attention_state"] = "needs_human_review" }})["result"].(map[string]any)
 	run(replayCase{"answer_question", map[string]any{"question_id": question["id"], "actor_id": "human:reviewer", "idempotency_key": "matrix-answer", "expected_version": attention["question"].(map[string]any)["version"], "answer": "Use the standard review path."}, func(arguments map[string]any) { arguments["answer"] = "Changed answer" }})
-	run(replayCase{"record_context", map[string]any{"objective_id": objective["id"], "actor_id": "agent:writer", "idempotency_key": "matrix-context", "kind": "requirement", "title": "Retry must be stable", "status": "proposed", "body": "Responses include the original cursor."}, func(arguments map[string]any) { arguments["title"] = "Changed context" }})
+	contextRecord := run(replayCase{"record_context", map[string]any{"objective_id": objective["id"], "actor_id": "agent:writer", "idempotency_key": "matrix-context", "kind": "requirement", "title": "Retry must be stable", "status": "proposed", "body": "Responses include the original cursor."}, func(arguments map[string]any) { arguments["title"] = "Changed context" }})["result"].(map[string]any)
+	run(replayCase{"transition_context", map[string]any{"context_record_id": contextRecord["id"], "actor_id": "agent:writer", "idempotency_key": "matrix-context-transition", "target_status": "accepted", "expected_version": contextRecord["version"]}, func(arguments map[string]any) { arguments["target_status"] = "waived" }})
 	run(replayCase{"record_decision", map[string]any{"objective_id": objective["id"], "actor_id": "human:reviewer", "idempotency_key": "matrix-decision", "title": "Use durable records", "decision": "Store retries transactionally", "rationale": "Cursor stability matters"}, func(arguments map[string]any) { arguments["decision"] = "Changed decision" }})
 
 	approval := run(replayCase{"request_approval", map[string]any{"target_kind": "work_item", "work_item_id": created["id"], "actor_id": "human:reviewer", "idempotency_key": "matrix-request-approval", "request": "Approve direct item", "expected_version": version(created["id"])}, func(arguments map[string]any) { arguments["request"] = "Changed approval request" }})["result"].(map[string]any)
