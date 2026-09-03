@@ -93,10 +93,15 @@ pass was skipped — a missing data point is not the same as no issues.
 
 ## Success metric
 
-`N8` is the objective's own success metric, run as a test: reconstruct the historical case where
-decision `01a05d51-78fb` rested on a falsified assumption about the graphify skill, transition
-that assumption to `invalidated`, and assert an `Attention` record exists with
+The board owns the metric — "Replaying this objective's founding failure surfaces the decision
+instead of losing it", recorded on `OBJ-DECISION-PROVENANCE`. `N8` is that metric run as a test,
+and this file records only how it is executed: replay the case where the decision "Lazy-load
+mode-specific instructions via references/*.md" rested on a falsified assumption about the graphify
+skill, transition that assumption to `invalidated`, and assert an `Attention` record exists with
 `target_kind="decision"` and that decision's id. Today the same sequence produces nothing.
+
+Requirements, findings, decisions and the metric itself live on the board. This file gists and
+points at them; it is not a second copy, and where the two disagree the board is right.
 
 ## Feedback
 
