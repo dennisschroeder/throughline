@@ -149,3 +149,58 @@ work items refuse to leave `backlog` unless the objective is in `execution`, and
 enforces `required_capabilities` with no MCP path to grant one. The first is useful — it is the
 only phase boundary the model enforces. The second forced clearing the requirement on N1 to
 proceed at all.
+
+### TH-PROV-06 — delivered
+
+The inserted migration node. **69,875 tokens against a 150k estimate**, on a floor near 13k, so
+roughly 5.4× — against N1's 11.5× on a 4.7k floor. Two points give a better shape than a
+multiplier: about **45k fixed overhead per node plus twice the file floor**. Reprojected on that,
+the remaining nodes land near 89k, 94k and 74k — comfortably under the ceiling that justified
+splitting N2. **The split was probably unnecessary**, and the figure that justified it was too
+high by a factor of three.
+
+### TH-PROV-07 — delivered, and not the node that was scoped
+
+Exposing `transition_context` was added mid-flight, before merging, because the lifecycle change
+would otherwise have shipped as something nobody could drive: a metric could be created and never
+moved, so the completion gate it enables stayed unusable.
+
+**136,938 tokens against roughly 70k.** Not an estimation error. The node found that
+`TransitionContext` was the only mutating command without idempotency, and that the MCP wrapper
+reads the idempotency key off the raw request regardless — so wiring the tool as briefed would
+have committed the write and returned an error to the client. Fixing that was a prerequisite
+nobody had planned. A budget predicts the planned work, not what the work turns out to require;
+breaching one means the node found something or is lost, and only looking tells you which.
+
+Also: registration takes three sites, not the two the brief named. The third, a `resultSchema`
+switch, panics at server startup on an unrecognised tool — a missed case fails loudly.
+
+### The review node had no budget, and cost more than implementing
+
+| Node | Implementation | Review |
+|---|---|---|
+| N1 | 54k | — (skipped) |
+| TH-PROV-06 | 70k | 94k |
+| TH-PROV-07 | 137k | 111k |
+
+Reviewing consistently cost at least as much as implementing. The frozen graph gives `N6` a
+loop budget but no token budget, because budgets were only assigned to implementation nodes.
+That was an oversight, not a judgement.
+
+Two passes ran degraded and are recorded as such rather than as clean: the cross-provider read
+timed out and was skipped, and the Claude-side review ran on Sonnet rather than Opus after an
+Opus rate limit. A missing data point is not the same as no issues.
+
+**N1 was accepted without any review at all.** The work-item status `review` was mistaken for
+the review node having run. The `gofmt` defect that later broke CI was in an N1 file and was
+caught only when a subsequent node's diff was reviewed. A status is not proof that the action it
+names took place.
+
+### The graph ended at Done, and the work did not
+
+Nothing in the frozen graph commits, opens a pull request, releases, or deploys. The migration
+therefore reached the live database only because someone did those steps by hand afterwards:
+merge, tag `v0.5.0`, `brew upgrade`, restart the daemon. Two things worth carrying forward from
+that stretch — upgrading the binary does not update a running daemon, and migrations apply on
+first workspace access rather than at daemon start, so `doctor` reporting a healthy new version
+is not evidence that a migration ran.
