@@ -1,0 +1,25 @@
+{
+  "name": "throughline",
+  "id": "throughline",
+  "owner": {
+    "name": "Dennis Schroeder",
+    "url": "https://github.com/dennisschroeder"
+  },
+  "metadata": {
+    "description": "Workflow skills built on the Throughline MCP surface",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "throughline-skills",
+      "source": "./",
+      "description": "follow-through: carrying work from a vague idea through objective, plan and execution without lying to yourself about where it stands",
+      "version": "0.1.0",
+      "author": {
+        "name": "Dennis Schroeder"
+      },
+      "keywords": ["workflow", "planning", "review", "graph-engineering", "throughline"],
+      "category": "workflow"
+    }
+  ]
+}
