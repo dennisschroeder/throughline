@@ -93,6 +93,24 @@ Check daemon and workspace health at any time with `throughline doctor`; see
 [docs/install.md](docs/install.md) for the full command reference, file locations, and platform
 notes.
 
+## A workflow on top: the follow-through skill
+
+Throughline records the thread. It never tells an agent how to work, and it ships no workflow of its
+own — that is deliberate, and it is why the substrate stays domain-neutral.
+
+[`skills/follow-through`](skills/follow-through/) is one workflow built on that surface: the rules
+this project uses on itself, derived from a full run rather than designed in the abstract. Every
+rule in it has an incident behind it. It is written for Claude Code and Claude Cowork, and it names
+no commands — what counts as a passing check belongs in each project's own `AGENTS.md`.
+
+It is a recommendation, not a dependency. Throughline works with no skill installed, and writing
+your own around the MCP surface is the expected case rather than a workaround: call
+`get_semantic_model` for the authoritative phases, states and invariants, and build whatever
+workflow suits your work. If you do write one, the interesting question is not what it tells the
+agent to do but what it refuses to let the agent claim without checking.
+
+Install it by copying the folder into `~/.claude/skills/`.
+
 ## License and reporting a problem
 
 Throughline is released under the [MIT License](LICENSE). Report a problem or request a feature via
