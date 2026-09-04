@@ -149,6 +149,13 @@ nodes: green means `go test ./...` passes. It could not be applied by editing th
 acceptance criteria are write-once — so it lives as a requirement record on the objective and in
 the new node's own criteria.
 
+**Correction, recorded 2026-09-03: the criterion was not the root cause.** The nodes were cut as
+layers — persistence, then surface, then trigger — and a layer cannot be verified on its own, so no
+acceptance criterion written for `N1` could have been both honest and green. Widening the gate to
+the whole repository fixes the symptom; the defect is the cut. A slice goes all the way through and
+stands alone. This also reframes the note below on the split of `N2` being unnecessary: the problem
+was never how many nodes there were, but that the seam ran along a layer boundary.
+
 **Two model gates fired that the graph did not anticipate**, both at the start of execution:
 work items refuse to leave `backlog` unless the objective is in `execution`, and `claim_item`
 enforces `required_capabilities` with no MCP path to grant one. The first is useful — it is the
