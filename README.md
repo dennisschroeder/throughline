@@ -109,7 +109,18 @@ your own around the MCP surface is the expected case rather than a workaround: c
 workflow suits your work. If you do write one, the interesting question is not what it tells the
 agent to do but what it refuses to let the agent claim without checking.
 
-Install it by copying the folder into `~/.claude/skills/`.
+### Installing it
+
+This repository is also a plugin marketplace, so the skill can be installed from source and stays in
+step with the model it is written against. In an interactive `claude` terminal:
+
+```
+/plugin marketplace add dennisschroeder/throughline
+/plugin install throughline-skills@throughline
+```
+
+Copying `skills/follow-through/` into `~/.claude/skills/` works too, and is the simpler option if
+you intend to edit it. The trade is the usual one: a copy stops receiving changes.
 
 ## License and reporting a problem
 

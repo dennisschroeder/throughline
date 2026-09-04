@@ -1,0 +1,11 @@
+{
+  "name": "throughline-skills",
+  "description": "Workflow skills built on the Throughline MCP surface. Recommended, never required — Throughline works with no skill installed.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Dennis Schroeder"
+  },
+  "license": "MIT",
+  "keywords": ["workflow", "planning", "review", "graph-engineering", "throughline"],
+  "skills": ["./skills/follow-through"]
+}
