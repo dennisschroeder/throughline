@@ -77,7 +77,26 @@ Not delivered. Append the consumed budgets, exact edge conditions, command resul
 dispositions, PR/CI state and installed-daemon smoke as execution proceeds. Do not rewrite the frozen
 graph above.
 
+### REP-01 PERMS
+
+- Commit: `85a7ad6` (`fix: protect workspace database files`).
+- Claims: initial `01a07af7-44c2-76f9-9521-cf4290e8f085`; renewed after expiry as
+  `01a08070-25c7-7e34-ae90-5d6c05a32ccb`.
+- Final gate: all six repository commands exited zero on 2026-09-08; generation left
+  `model.generated.json` unchanged.
+- Review: five fresh `gpt-6-astra` passes. Four findings were reproduced and fixed: closing an
+  independent descriptor released SQLite's process locks; arbitrary database parents were chmodded;
+  symlinked databases targeted the wrong sidecars; and disappearing sidecars caused a Stat/Chmod
+  race. The final pass reran 2,000 concurrent close/open iterations and reported clean.
+- Evidence: umask-000 first creation, reopen repair, WAL/SHM recreation, data preservation, symlink
+  targets, unchanged existing parent modes, process-lock preservation and serialized file
+  preparation all pass.
+
 ## Feedback
 
-Pending delivery. Record where estimates, node boundaries or the designed graph diverged from the
-actual work, including when there is nothing to report.
+- REP-01 was estimated small but consumed the full five-pass review budget because file permissions
+  intersect SQLite's process-scoped POSIX lock behavior and sidecar lifecycle. The deterministic
+  gates stayed green throughout; only adversarial review exposed the four defects.
+- The implementation agent could write only to `/tmp`, and a later replacement agent could not
+  start a shell because the configured workspace root was absent. The parent applied reviewed
+  patches in the actual worktree and independently reran every gate.
