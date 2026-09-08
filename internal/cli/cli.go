@@ -950,7 +950,7 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	if err := registerWorkspace(ctx, registryHandle, workspace, ""); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(workspace.DatabasePath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(workspace.DatabasePath), 0o700); err != nil {
 		return fmt.Errorf("create database directory: %w", err)
 	}
 	database, err := throughlinesqlite.Open(ctx, workspace.DatabasePath)
