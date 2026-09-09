@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -905,6 +907,13 @@ ORDER BY name`)
 			t.Errorf("effectTables lists %q, which the schema does not define", table.table)
 		}
 	}
+	// An exemption for a table that no longer exists is a stale excuse nobody
+	// would notice, so it expires with the table.
+	for table := range uncollected {
+		if !present[table] {
+			t.Errorf("the uncollected map exempts %q, which the schema no longer defines", table)
+		}
+	}
 }
 
 // TestMultiEntityEffectsSurviveARestartUnchanged gates the persisted-effects
@@ -912,7 +921,7 @@ ORDER BY name`)
 // member first and therefore exercises the legacy reconstruction path; this one
 // leaves the stored response alone, so the replay must come back through the
 // effects the first call actually committed — several entities, in order,
-// byte-identical, with no second write.
+// field for field, and nothing anywhere in the database changed.
 func TestMultiEntityEffectsSurviveARestartUnchanged(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "restart-multi.db")
@@ -949,20 +958,7 @@ func TestMultiEntityEffectsSurviveARestartUnchanged(t *testing.T) {
 	if len(created.Effects) < 5 {
 		t.Fatalf("create effects = %#v, want the item with its criteria and capabilities", created.Effects)
 	}
-	counts := func() (items, criteria, capabilities int) {
-		t.Helper()
-		if err := database.db.QueryRowContext(ctx, "SELECT count(*) FROM work_items").Scan(&items); err != nil {
-			t.Fatal(err)
-		}
-		if err := database.db.QueryRowContext(ctx, "SELECT count(*) FROM acceptance_criteria").Scan(&criteria); err != nil {
-			t.Fatal(err)
-		}
-		if err := database.db.QueryRowContext(ctx, "SELECT count(*) FROM work_item_capabilities").Scan(&capabilities); err != nil {
-			t.Fatal(err)
-		}
-		return items, criteria, capabilities
-	}
-	itemsBefore, criteriaBefore, capabilitiesBefore := counts()
+	before := rowCounts(t, ctx, database)
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -976,8 +972,9 @@ func TestMultiEntityEffectsSurviveARestartUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	database = reopened
-	// A failing id generator proves the replay allocated nothing, so it cannot
-	// have re-executed the mutation.
+	// A failing id generator catches any insert that would allocate an id; the
+	// row-count snapshot catches the rest, including an update that changes a
+	// version without changing a count and an extra activity row.
 	replayService := app.NewService(reopened.Store(), &testIDs{fail: true}, testClock{})
 	replayed, err := replayService.CreateWorkItem(ctx, command)
 	if err != nil {
@@ -989,9 +986,181 @@ func TestMultiEntityEffectsSurviveARestartUnchanged(t *testing.T) {
 	if !slices.Equal(replayed.Effects, created.Effects) {
 		t.Fatalf("effects changed across restart:\nbefore: %#v\nafter:  %#v", created.Effects, replayed.Effects)
 	}
-	itemsAfter, criteriaAfter, capabilitiesAfter := counts()
-	if itemsAfter != itemsBefore || criteriaAfter != criteriaBefore || capabilitiesAfter != capabilitiesBefore {
-		t.Fatalf("replay wrote a second time: items %d->%d, criteria %d->%d, capabilities %d->%d",
-			itemsBefore, itemsAfter, criteriaBefore, criteriaAfter, capabilitiesBefore, capabilitiesAfter)
+	assertNothingWasWritten(t, before, rowCounts(t, ctx, database))
+}
+
+// rowCounts snapshots every collected table plus the two internal ledgers, and
+// sums the versions as well as the rows: an update that raises a version without
+// changing a count is still a write.
+func rowCounts(t *testing.T, ctx context.Context, database *Database) map[string]string {
+	t.Helper()
+	snapshot := make(map[string]string, len(effectTables)+2)
+	for _, table := range effectTables {
+		var rows int
+		var versions any
+		query := fmt.Sprintf("SELECT count(*), COALESCE(sum(%s), 0) FROM %s", strings.TrimPrefix(table.version, "NEW."), table.table)
+		if err := database.db.QueryRowContext(ctx, query).Scan(&rows, &versions); err != nil {
+			t.Fatalf("snapshot %s: %v", table.table, err)
+		}
+		snapshot[table.table] = fmt.Sprintf("%d rows, versions summing to %v", rows, versions)
 	}
+	for _, table := range []string{"activity", "idempotency_records"} {
+		var rows int
+		if err := database.db.QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&rows); err != nil {
+			t.Fatalf("snapshot %s: %v", table, err)
+		}
+		snapshot[table] = fmt.Sprintf("%d rows", rows)
+	}
+	return snapshot
+}
+
+func assertNothingWasWritten(t *testing.T, before, after map[string]string) {
+	t.Helper()
+	for _, table := range slices.Sorted(maps.Keys(before)) {
+		if before[table] != after[table] {
+			t.Errorf("replay wrote to %s: %s became %s", table, before[table], after[table])
+		}
+	}
+}
+
+// TestEffectTableExpressionsNameRealColumns closes the other half of the
+// completeness gate. Deleting an entry from effectTables is caught; editing one
+// was not. A wrong column name fails loudly the moment any mutation runs,
+// because the trigger will not compile — but a valid-but-wrong expression, a
+// literal version or a truncated composite id, is silent for every table no
+// test happens to assert.
+func TestEffectTableExpressionsNameRealColumns(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "expressions.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range effectTables {
+		t.Run(table.table, func(t *testing.T) {
+			columns := make(map[string]bool)
+			rows, err := database.db.QueryContext(ctx, fmt.Sprintf("SELECT name FROM pragma_table_info(%q)", table.table))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var name string
+				if err := rows.Scan(&name); err != nil {
+					t.Fatal(err)
+				}
+				columns[name] = true
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			if len(columns) == 0 {
+				t.Fatalf("table %q has no columns", table.table)
+			}
+			for _, expression := range []struct {
+				name string
+				sql  string
+			}{{"id", table.id}, {"version", table.version}, {"kind", table.kindExpr}} {
+				if expression.sql == "" {
+					continue
+				}
+				referenced := newColumnReferences(expression.sql)
+				if len(referenced) == 0 {
+					t.Errorf("%s expression %q references no column, so it cannot report what actually changed", expression.name, expression.sql)
+				}
+				for _, column := range referenced {
+					if !columns[column] {
+						t.Errorf("%s expression %q references %q, which %s does not have", expression.name, expression.sql, column, table.table)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestEffectKindsAreTheDocumentedVocabulary pins the kind strings. They are part
+// of every mutating tool's response, so a rename is a change to a public
+// contract and has to be a deliberate, visible edit rather than a side effect of
+// a refactor.
+func TestEffectKindsAreTheDocumentedVocabulary(t *testing.T) {
+	want := []string{
+		"acceptance_criterion", "action_approval", "actor", "actor_capability", "approval",
+		"artifact", "authority_grant", "capability", "claim", "context_record", "decision",
+		"dependency", "execution_approval", "expected_output", "external_action",
+		"external_action_execution", "external_action_revision", "manual_blocker", "objective",
+		"output_profile", "output_requirement", "output_revision", "output_revision_artifact",
+		"plan", "progress_entry", "question", "validation_record", "work_item",
+		"work_item_capability",
+	}
+	got := make(map[string]bool)
+	for _, table := range effectTables {
+		if table.kind != "" {
+			got[table.kind] = true
+			continue
+		}
+		// The approvals table carries three distinguishable kinds.
+		for _, kind := range []string{"approval", "action_approval", "execution_approval"} {
+			if !strings.Contains(table.kindExpr, "'"+kind+"'") {
+				t.Errorf("approval kind expression does not produce %q: %s", kind, table.kindExpr)
+			}
+			got[kind] = true
+		}
+	}
+	if !slices.Equal(slices.Sorted(maps.Keys(got)), want) {
+		t.Fatalf("effect kind vocabulary changed:\ngot:  %v\nwant: %v", slices.Sorted(maps.Keys(got)), want)
+	}
+}
+
+// TestVersionedLinkIdentifiersAreTheDocumentedFormats pins the four composite
+// identifiers the contract names. Each is a real column reference, so the
+// structural check above passes even when one half is dropped — and dropping a
+// half silently collapses two distinct entities into one effect.
+func TestVersionedLinkIdentifiersAreTheDocumentedFormats(t *testing.T) {
+	want := map[string]string{
+		"work_item_capabilities":    "NEW.work_item_id || ':' || NEW.capability_slug",
+		"actor_capabilities":        "NEW.actor_id || ':' || NEW.capability_slug",
+		"output_revision_artifacts": "NEW.output_revision_id || ':' || NEW.artifact_id",
+		"external_action_revisions": "NEW.external_action_id || ':' || NEW.revision",
+	}
+	found := 0
+	for _, table := range effectTables {
+		expected, documented := want[table.table]
+		if !documented {
+			continue
+		}
+		found++
+		if table.id != expected {
+			t.Errorf("%s effect id = %q, want the documented %q", table.table, table.id, expected)
+		}
+	}
+	if found != len(want) {
+		t.Fatalf("effectTables covers %d of the %d documented versioned links", found, len(want))
+	}
+}
+
+// newColumnReferences returns the column names a trigger expression reads from
+// the row being written.
+func newColumnReferences(expression string) []string {
+	var columns []string
+	for _, prefix := range []string{"NEW.", "OLD."} {
+		rest := expression
+		for {
+			index := strings.Index(rest, prefix)
+			if index < 0 {
+				break
+			}
+			rest = rest[index+len(prefix):]
+			end := 0
+			for end < len(rest) && (rest[end] == '_' || (rest[end] >= 'a' && rest[end] <= 'z') || (rest[end] >= 'A' && rest[end] <= 'Z') || (rest[end] >= '0' && rest[end] <= '9')) {
+				end++
+			}
+			if end > 0 {
+				columns = append(columns, rest[:end])
+			}
+		}
+	}
+	return columns
 }

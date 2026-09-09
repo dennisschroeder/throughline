@@ -215,11 +215,7 @@ func (a *adapter) add(server *mcp.Server, name, description string, readOnly boo
 		if !readOnly {
 			output["effects"] = snakeCaseValue(effects)
 		}
-		schema := outputSchema(name, readOnly)
-		if err := validateJSONSchema(output, schema, schema, "output"); err != nil {
-			return toolErrorResult(map[string]any{"code": "output_validation_failed", "message": err.Error(), "requirements": []any{}, "retryable": false, "request_id": daemonhttp.RequestIDFromContext(ctx)}), nil
-		}
-		return toolResultPayload(output), nil
+		return validatedToolResult(ctx, name, readOnly, output), nil
 	})
 }
 
@@ -236,11 +232,7 @@ func (a *adapter) addWorkspaceless(server *mcp.Server, name, description string,
 		}
 		normalized := snakeCaseValue(result)
 		output := map[string]any{"workspace": map[string]any{"id": "", "change_cursor": "0"}, "result": normalized}
-		schema := outputSchema(name, readOnly)
-		if err := validateJSONSchema(output, schema, schema, "output"); err != nil {
-			return toolErrorResult(map[string]any{"code": "output_validation_failed", "message": err.Error(), "requirements": []any{}, "retryable": false, "request_id": daemonhttp.RequestIDFromContext(ctx)}), nil
-		}
-		return toolResultPayload(output), nil
+		return validatedToolResult(ctx, name, readOnly, output), nil
 	})
 }
 
@@ -1002,7 +994,15 @@ func requiredFields(fields []string) []any {
 // toolResultPayload returns exactly the payload that was validated against the
 // tool's output schema. Building a second map here is how a read-only tool once
 // gained a null "effects" member the schema forbids.
-func toolResultPayload(payload map[string]any) *mcp.CallToolResult {
+// validatedToolResult is the only way a tool answers successfully. Validating and
+// encoding are one step so they cannot drift: building the response separately is
+// how a read-only tool once gained a null effects member the schema forbids, and
+// keeping the check in the caller is how an advertised bound becomes decoration.
+func validatedToolResult(ctx context.Context, name string, readOnly bool, payload map[string]any) *mcp.CallToolResult {
+	schema := outputSchema(name, readOnly)
+	if err := validateJSONSchema(payload, schema, schema, "output"); err != nil {
+		return toolErrorResult(map[string]any{"code": "output_validation_failed", "message": err.Error(), "requirements": []any{}, "retryable": false, "request_id": daemonhttp.RequestIDFromContext(ctx)})
+	}
 	encoded, _ := json.Marshal(payload)
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded)}}, StructuredContent: payload}
 }

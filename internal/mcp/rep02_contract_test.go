@@ -1,13 +1,16 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	protocol "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/dennisschroeder/throughline/internal/app"
+	"github.com/dennisschroeder/throughline/internal/domain/work"
 )
 
 // rep02ToolInventory reads the advertised tool surface from a live server rather
@@ -280,22 +283,29 @@ func TestREP02MutatingResponsesCarryCommittedEffects(t *testing.T) {
 // TestREP02OutputValidationRejectsAZeroEffectVersion gates the enforcement, not
 // the advertisement. The effect schema promises "minimum": 1; asserting only
 // that the promise appears in the schema leaves the validator free to ignore it,
-// which is how the bound became decoration once already. The values go through
-// snakeCaseValue exactly as the handler builds them, so the test cannot drift
-// from what is really validated.
+// which is how the bound became decoration once already. It goes through
+// validatedToolResult, the single function every successful tool response is
+// built by, so removing the check anywhere on that path fails here.
 func TestREP02OutputValidationRejectsAZeroEffectVersion(t *testing.T) {
-	schema := outputSchema("create_objective", false)
-	effectsSchema := rep02SchemaMap(t, rep02SchemaMap(t, schema, "properties"), "effects")
-	encoded := func(version int) any {
-		return snakeCaseValue([]app.Effect{{Kind: "objective", ID: "OBJ-1", Version: version}})
+	payload := func(version int) map[string]any {
+		return map[string]any{
+			"workspace": map[string]any{"id": testWorkspaceID, "change_cursor": "1"},
+			"result":    snakeCaseValue(work.Objective{ID: "OBJ-1", Key: "OBJ-1", Title: "Gate the bound", Phase: work.ObjectiveIdea, Version: 1}),
+			"effects":   snakeCaseValue([]app.Effect{{Kind: "objective", ID: "OBJ-1", Version: version}}),
+		}
 	}
-	if err := validateJSONSchema(encoded(1), effectsSchema, schema, "output.effects"); err != nil {
-		t.Fatalf("valid effect rejected: %v", err)
+	valid := validatedToolResult(context.Background(), "create_objective", false, payload(1))
+	if valid.IsError {
+		t.Fatalf("valid effect rejected: %s", valid.Content[0].(*protocol.TextContent).Text)
 	}
 	for name, version := range map[string]int{"zero": 0, "negative": -1} {
 		t.Run(name, func(t *testing.T) {
-			if err := validateJSONSchema(encoded(version), effectsSchema, schema, "output.effects"); err == nil {
-				t.Fatalf("effect version %d passed output validation", version)
+			result := validatedToolResult(context.Background(), "create_objective", false, payload(version))
+			if !result.IsError {
+				t.Fatalf("effect version %d passed output validation: %s", version, result.Content[0].(*protocol.TextContent).Text)
+			}
+			if !strings.Contains(result.Content[0].(*protocol.TextContent).Text, "output_validation_failed") {
+				t.Fatalf("unexpected error for version %d: %s", version, result.Content[0].(*protocol.TextContent).Text)
 			}
 		})
 	}
