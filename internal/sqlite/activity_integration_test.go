@@ -27,9 +27,9 @@ VALUES ('duplicate-activity', 'test', 'test', 'test:actor', 'test.seeded', 'Seed
 		t.Fatal(err)
 	}
 	service := app.NewService(database.Store(), &orderedIDs{values: []string{"objective-new", "duplicate-activity"}}, staticClock{})
-	if _, err := service.CreateObjective(ctx, app.CreateObjectiveCommand{
+	if _, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{
 		ActorID: "human:owner", IdempotencyKey: "create-objective-rollback", Key: "OBJ-ROLLBACK", Title: "Verify atomic activity", Phase: work.ObjectivePlanning,
-	}); err == nil {
+	})); err == nil {
 		t.Fatal("expected duplicate activity id to fail the mutation")
 	}
 	var count int

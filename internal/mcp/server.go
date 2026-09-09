@@ -158,7 +158,7 @@ func (a *adapter) addTools(server *mcp.Server) {
 // WorkspaceRouter for this request alone, before the handler runs; no handler, connection,
 // context default, or client-chosen path selects a workspace.
 func (a *adapter) add(server *mcp.Server, name, description string, readOnly bool, inputSchema map[string]any, handler func(context.Context, *app.Service, json.RawMessage) (any, error)) {
-	server.AddTool(&mcp.Tool{Name: name, Description: description, InputSchema: inputSchema, OutputSchema: outputSchema(name), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly}}, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	server.AddTool(&mcp.Tool{Name: name, Description: description, InputSchema: inputSchema, OutputSchema: outputSchema(name, readOnly), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly}}, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// workspace_id is checked before general schema validation so a missing or empty
 		// value always reports the specific workspace_required code rather than the
 		// generic validation_failed a bare required-field check would produce.
@@ -197,20 +197,36 @@ func (a *adapter) add(server *mcp.Server, name, description string, readOnly boo
 		if err != nil {
 			return toolErrorResult(a.errorPayload(ctx, service, err, request.Params.Arguments)), nil
 		}
-		normalized := snakeCaseValue(result)
+		resultValue := result
+		var effects []app.Effect
+		if !readOnly {
+			mutation, ok := result.(app.MutationEnvelope)
+			if !ok {
+				return toolErrorResult(map[string]any{"code": "output_validation_failed", "message": "mutation handler returned no mutation receipt", "requirements": []any{}, "retryable": false, "request_id": daemonhttp.RequestIDFromContext(ctx)}), nil
+			}
+			resultValue = mutation.MutationResult()
+			effects = mutation.MutationEffects()
+			if effects == nil {
+				effects = []app.Effect{}
+			}
+		}
+		normalized := snakeCaseValue(resultValue)
 		output := map[string]any{"workspace": map[string]any{"id": workspaceIDValue, "change_cursor": fmt.Sprint(cursor)}, "result": normalized}
-		schema := outputSchema(name)
+		if !readOnly {
+			output["effects"] = snakeCaseValue(effects)
+		}
+		schema := outputSchema(name, readOnly)
 		if err := validateJSONSchema(output, schema, schema, "output"); err != nil {
 			return toolErrorResult(map[string]any{"code": "output_validation_failed", "message": err.Error(), "requirements": []any{}, "retryable": false, "request_id": daemonhttp.RequestIDFromContext(ctx)}), nil
 		}
-		return toolResult(normalized, cursor, workspaceIDValue), nil
+		return toolResultPayload(output), nil
 	})
 }
 
 // addWorkspaceless registers a domain-neutral tool that touches no workspace persistence
 // (only get_semantic_model qualifies) and therefore never resolves a Service.
 func (a *adapter) addWorkspaceless(server *mcp.Server, name, description string, readOnly bool, inputSchema map[string]any, handler func(context.Context, *app.Service, json.RawMessage) (any, error)) {
-	server.AddTool(&mcp.Tool{Name: name, Description: description, InputSchema: inputSchema, OutputSchema: outputSchema(name), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly}}, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	server.AddTool(&mcp.Tool{Name: name, Description: description, InputSchema: inputSchema, OutputSchema: outputSchema(name, readOnly), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly}}, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		if err := validateToolInput(request.Params.Arguments, inputSchema); err != nil {
 			return toolErrorResult(a.errorPayload(ctx, nil, err, request.Params.Arguments)), nil
 		}
@@ -220,11 +236,11 @@ func (a *adapter) addWorkspaceless(server *mcp.Server, name, description string,
 		}
 		normalized := snakeCaseValue(result)
 		output := map[string]any{"workspace": map[string]any{"id": "", "change_cursor": "0"}, "result": normalized}
-		schema := outputSchema(name)
+		schema := outputSchema(name, readOnly)
 		if err := validateJSONSchema(output, schema, schema, "output"); err != nil {
 			return toolErrorResult(map[string]any{"code": "output_validation_failed", "message": err.Error(), "requirements": []any{}, "retryable": false, "request_id": daemonhttp.RequestIDFromContext(ctx)}), nil
 		}
-		return toolResult(normalized, 0, ""), nil
+		return toolResultPayload(output), nil
 	})
 }
 
@@ -369,6 +385,9 @@ func validateJSONSchema(value any, schema, root map[string]any, path string) err
 	if err := validateJSONType(value, schema["type"], path); err != nil {
 		return err
 	}
+	if err := validateJSONMinimum(value, schema["minimum"], path); err != nil {
+		return err
+	}
 	object, isObject := value.(map[string]any)
 	if isObject {
 		properties, _ := schema["properties"].(map[string]any)
@@ -446,6 +465,40 @@ func validateJSONType(value any, rawType any, path string) error {
 		}
 	}
 	return nil
+}
+
+// validateJSONMinimum enforces the one numeric keyword these schemas use. The
+// effect version advertises "minimum": 1, and an advertised bound that nothing
+// checks is worse than no bound: it reads as a guarantee while letting a zero
+// version through onto the wire.
+func validateJSONMinimum(value any, rawMinimum any, path string) error {
+	minimum, ok := jsonNumber(rawMinimum)
+	if !ok {
+		return nil
+	}
+	number, ok := jsonNumber(value)
+	if !ok {
+		return nil
+	}
+	if number < minimum {
+		return fmt.Errorf("%s must be at least %v", path, rawMinimum)
+	}
+	return nil
+}
+
+func jsonNumber(value any) (float64, bool) {
+	switch number := value.(type) {
+	case int:
+		return float64(number), true
+	case int64:
+		return float64(number), true
+	case float64:
+		return number, true
+	case json.Number:
+		parsed, err := number.Float64()
+		return parsed, err == nil
+	}
+	return 0, false
 }
 
 // dropNullableArrayUnion rewrites a jsonschema.For-inferred ["null","array"] type union
@@ -553,11 +606,21 @@ func schemaFor[T any](required ...string) map[string]any {
 	return dropNullableArrayUnion(strictGovernedSchemas(result))
 }
 
-func outputSchema(name string) map[string]any {
-	return map[string]any{"type": "object", "properties": map[string]any{
+// outputSchema derives the effects member from the same readOnly flag the tool
+// is registered and dispatched with, so a schema can never disagree with the
+// response the handler builds. A separate list of mutating tool names would be a
+// second source of truth that drifts silently.
+func outputSchema(name string, readOnly bool) map[string]any {
+	properties := map[string]any{
 		"workspace": map[string]any{"type": "object", "properties": map[string]any{"id": map[string]any{"type": "string"}, "change_cursor": map[string]any{"type": "string"}}, "required": []string{"id", "change_cursor"}, "additionalProperties": false},
 		"result":    resultSchema(name),
-	}, "required": []string{"workspace", "result"}, "additionalProperties": false}
+	}
+	required := []string{"workspace", "result"}
+	if !readOnly {
+		properties["effects"] = map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"kind": map[string]any{"type": "string"}, "id": map[string]any{"type": "string"}, "version": map[string]any{"type": "integer", "minimum": 1}}, "required": []string{"kind", "id", "version"}, "additionalProperties": false}}
+		required = append(required, "effects")
+	}
+	return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
 }
 
 func resultSchema(name string) map[string]any {
@@ -936,8 +999,10 @@ func requiredFields(fields []string) []any {
 	return result
 }
 
-func toolResult(result any, cursor int64, workspaceID string) *mcp.CallToolResult {
-	payload := map[string]any{"workspace": map[string]string{"id": workspaceID, "change_cursor": fmt.Sprint(cursor)}, "result": snakeCaseValue(result)}
+// toolResultPayload returns exactly the payload that was validated against the
+// tool's output schema. Building a second map here is how a read-only tool once
+// gained a null "effects" member the schema forbids.
+func toolResultPayload(payload map[string]any) *mcp.CallToolResult {
 	encoded, _ := json.Marshal(payload)
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded)}}, StructuredContent: payload}
 }
@@ -1035,6 +1100,8 @@ func (a *adapter) buildErrorPayload(ctx context.Context, service *app.Service, e
 		code = "claim_conflict"
 	case errors.Is(err, ports.ErrIdempotencyMismatch):
 		code = "idempotency_key_reused_with_different_request"
+	case errors.Is(err, app.ErrLegacyIdempotencyReplay):
+		code = "idempotency_replay_unupgradable"
 	}
 	if service == nil {
 		// Failed before workspace resolution (schema validation or a malformed

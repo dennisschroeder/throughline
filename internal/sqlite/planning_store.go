@@ -116,12 +116,12 @@ func (r *transactionRepository) CreateDecision(ctx context.Context, decision wor
 	_, err = r.transaction.ExecContext(ctx, `
 INSERT INTO decisions
   (id, objective_id, work_item_id, title, decision, rationale, alternatives_json, status,
-   supersedes_id, decided_by, decided_at, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  supersedes_id, decided_by, decided_at, created_at, version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		decision.ID, decision.ObjectiveID, nullableString(decision.WorkItemID), decision.Title,
 		decision.Outcome, decision.Rationale, string(alternatives), decision.Status,
 		nullableString(decision.SupersedesID), decision.DecidedBy, formatTime(decision.DecidedAt),
-		formatTime(decision.CreatedAt),
+		formatTime(decision.CreatedAt), decision.Version,
 	)
 	if err != nil {
 		return fmt.Errorf("insert decision: %w", err)
@@ -136,8 +136,8 @@ func (r *transactionRepository) Decision(ctx context.Context, id string) (work.D
 
 func (r *transactionRepository) UpdateDecision(ctx context.Context, decision work.Decision) error {
 	result, err := r.transaction.ExecContext(ctx,
-		"UPDATE decisions SET status = ? WHERE id = ? AND status = ?",
-		decision.Status, decision.ID, work.DecisionAccepted,
+		"UPDATE decisions SET status = ?, version = ? WHERE id = ? AND status = ? AND version = ?",
+		decision.Status, decision.Version, decision.ID, work.DecisionAccepted, decision.Version-1,
 	)
 	if err != nil {
 		return fmt.Errorf("supersede decision: %w", err)
@@ -246,7 +246,7 @@ WHERE id = ? AND version = ?`, approval.Status, approval.Version, nullableString
 }
 
 func (r *transactionRepository) AddWorkItemCapability(ctx context.Context, workItemID, capability string) error {
-	if _, err := r.transaction.ExecContext(ctx, "INSERT OR IGNORE INTO capabilities(slug) VALUES (?)", capability); err != nil {
+	if _, err := r.transaction.ExecContext(ctx, "INSERT INTO capabilities(slug) VALUES (?) ON CONFLICT DO NOTHING", capability); err != nil {
 		return fmt.Errorf("insert capability: %w", err)
 	}
 	if _, err := r.transaction.ExecContext(ctx,
@@ -488,7 +488,7 @@ func (s *Store) listExpectedOutputs(ctx context.Context, reader sqlReader, workI
 	rows, err := reader.QueryContext(ctx, `
 SELECT
   e.id, e.work_item_id, e.name, e.output_profile_id, e.contract_json,
-  e.destination_hint, e.required, e.ordinal,
+  e.destination_hint, e.required, e.ordinal, e.version,
   p.id, p.name, p.version, p.state_version, p.description, p.lifecycle_state,
   p.structure_json, p.semantics_json, p.validation_json, p.built_in,
   p.supersedes_id, p.proposed_by, p.proposed_at, p.resolved_by, p.resolved_at,
@@ -520,7 +520,8 @@ func scanExpectedOutputDetail(row scanner) (output.ExpectedOutputDetail, error) 
 	if err := row.Scan(
 		&detail.ExpectedOutput.ID, &detail.ExpectedOutput.WorkItemID, &detail.ExpectedOutput.Name,
 		&detail.ExpectedOutput.OutputProfileID, &contract, &detail.ExpectedOutput.DestinationHint,
-		&required, &detail.ExpectedOutput.Ordinal, &detail.Profile.ID, &detail.Profile.Name,
+		&required, &detail.ExpectedOutput.Ordinal, &detail.ExpectedOutput.Version,
+		&detail.Profile.ID, &detail.Profile.Name,
 		&detail.Profile.Version, &detail.Profile.StateVersion, &detail.Profile.Description, &detail.Profile.LifecycleState,
 		&structure, &semantics, &validation, &builtIn, &supersedesID, &proposedBy,
 		&proposedAt, &resolvedBy, &resolvedAt, &detail.Profile.ResolutionReason, &profileCreatedAt,
@@ -616,7 +617,7 @@ FROM questions`
 
 const decisionSelect = `
 SELECT id, objective_id, work_item_id, title, decision, rationale, alternatives_json, status,
-       supersedes_id, decided_by, decided_at, created_at
+       supersedes_id, decided_by, decided_at, created_at, version
 FROM decisions`
 
 const approvalSelect = `
@@ -680,7 +681,7 @@ func scanDecision(row scanner) (work.Decision, error) {
 	if err := row.Scan(
 		&decision.ID, &decision.ObjectiveID, &workItemID, &decision.Title, &decision.Outcome,
 		&decision.Rationale, &alternatives, &decision.Status, &supersedesID, &decision.DecidedBy,
-		&decidedAt, &createdAt,
+		&decidedAt, &createdAt, &decision.Version,
 	); err != nil {
 		return work.Decision{}, err
 	}

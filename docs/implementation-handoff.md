@@ -1073,6 +1073,31 @@ State changing calls carry:
 
 `expected_version` applies when an existing aggregate is changed. Inputs must be strict: reject unknown enum values and invalid shapes. Avoid “success: false” as a normal response when the MCP host can represent a tool error; return structured error content consistently.
 
+Every state-changing call answers with `effects` beside `workspace` and `result`:
+
+```json
+{
+  "workspace": { "id": "research-project", "change_cursor": "142" },
+  "result": { "...": "the operation's own return value" },
+  "effects": [
+    { "kind": "work_item", "id": "TH-42", "version": 18 },
+    { "kind": "acceptance_criterion", "id": "AC-3", "version": 2 },
+    { "kind": "work_item_capability", "id": "TH-42:web_research", "version": 1 }
+  ]
+}
+```
+
+`effects` names every entity the committed transaction changed, not only the one the tool returns, so a caller never has to infer collateral changes or reread the board to find them. Rules:
+
+- `version` is the version the transaction actually committed. A row written several times inside one transaction appears once, carrying its final version. A deleted row carries the last version it actually had; no version is invented past the delete.
+- An effect says *that* an entity changed, not *how*. There is no operation or tombstone member, so a delete is reported like any other change and a caller that refetches the entity finds it gone. Invalidate on an effect; do not treat one as proof the entity still exists.
+- Versioned relationships are included and use deterministic identifiers: `workItemID:slug` for a work-item capability, `actorID:slug` for an actor capability, `revisionID:artifactID` for an output-revision artifact, and `actionID:revision` for an external-action revision.
+- Approval kinds stay distinguishable: `approval`, `action_approval`, and `execution_approval`.
+- Activity and idempotency rows are internal records, never effects. A mutation that only records activity legitimately returns `"effects": []`.
+- Order is stable: entities appear in the order the transaction first touched them.
+- A retry with the same `(actor_id, idempotency_key)` returns the original effects and performs no second write, across process restarts. A response stored before effects existed is upgraded only when its single changed entity is exactly reconstructible; otherwise the retry fails with `idempotency_replay_unupgradable` rather than guessing or re-executing.
+- Read-only tools carry no `effects` member at all, in their schema or their response.
+
 Common error shape:
 
 ```json
@@ -1086,7 +1111,7 @@ Common error shape:
 }
 ```
 
-Recommended codes: `workspace_required`, `workspace_not_found`, `not_found`, `validation_failed`, `version_conflict`, `claim_conflict`, `claim_expired`, `transition_not_allowed`, `objective_phase_disallows_execution`, `plan_not_approved`, `approval_required`, `approval_stale`, `capability_mismatch`, `output_profile_inactive`, `output_contract_unsatisfied`, `output_revision_unaccepted`, `external_action_not_authorized`, `authority_grant_expired`, `authority_principal_mismatch`, `authorization_subject_mismatch`, `dependency_cycle`, `blocked`, `idempotency_key_reused_with_different_request`, `forbidden` (reserved for an authenticated future layer).
+Recommended codes: `workspace_required`, `workspace_not_found`, `not_found`, `validation_failed`, `version_conflict`, `claim_conflict`, `claim_expired`, `transition_not_allowed`, `objective_phase_disallows_execution`, `plan_not_approved`, `approval_required`, `approval_stale`, `capability_mismatch`, `output_profile_inactive`, `output_contract_unsatisfied`, `output_revision_unaccepted`, `external_action_not_authorized`, `authority_grant_expired`, `authority_principal_mismatch`, `authorization_subject_mismatch`, `dependency_cycle`, `blocked`, `idempotency_key_reused_with_different_request`, `idempotency_replay_unupgradable`, `forbidden` (reserved for an authenticated future layer).
 
 Set MCP tool annotations accurately as advisory host hints: read tools `readOnlyHint: true`; mutations `readOnlyHint: false`; only declare `idempotentHint: true` where the server’s idempotency design genuinely guarantees it. Do not mistake annotations for authorization or data integrity.
 

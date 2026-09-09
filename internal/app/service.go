@@ -36,7 +36,7 @@ type CreateObjectiveCommand struct {
 	Phase          work.ObjectivePhase
 }
 
-func (s *Service) CreateObjective(ctx context.Context, command CreateObjectiveCommand) (work.Objective, error) {
+func (s *Service) createObjectiveMutation(ctx context.Context, command CreateObjectiveCommand) (work.Objective, error) {
 	if replay, found, err := replayIdempotently[work.Objective](ctx, s, command.ActorID, command.IdempotencyKey, "create_objective", command); err != nil {
 		return work.Objective{}, err
 	} else if found {
@@ -95,7 +95,7 @@ type PatchObjectiveCommand struct {
 	DesiredOutcome  *string
 }
 
-func (s *Service) PatchObjective(ctx context.Context, command PatchObjectiveCommand) (work.Objective, error) {
+func (s *Service) patchObjectiveMutation(ctx context.Context, command PatchObjectiveCommand) (work.Objective, error) {
 	var patched work.Objective
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		result, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "patch_objective", command, func() (work.Objective, error) {
@@ -161,7 +161,7 @@ type PatchAcceptanceCriterionResolution struct {
 	Rationale   string
 }
 
-func (s *Service) PatchWorkItem(ctx context.Context, command PatchWorkItemCommand) (work.WorkItem, error) {
+func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkItemCommand) (work.WorkItem, error) {
 	var patched work.WorkItem
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		result, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "patch_work_item", command, func() (work.WorkItem, error) {
@@ -349,7 +349,7 @@ type AttentionRequestResult struct {
 	Decision       *work.Decision      `json:"decision,omitempty"`
 }
 
-func (s *Service) RequestAttention(ctx context.Context, command RequestAttentionCommand) (AttentionRequestResult, error) {
+func (s *Service) requestAttentionMutation(ctx context.Context, command RequestAttentionCommand) (AttentionRequestResult, error) {
 	var result AttentionRequestResult
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		requested, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "request_attention", command, func() (AttentionRequestResult, error) {
@@ -453,7 +453,7 @@ func attentionPayload(targetKind, targetID string, attentionState work.Attention
 	return payload
 }
 
-func (s *Service) CreatePlan(ctx context.Context, command CreatePlanCommand) (work.Plan, error) {
+func (s *Service) createPlanMutation(ctx context.Context, command CreatePlanCommand) (work.Plan, error) {
 	if replay, found, err := replayIdempotently[work.Plan](ctx, s, command.ActorID, command.IdempotencyKey, "create_plan", command); err != nil {
 		return work.Plan{}, err
 	} else if found {
@@ -530,7 +530,7 @@ type CreateWorkItemDependency struct {
 	Note                string
 }
 
-func (s *Service) CreateWorkItem(ctx context.Context, command CreateWorkItemCommand) (work.WorkItem, error) {
+func (s *Service) createWorkItemMutation(ctx context.Context, command CreateWorkItemCommand) (work.WorkItem, error) {
 	if replay, found, err := replayIdempotently[work.WorkItem](ctx, s, command.ActorID, command.IdempotencyKey, "create_work_item", command); err != nil {
 		return work.WorkItem{}, err
 	} else if found {
@@ -829,7 +829,7 @@ type DefineExpectedOutputCommand struct {
 	IdempotencyKey  string
 }
 
-func (s *Service) DefineExpectedOutput(ctx context.Context, command DefineExpectedOutputCommand) (output.ExpectedOutput, error) {
+func (s *Service) defineExpectedOutputMutation(ctx context.Context, command DefineExpectedOutputCommand) (output.ExpectedOutput, error) {
 	if replay, found, err := replayIdempotently[output.ExpectedOutput](ctx, s, command.ActorID, command.IdempotencyKey, "define_expected_output", command); err != nil {
 		return output.ExpectedOutput{}, err
 	} else if found {

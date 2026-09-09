@@ -28,7 +28,11 @@ func (s *Store) WithinTransaction(ctx context.Context, operation func(ports.Repo
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer transaction.Rollback()
-	if err := operation(&transactionRepository{transaction: transaction}); err != nil {
+	repository := &transactionRepository{transaction: transaction}
+	if err := repository.beginEffectCollection(ctx); err != nil {
+		return err
+	}
+	if err := operation(repository); err != nil {
 		return err
 	}
 	if err := transaction.Commit(); err != nil {
@@ -387,8 +391,8 @@ func (r *transactionRepository) OutputProfile(ctx context.Context, name string, 
 func (r *transactionRepository) CreateExpectedOutput(ctx context.Context, expected output.ExpectedOutput) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO expected_outputs
-  (id, work_item_id, name, output_profile_id, contract_json, destination_hint, required, ordinal)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  (id, work_item_id, name, output_profile_id, contract_json, destination_hint, required, ordinal, version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		expected.ID,
 		expected.WorkItemID,
 		expected.Name,
@@ -397,6 +401,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		expected.DestinationHint,
 		boolInt(expected.Required),
 		expected.Ordinal,
+		expected.Version,
 	)
 	if err != nil {
 		return fmt.Errorf("insert expected output: %w", err)

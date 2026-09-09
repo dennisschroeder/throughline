@@ -75,7 +75,7 @@ type ProposeExternalActionCommand struct {
 	Subject         json.RawMessage
 }
 
-func (s *Service) ProposeExternalAction(ctx context.Context, command ProposeExternalActionCommand) (ExternalActionResult, error) {
+func (s *Service) proposeExternalActionMutation(ctx context.Context, command ProposeExternalActionCommand) (ExternalActionResult, error) {
 	if replay, found, err := replayIdempotently[ExternalActionResult](ctx, s, command.ActorID, command.IdempotencyKey, "propose_external_action", command); err != nil {
 		return ExternalActionResult{}, err
 	} else if found {
@@ -140,7 +140,7 @@ type ReviseExternalActionCommand struct {
 	Subject                 json.RawMessage
 }
 
-func (s *Service) ReviseExternalAction(ctx context.Context, command ReviseExternalActionCommand) (ExternalActionResult, error) {
+func (s *Service) reviseExternalActionMutation(ctx context.Context, command ReviseExternalActionCommand) (ExternalActionResult, error) {
 	var result ExternalActionResult
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		var err error
@@ -206,7 +206,7 @@ type PatchExternalActionMetadataCommand struct {
 	Rationale             *string
 }
 
-func (s *Service) PatchExternalActionMetadata(ctx context.Context, command PatchExternalActionMetadataCommand) (authority.ExternalAction, error) {
+func (s *Service) patchExternalActionMetadataMutation(ctx context.Context, command PatchExternalActionMetadataCommand) (authority.ExternalAction, error) {
 	var result authority.ExternalAction
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		var err error
@@ -263,7 +263,7 @@ type RequestExternalActionApprovalCommand struct {
 	Request               string
 }
 
-func (s *Service) RequestExternalActionApproval(ctx context.Context, command RequestExternalActionApprovalCommand) (authority.ActionApproval, error) {
+func (s *Service) requestExternalActionApprovalMutation(ctx context.Context, command RequestExternalActionApprovalCommand) (authority.ActionApproval, error) {
 	if replay, found, err := replayIdempotently[authority.ActionApproval](ctx, s, command.ActorID, command.IdempotencyKey, "request_external_action_approval", command); err != nil {
 		return authority.ActionApproval{}, err
 	} else if found {
@@ -337,7 +337,7 @@ type ApprovalResolutionResult struct {
 	Action   authority.ExternalAction
 }
 
-func (s *Service) ResolveExternalActionApproval(ctx context.Context, command ResolveExternalActionApprovalCommand) (ApprovalResolutionResult, error) {
+func (s *Service) resolveExternalActionApprovalMutation(ctx context.Context, command ResolveExternalActionApprovalCommand) (ApprovalResolutionResult, error) {
 	if replay, found, err := replayIdempotently[ApprovalResolutionResult](ctx, s, command.ActorID, command.IdempotencyKey, "resolve_external_action_approval", command); err != nil {
 		return ApprovalResolutionResult{}, err
 	} else if found {
@@ -439,7 +439,7 @@ type RevokeExternalActionApprovalCommand struct {
 	Rationale             string
 }
 
-func (s *Service) RevokeExternalActionApproval(ctx context.Context, command RevokeExternalActionApprovalCommand) (ApprovalResolutionResult, error) {
+func (s *Service) revokeExternalActionApprovalMutation(ctx context.Context, command RevokeExternalActionApprovalCommand) (ApprovalResolutionResult, error) {
 	var result ApprovalResolutionResult
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		var err error
@@ -474,6 +474,13 @@ func (s *Service) RevokeExternalActionApproval(ctx context.Context, command Revo
 				return ApprovalResolutionResult{}, err
 			}
 			if err := repository.UpdateAuthorityGrant(ctx, grant); err != nil {
+				return ApprovalResolutionResult{}, err
+			}
+			// Revocation ends the action's authority, so the action itself changes.
+			// Without this the mutation would report no effect on the action at all.
+			action = authority.WithdrawExternalActionAuthority(action, s.clock.Now())
+			action.UpdatedBy = command.ActorID
+			if err := repository.UpdateExternalAction(ctx, action, command.ExpectedActionVersion); err != nil {
 				return ApprovalResolutionResult{}, err
 			}
 			if err := s.recordActivity(ctx, repository, work.Activity{
@@ -550,7 +557,7 @@ type ExternalActionExecutionResult struct {
 	Execution authority.ExternalActionExecution
 }
 
-func (s *Service) StartExternalActionExecution(ctx context.Context, command StartExternalActionExecutionCommand) (ExternalActionExecutionResult, error) {
+func (s *Service) startExternalActionExecutionMutation(ctx context.Context, command StartExternalActionExecutionCommand) (ExternalActionExecutionResult, error) {
 	if replay, found, err := replayIdempotently[ExternalActionExecutionResult](ctx, s, command.ActorID, command.IdempotencyKey, "start_external_action_execution", command); err != nil {
 		return ExternalActionExecutionResult{}, err
 	} else if found {
@@ -637,7 +644,7 @@ type CompleteExternalActionExecutionCommand struct {
 	EvidenceArtifactID    string
 }
 
-func (s *Service) CompleteExternalActionExecution(ctx context.Context, command CompleteExternalActionExecutionCommand) (ExternalActionExecutionResult, error) {
+func (s *Service) completeExternalActionExecutionMutation(ctx context.Context, command CompleteExternalActionExecutionCommand) (ExternalActionExecutionResult, error) {
 	var result ExternalActionExecutionResult
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		var err error

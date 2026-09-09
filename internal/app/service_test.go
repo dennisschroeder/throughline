@@ -20,18 +20,18 @@ func TestRepositoryIndependentSkillDesignSlice(t *testing.T) {
 	service := NewService(store, &sequenceIDs{}, clock)
 	ctx := context.Background()
 
-	objective, err := service.CreateObjective(ctx, CreateObjectiveCommand{
+	objective, err := UnwrapMutation(service.CreateObjective(ctx, CreateObjectiveCommand{
 		ActorID:        "human:owner",
 		IdempotencyKey: "objective",
 		Key:            "OBJ-SKILL",
 		Title:          "Design a reusable interview-synthesis skill",
 		DesiredOutcome: "A reviewed skill package that turns interview notes into a source-linked synthesis.",
 		Phase:          work.ObjectivePlanning,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := service.CreatePlan(ctx, CreatePlanCommand{
+	plan, err := UnwrapMutation(service.CreatePlan(ctx, CreatePlanCommand{
 		ActorID:         "human:owner",
 		IdempotencyKey:  "plan",
 		ObjectiveID:     objective.ID,
@@ -39,11 +39,11 @@ func TestRepositoryIndependentSkillDesignSlice(t *testing.T) {
 		Summary:         "Define the inputs, synthesis method, output contract, and evaluation rubric.",
 		Revision:        1,
 		CommitmentState: work.PlanDraft,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	item, err := service.CreateWorkItem(ctx, CreateWorkItemCommand{
+	item, err := UnwrapMutation(service.CreateWorkItem(ctx, CreateWorkItemCommand{
 		ActorID:           "human:owner",
 		IdempotencyKey:    "item",
 		Key:               "TH-1",
@@ -59,11 +59,11 @@ func TestRepositoryIndependentSkillDesignSlice(t *testing.T) {
 		ExecutionPolicy:   work.PolicyAgentMayPropose,
 		RequiredActorKind: work.ActorAny,
 		AttentionState:    work.AttentionNeedsHumanReview,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.DefineExpectedOutput(ctx, DefineExpectedOutputCommand{
+	_, err = UnwrapMutation(service.DefineExpectedOutput(ctx, DefineExpectedOutputCommand{
 		ActorID:         "human:owner",
 		WorkItemID:      item.ID,
 		Name:            "Installable interview-synthesis skill",
@@ -75,7 +75,7 @@ func TestRepositoryIndependentSkillDesignSlice(t *testing.T) {
 		Ordinal:         1,
 		ExpectedVersion: item.Version,
 		IdempotencyKey:  "define-skill-output",
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,9 +99,9 @@ func TestRepositoryIndependentSkillDesignSlice(t *testing.T) {
 func TestServiceRequiresIdempotencyKey(t *testing.T) {
 	clock := fixedClock{value: time.Date(2026, 8, 21, 12, 30, 0, 0, time.UTC)}
 	service := NewService(newMemoryStore(clock.value), &sequenceIDs{}, clock)
-	_, err := service.CreateObjective(context.Background(), CreateObjectiveCommand{
+	_, err := UnwrapMutation(service.CreateObjective(context.Background(), CreateObjectiveCommand{
 		ActorID: "human:owner", Key: "OBJ-KEY", Title: "Require durable mutation keys", DesiredOutcome: "No mutation bypass", Phase: work.ObjectiveIdea,
-	})
+	}))
 	if err == nil || !strings.Contains(err.Error(), "idempotency key") {
 		t.Fatalf("expected missing idempotency key error, got %v", err)
 	}
@@ -112,14 +112,14 @@ func TestCreatePlanOnlyCreatesDrafts(t *testing.T) {
 	store := newMemoryStore(clock.value)
 	store.objectives["objective"] = work.Objective{ID: "objective"}
 	service := NewService(store, &sequenceIDs{}, clock)
-	_, err := service.CreatePlan(context.Background(), CreatePlanCommand{
+	_, err := UnwrapMutation(service.CreatePlan(context.Background(), CreatePlanCommand{
 		ActorID:         "human:owner",
 		IdempotencyKey:  "premature-plan",
 		ObjectiveID:     "objective",
 		Title:           "Premature plan",
 		Revision:        1,
 		CommitmentState: work.PlanProposed,
-	})
+	}))
 	if err == nil {
 		t.Fatal("expected proposed plan creation without proposal audit to be rejected")
 	}
@@ -136,13 +136,13 @@ func TestCreateWorkItemAcceptedReadyRequiresApprovedExecutionContext(t *testing.
 		CommitmentState: work.ItemAccepted, ExecutionStatus: work.StatusReady, Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
 		ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny, AttentionState: work.AttentionNone,
 	}
-	if _, err := service.CreateWorkItem(context.Background(), command); err == nil {
+	if _, err := UnwrapMutation(service.CreateWorkItem(context.Background(), command)); err == nil {
 		t.Fatal("expected accepted ready work item outside execution to be rejected")
 	}
 	objective := store.objectives["objective"]
 	objective.Phase = work.ObjectiveExecution
 	store.objectives[objective.ID] = objective
-	item, err := service.CreateWorkItem(context.Background(), command)
+	item, err := UnwrapMutation(service.CreateWorkItem(context.Background(), command))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,14 +156,14 @@ func TestCreateObjectiveCannotStartInExecution(t *testing.T) {
 	store := newMemoryStore(clock.value)
 	service := NewService(store, &sequenceIDs{}, clock)
 
-	_, err := service.CreateObjective(context.Background(), CreateObjectiveCommand{
+	_, err := UnwrapMutation(service.CreateObjective(context.Background(), CreateObjectiveCommand{
 		ActorID:        "human:owner",
 		IdempotencyKey: "premature-objective",
 		Key:            "OBJ-PREMATURE",
 		Title:          "Premature objective",
 		DesiredOutcome: "Execution without an approved handoff",
 		Phase:          work.ObjectiveExecution,
-	})
+	}))
 	if err == nil {
 		t.Fatal("expected objective creation in execution to be rejected")
 	}
@@ -179,7 +179,7 @@ func TestRequestAttentionPersistsObjectiveScopedTargetAssociation(t *testing.T) 
 	store.decisions["decision"] = work.Decision{ID: "decision", ObjectiveID: "objective", Title: "Use the local store", Outcome: "SQLite", Status: work.DecisionAccepted, DecidedBy: "human:owner"}
 	service := NewService(store, &sequenceIDs{}, clock)
 
-	question, err := service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "question", TargetID: "question", ActorID: "agent:researcher", IdempotencyKey: "question-attention", ExpectedVersion: 1, AttentionState: work.AttentionNeedsHumanDecision})
+	question, err := UnwrapMutation(service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "question", TargetID: "question", ActorID: "agent:researcher", IdempotencyKey: "question-attention", ExpectedVersion: 1, AttentionState: work.AttentionNeedsHumanDecision}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,14 +190,14 @@ func TestRequestAttentionPersistsObjectiveScopedTargetAssociation(t *testing.T) 
 		t.Fatalf("question attention state = %#v", updated)
 	}
 
-	decision, err := service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "decision", TargetID: "decision", ActorID: "agent:researcher", IdempotencyKey: "decision-attention", ExpectedVersion: 1, AttentionState: work.AttentionNeedsHumanReview})
+	decision, err := UnwrapMutation(service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "decision", TargetID: "decision", ActorID: "agent:researcher", IdempotencyKey: "decision-attention", ExpectedVersion: 1, AttentionState: work.AttentionNeedsHumanReview}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if decision.Decision == nil || decision.WorkItem != nil || decision.TargetKind != "decision" || decision.TargetID != "decision" {
 		t.Fatalf("decision attention result = %#v", decision)
 	}
-	intervention, err := service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "intervention", TargetID: "release-1", ActorID: "agent:researcher", IdempotencyKey: "intervention-attention", AttentionState: work.AttentionInterventionRequired})
+	intervention, err := UnwrapMutation(service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "intervention", TargetID: "release-1", ActorID: "agent:researcher", IdempotencyKey: "intervention-attention", AttentionState: work.AttentionInterventionRequired}))
 	if err != nil {
 		t.Fatal(err)
 	}

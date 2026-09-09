@@ -38,10 +38,57 @@ SELECT EXISTS(SELECT 1 FROM ancestors WHERE id = ?)`, parentID, workItemID)
 }
 
 func (r *transactionRepository) ReplaceWorkItemCapabilities(ctx context.Context, workItemID string, capabilities []string) error {
-	if _, err := r.transaction.ExecContext(ctx, "DELETE FROM work_item_capabilities WHERE work_item_id = ?", workItemID); err != nil {
-		return fmt.Errorf("clear work item capabilities: %w", err)
+	rows, err := r.transaction.QueryContext(ctx, `
+SELECT capability_slug, version
+FROM work_item_capabilities
+WHERE work_item_id = ?
+ORDER BY capability_slug`, workItemID)
+	if err != nil {
+		return fmt.Errorf("query work item capabilities: %w", err)
+	}
+	existing := make(map[string]int)
+	// removals keeps the query's slug order: deleting in map order would make the
+	// mutation's effect list arrive in a different sequence on every call.
+	var removals []string
+	for rows.Next() {
+		var capability string
+		var version int
+		if err := rows.Scan(&capability, &version); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan work item capability: %w", err)
+		}
+		existing[capability] = version
+		removals = append(removals, capability)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close work item capabilities: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate work item capabilities: %w", err)
+	}
+
+	desired := make(map[string]struct{}, len(capabilities))
+	for _, capability := range capabilities {
+		desired[capability] = struct{}{}
+	}
+	for _, capability := range removals {
+		if _, retained := desired[capability]; retained {
+			continue
+		}
+		result, err := r.transaction.ExecContext(ctx, `
+DELETE FROM work_item_capabilities
+WHERE work_item_id = ? AND capability_slug = ? AND version = ?`, workItemID, capability, existing[capability])
+		if err != nil {
+			return fmt.Errorf("remove work item capability: %w", err)
+		}
+		if err := requireChanged(result); err != nil {
+			return err
+		}
 	}
 	for _, capability := range capabilities {
+		if _, retained := existing[capability]; retained {
+			continue
+		}
 		if err := r.AddWorkItemCapability(ctx, workItemID, capability); err != nil {
 			return err
 		}
@@ -52,9 +99,9 @@ func (r *transactionRepository) ReplaceWorkItemCapabilities(ctx context.Context,
 func (r *transactionRepository) CreateAcceptanceCriterion(ctx context.Context, criterion work.AcceptanceCriterion) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO acceptance_criteria
-  (id, work_item_id, ordinal, text, required, status, resolved_at, resolved_by, resolution_rationale)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, criterion.ID, criterion.WorkItemID, criterion.Ordinal, criterion.Text,
-		boolInt(criterion.Required), criterion.Status, nullableTime(criterion.ResolvedAt), nullableString(criterion.ResolvedBy), criterion.ResolutionRationale)
+  (id, work_item_id, ordinal, text, required, status, resolved_at, resolved_by, resolution_rationale, version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, criterion.ID, criterion.WorkItemID, criterion.Ordinal, criterion.Text,
+		boolInt(criterion.Required), criterion.Status, nullableTime(criterion.ResolvedAt), nullableString(criterion.ResolvedBy), criterion.ResolutionRationale, criterion.Version)
 	if err != nil {
 		return fmt.Errorf("insert acceptance criterion: %w", err)
 	}
@@ -69,9 +116,9 @@ func (r *transactionRepository) AcceptanceCriterion(ctx context.Context, id stri
 func (r *transactionRepository) UpdateAcceptanceCriterion(ctx context.Context, criterion work.AcceptanceCriterion) error {
 	result, err := r.transaction.ExecContext(ctx, `
 UPDATE acceptance_criteria
-SET status = ?, resolved_at = ?, resolved_by = ?, resolution_rationale = ?
-WHERE id = ? AND status = ?`, criterion.Status, formatTime(criterion.ResolvedAt), criterion.ResolvedBy,
-		criterion.ResolutionRationale, criterion.ID, work.AcceptancePending)
+SET status = ?, resolved_at = ?, resolved_by = ?, resolution_rationale = ?, version = ?
+WHERE id = ? AND status = ? AND version = ?`, criterion.Status, formatTime(criterion.ResolvedAt), criterion.ResolvedBy,
+		criterion.ResolutionRationale, criterion.Version, criterion.ID, work.AcceptancePending, criterion.Version-1)
 	if err != nil {
 		return fmt.Errorf("resolve acceptance criterion: %w", err)
 	}
@@ -88,9 +135,9 @@ SELECT NOT EXISTS(
 
 func (r *transactionRepository) CreateDependency(ctx context.Context, dependency work.Dependency) error {
 	_, err := r.transaction.ExecContext(ctx, `
-INSERT INTO dependencies (id, work_item_id, depends_on_item_id, kind, note, created_at, created_by)
-VALUES (?, ?, ?, ?, ?, ?, ?)`, dependency.ID, dependency.WorkItemID, dependency.DependsOnItemID,
-		dependency.Kind, dependency.Note, formatTime(dependency.CreatedAt), dependency.CreatedBy)
+INSERT INTO dependencies (id, work_item_id, depends_on_item_id, kind, note, created_at, created_by, version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, dependency.ID, dependency.WorkItemID, dependency.DependsOnItemID,
+		dependency.Kind, dependency.Note, formatTime(dependency.CreatedAt), dependency.CreatedBy, dependency.Version)
 	if err != nil {
 		return fmt.Errorf("insert dependency: %w", err)
 	}
@@ -157,9 +204,9 @@ func (r *transactionRepository) NextOutputRevision(ctx context.Context, expected
 
 func (r *transactionRepository) CreateArtifact(ctx context.Context, artifact output.Artifact) error {
 	_, err := r.transaction.ExecContext(ctx, `
-INSERT INTO artifacts (id, work_item_id, kind, uri, title, metadata_json, attached_by, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, artifact.ID, artifact.WorkItemID, artifact.Kind, artifact.URI,
-		artifact.Title, string(artifact.Metadata), artifact.AttachedBy, formatTime(artifact.CreatedAt))
+INSERT INTO artifacts (id, work_item_id, kind, uri, title, metadata_json, attached_by, created_at, version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, artifact.ID, artifact.WorkItemID, artifact.Kind, artifact.URI,
+		artifact.Title, string(artifact.Metadata), artifact.AttachedBy, formatTime(artifact.CreatedAt), artifact.Version)
 	if err != nil {
 		return fmt.Errorf("insert artifact: %w", err)
 	}
@@ -176,18 +223,18 @@ func (r *transactionRepository) CreateOutputRevision(ctx context.Context, revisi
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO output_revisions
   (id, expected_output_id, output_profile_id, revision, content_digest, acceptance_state,
-   produced_by, produced_at, accepted_by, accepted_at, acceptance_reason)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, revision.ID, revision.ExpectedOutputID,
+   produced_by, produced_at, accepted_by, accepted_at, acceptance_reason, state_version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, revision.ID, revision.ExpectedOutputID,
 		revision.OutputProfileID, revision.Revision, revision.ContentDigest, revision.AcceptanceState,
 		revision.ProducedBy, formatTime(revision.ProducedAt), nullableString(revision.AcceptedBy),
-		nullableTime(revision.AcceptedAt), revision.AcceptanceReason)
+		nullableTime(revision.AcceptedAt), revision.AcceptanceReason, revision.StateVersion)
 	if err != nil {
 		return fmt.Errorf("insert output revision: %w", err)
 	}
 	for _, binding := range revision.Artifacts {
 		if _, err := r.transaction.ExecContext(ctx, `
-INSERT INTO output_revision_artifacts (output_revision_id, artifact_id, role)
-VALUES (?, ?, ?)`, revision.ID, binding.ArtifactID, binding.Role); err != nil {
+INSERT INTO output_revision_artifacts (output_revision_id, artifact_id, role, version)
+VALUES (?, ?, ?, 1)`, revision.ID, binding.ArtifactID, binding.Role); err != nil {
 			return fmt.Errorf("bind output revision artifact: %w", err)
 		}
 	}
@@ -214,9 +261,9 @@ func (r *transactionRepository) OutputRevision(ctx context.Context, id string) (
 func (r *transactionRepository) UpdateOutputRevisionAcceptance(ctx context.Context, revision output.OutputRevision) error {
 	result, err := r.transaction.ExecContext(ctx, `
 UPDATE output_revisions
-SET acceptance_state = ?, accepted_by = ?, accepted_at = ?, acceptance_reason = ?
-WHERE id = ? AND acceptance_state = ?`, revision.AcceptanceState, revision.AcceptedBy,
-		formatTime(revision.AcceptedAt), revision.AcceptanceReason, revision.ID, output.RevisionProduced)
+SET acceptance_state = ?, accepted_by = ?, accepted_at = ?, acceptance_reason = ?, state_version = ?
+WHERE id = ? AND acceptance_state = ? AND state_version = ?`, revision.AcceptanceState, revision.AcceptedBy,
+		formatTime(revision.AcceptedAt), revision.AcceptanceReason, revision.StateVersion, revision.ID, output.RevisionProduced, revision.StateVersion-1)
 	if err != nil {
 		return fmt.Errorf("accept output revision: %w", err)
 	}
@@ -227,10 +274,10 @@ func (r *transactionRepository) CreateValidationRecord(ctx context.Context, reco
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO output_validations
   (id, output_revision_id, criterion_ref, validator_kind, verdict, score, verifier_actor_id,
-   evidence_artifact_id, details_json, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ID, record.OutputRevisionID, record.CriterionRef,
+   evidence_artifact_id, details_json, created_at, version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ID, record.OutputRevisionID, record.CriterionRef,
 		record.ValidatorKind, record.Verdict, nullableFloat(record.Score), record.VerifierActorID,
-		nullableString(record.EvidenceArtifactID), string(record.Details), formatTime(record.CreatedAt))
+		nullableString(record.EvidenceArtifactID), string(record.Details), formatTime(record.CreatedAt), record.Version)
 	if err != nil {
 		return fmt.Errorf("insert validation record: %w", err)
 	}
@@ -244,10 +291,10 @@ func (r *transactionRepository) ValidationRecords(ctx context.Context, outputRev
 func (r *transactionRepository) CreateOutputRequirement(ctx context.Context, requirement output.OutputRequirement) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO output_requirements
-  (id, work_item_id, required_output_revision_id, required_profile_name, version_constraint, required, note)
-VALUES (?, ?, ?, ?, ?, ?, ?)`, requirement.ID, requirement.WorkItemID,
+  (id, work_item_id, required_output_revision_id, required_profile_name, version_constraint, required, note, version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, requirement.ID, requirement.WorkItemID,
 		nullableString(requirement.RequiredOutputRevisionID), nullableString(requirement.RequiredProfileName),
-		nullableString(requirement.VersionConstraint), boolInt(requirement.Required), requirement.Note)
+		nullableString(requirement.VersionConstraint), boolInt(requirement.Required), requirement.Note, requirement.Version)
 	if err != nil {
 		return fmt.Errorf("insert output requirement: %w", err)
 	}
@@ -594,35 +641,35 @@ WHERE expected.work_item_id = ? ORDER BY expected.ordinal, output_revisions.revi
 }
 
 const acceptanceCriterionSelect = `
-SELECT id, work_item_id, ordinal, text, required, status, resolved_at, resolved_by, resolution_rationale
+SELECT id, work_item_id, ordinal, text, required, status, resolved_at, resolved_by, resolution_rationale, version
 FROM acceptance_criteria`
 
 const dependencySelect = `
-SELECT id, work_item_id, depends_on_item_id, kind, note, created_at, created_by
+SELECT id, work_item_id, depends_on_item_id, kind, note, created_at, created_by, version
 FROM dependencies`
 
 const expectedOutputSelect = `
-SELECT id, work_item_id, name, output_profile_id, contract_json, destination_hint, required, ordinal
+SELECT id, work_item_id, name, output_profile_id, contract_json, destination_hint, required, ordinal, version
 FROM expected_outputs`
 
 const artifactSelect = `
-SELECT id, work_item_id, kind, uri, title, metadata_json, attached_by, created_at
+SELECT id, work_item_id, kind, uri, title, metadata_json, attached_by, created_at, version
 FROM artifacts`
 
 const outputRevisionSelect = `
 SELECT output_revisions.id, output_revisions.expected_output_id, output_revisions.output_profile_id,
        output_revisions.revision, output_revisions.content_digest, output_revisions.acceptance_state,
        output_revisions.produced_by, output_revisions.produced_at, output_revisions.accepted_by,
-       output_revisions.accepted_at, output_revisions.acceptance_reason
+       output_revisions.accepted_at, output_revisions.acceptance_reason, output_revisions.state_version
 FROM output_revisions `
 
 const outputRequirementSelect = `
-SELECT id, work_item_id, required_output_revision_id, required_profile_name, version_constraint, required, note
+SELECT id, work_item_id, required_output_revision_id, required_profile_name, version_constraint, required, note, version
 FROM output_requirements`
 
 const validationSelect = `
 SELECT id, output_revision_id, criterion_ref, validator_kind, verdict, score, verifier_actor_id,
-       evidence_artifact_id, details_json, created_at
+       evidence_artifact_id, details_json, created_at, version
 FROM output_validations`
 
 const activitySelect = `
@@ -654,7 +701,7 @@ func scanAcceptanceCriterion(row scanner) (work.AcceptanceCriterion, error) {
 	var required int
 	var resolvedAt, resolvedBy sql.NullString
 	if err := row.Scan(&criterion.ID, &criterion.WorkItemID, &criterion.Ordinal, &criterion.Text, &required,
-		&criterion.Status, &resolvedAt, &resolvedBy, &criterion.ResolutionRationale); err != nil {
+		&criterion.Status, &resolvedAt, &resolvedBy, &criterion.ResolutionRationale, &criterion.Version); err != nil {
 		return work.AcceptanceCriterion{}, err
 	}
 	criterion.Required = required == 1
@@ -673,7 +720,7 @@ func scanDependency(row scanner) (work.Dependency, error) {
 	var dependency work.Dependency
 	var createdAt string
 	if err := row.Scan(&dependency.ID, &dependency.WorkItemID, &dependency.DependsOnItemID, &dependency.Kind,
-		&dependency.Note, &createdAt, &dependency.CreatedBy); err != nil {
+		&dependency.Note, &createdAt, &dependency.CreatedBy, &dependency.Version); err != nil {
 		return work.Dependency{}, err
 	}
 	var err error
@@ -686,7 +733,7 @@ func scanExpectedOutput(row scanner) (output.ExpectedOutput, error) {
 	var contract string
 	var required int
 	if err := row.Scan(&expected.ID, &expected.WorkItemID, &expected.Name, &expected.OutputProfileID,
-		&contract, &expected.DestinationHint, &required, &expected.Ordinal); err != nil {
+		&contract, &expected.DestinationHint, &required, &expected.Ordinal, &expected.Version); err != nil {
 		return output.ExpectedOutput{}, err
 	}
 	expected.Contract = []byte(contract)
@@ -698,7 +745,7 @@ func scanArtifact(row scanner) (output.Artifact, error) {
 	var artifact output.Artifact
 	var metadata, createdAt string
 	if err := row.Scan(&artifact.ID, &artifact.WorkItemID, &artifact.Kind, &artifact.URI,
-		&artifact.Title, &metadata, &artifact.AttachedBy, &createdAt); err != nil {
+		&artifact.Title, &metadata, &artifact.AttachedBy, &createdAt, &artifact.Version); err != nil {
 		return output.Artifact{}, err
 	}
 	artifact.Metadata = []byte(metadata)
@@ -713,7 +760,7 @@ func scanOutputRevision(row scanner) (output.OutputRevision, error) {
 	var acceptedBy, acceptedAt sql.NullString
 	if err := row.Scan(&revision.ID, &revision.ExpectedOutputID, &revision.OutputProfileID, &revision.Revision,
 		&revision.ContentDigest, &revision.AcceptanceState, &revision.ProducedBy, &producedAt,
-		&acceptedBy, &acceptedAt, &revision.AcceptanceReason); err != nil {
+		&acceptedBy, &acceptedAt, &revision.AcceptanceReason, &revision.StateVersion); err != nil {
 		return output.OutputRevision{}, err
 	}
 	var err error
@@ -733,7 +780,7 @@ func scanOutputRequirement(row scanner) (output.OutputRequirement, error) {
 	var revisionID, profileName, versionConstraint sql.NullString
 	var required int
 	if err := row.Scan(&requirement.ID, &requirement.WorkItemID, &revisionID, &profileName,
-		&versionConstraint, &required, &requirement.Note); err != nil {
+		&versionConstraint, &required, &requirement.Note, &requirement.Version); err != nil {
 		return output.OutputRequirement{}, err
 	}
 	requirement.RequiredOutputRevisionID = revisionID.String
@@ -749,7 +796,7 @@ func scanValidationRecord(row scanner) (output.ValidationRecord, error) {
 	var evidence sql.NullString
 	var details, createdAt string
 	if err := row.Scan(&record.ID, &record.OutputRevisionID, &record.CriterionRef, &record.ValidatorKind,
-		&record.Verdict, &score, &record.VerifierActorID, &evidence, &details, &createdAt); err != nil {
+		&record.Verdict, &score, &record.VerifierActorID, &evidence, &details, &createdAt, &record.Version); err != nil {
 		return output.ValidationRecord{}, err
 	}
 	if score.Valid {
@@ -816,7 +863,7 @@ SELECT artifact_id, role FROM output_revision_artifacts WHERE output_revision_id
 func listRevisionArtifacts(ctx context.Context, reader sqlReader, revisionID string) ([]output.Artifact, error) {
 	rows, err := reader.QueryContext(ctx, `
 SELECT artifact.id, artifact.work_item_id, artifact.kind, artifact.uri, artifact.title,
-       artifact.metadata_json, artifact.attached_by, artifact.created_at
+       artifact.metadata_json, artifact.attached_by, artifact.created_at, artifact.version
 FROM artifacts artifact
 JOIN output_revision_artifacts binding ON binding.artifact_id = artifact.id
 WHERE binding.output_revision_id = ? ORDER BY artifact.id`, revisionID)
@@ -828,11 +875,13 @@ WHERE binding.output_revision_id = ? ORDER BY artifact.id`, revisionID)
 	for rows.Next() {
 		var artifact output.Artifact
 		var metadata, createdAt string
+		var version int
 		if err := rows.Scan(&artifact.ID, &artifact.WorkItemID, &artifact.Kind, &artifact.URI,
-			&artifact.Title, &metadata, &artifact.AttachedBy, &createdAt); err != nil {
+			&artifact.Title, &metadata, &artifact.AttachedBy, &createdAt, &version); err != nil {
 			return nil, err
 		}
 		artifact.Metadata = []byte(metadata)
+		artifact.Version = version
 		artifact.CreatedAt, err = parseTime(createdAt)
 		if err != nil {
 			return nil, err

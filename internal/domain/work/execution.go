@@ -20,6 +20,7 @@ const (
 type AcceptanceCriterion struct {
 	ID                  string
 	WorkItemID          string
+	Version             int
 	Ordinal             int
 	Text                string
 	Required            bool
@@ -40,6 +41,7 @@ func NewAcceptanceCriterion(criterion AcceptanceCriterion) (AcceptanceCriterion,
 		return AcceptanceCriterion{}, errors.New("acceptance criterion ordinal must be positive")
 	}
 	criterion.Status = AcceptancePending
+	criterion.Version = 1
 	criterion.ResolvedBy = ""
 	criterion.ResolvedAt = time.Time{}
 	criterion.ResolutionRationale = ""
@@ -62,6 +64,7 @@ func ResolveAcceptanceCriterion(criterion AcceptanceCriterion, target Acceptance
 	criterion.ResolvedBy = actor
 	criterion.ResolvedAt = now.UTC()
 	criterion.ResolutionRationale = rationale
+	criterion.Version++
 	return criterion, nil
 }
 
@@ -77,6 +80,7 @@ type Dependency struct {
 	ID              string
 	WorkItemID      string
 	DependsOnItemID string
+	Version         int
 	Kind            DependencyKind
 	Note            string
 	CreatedBy       string
@@ -99,6 +103,7 @@ func NewDependency(dependency Dependency, now time.Time) (Dependency, error) {
 		return Dependency{}, fmt.Errorf("invalid dependency kind %q", dependency.Kind)
 	}
 	dependency.CreatedAt = now.UTC()
+	dependency.Version = 1
 	return dependency, nil
 }
 

@@ -43,6 +43,28 @@ func (d *Database) Migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	return d.installEffectCollector(ctx)
+}
+
+// installEffectCollector arms the mutation write-set collector in its own
+// committed transaction. Every write transaction verifies the collector anyway
+// and rebuilds it when it is missing, so this is not what makes collection
+// correct — it is what keeps it cheap. The collector lives in the connection's
+// TEMP schema and is therefore transactional: a write transaction that installs
+// it and then rolls back destroys it again, so a run of conflicting writes would
+// otherwise pay the full install on every attempt.
+func (d *Database) installEffectCollector(ctx context.Context) error {
+	transaction, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin effect collector transaction: %w", err)
+	}
+	defer transaction.Rollback()
+	if err := (&transactionRepository{transaction: transaction}).beginEffectCollection(ctx); err != nil {
+		return err
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit effect collector transaction: %w", err)
+	}
 	return nil
 }
 

@@ -20,6 +20,7 @@ type Actor struct {
 	ID          string
 	Kind        ActorType
 	DisplayName string
+	Version     int
 	CreatedAt   time.Time
 }
 
@@ -27,6 +28,7 @@ func NewActor(actor Actor, now time.Time) (Actor, error) {
 	actor.ID = strings.TrimSpace(actor.ID)
 	actor.DisplayName = strings.TrimSpace(actor.DisplayName)
 	actor.CreatedAt = now.UTC()
+	actor.Version = 1
 	if err := actor.Validate(); err != nil {
 		return Actor{}, err
 	}
@@ -46,6 +48,7 @@ func (a Actor) Validate() error {
 type Capability struct {
 	Slug        string
 	Description string
+	Version     int
 }
 
 func NewCapability(slug, description string) (Capability, error) {
@@ -53,7 +56,7 @@ func NewCapability(slug, description string) (Capability, error) {
 	if err != nil {
 		return Capability{}, err
 	}
-	return Capability{Slug: normalized, Description: strings.TrimSpace(description)}, nil
+	return Capability{Slug: normalized, Description: strings.TrimSpace(description), Version: 1}, nil
 }
 
 func NormalizeCapabilitySlug(value string) (string, error) {
@@ -98,6 +101,7 @@ type Claim struct {
 	ID            string
 	WorkItemID    string
 	ActorID       string
+	Version       int
 	AcquiredAt    time.Time
 	ExpiresAt     time.Time
 	ReleasedAt    time.Time
@@ -107,6 +111,7 @@ type Claim struct {
 type ExecutionApproval struct {
 	ID                 string
 	WorkItemID         string
+	Version            int
 	ApprovedForActorID string
 	Request            string
 	RequestedBy        string
@@ -130,6 +135,7 @@ func NewExecutionApproval(approval ExecutionApproval, now time.Time) (ExecutionA
 	}
 	approval.RequestedAt = now.UTC()
 	approval.ResolvedAt = now.UTC()
+	approval.Version = 1
 	if approval.ExpiresAt != nil {
 		expiresAt := approval.ExpiresAt.UTC()
 		if !expiresAt.After(now) {
@@ -150,6 +156,7 @@ func NewClaim(id, workItemID, actorID string, leaseDuration time.Duration, now t
 		ActorID:    strings.TrimSpace(actorID),
 		AcquiredAt: now.UTC(),
 		ExpiresAt:  now.UTC().Add(leaseDuration),
+		Version:    1,
 	}
 	if err := claim.Validate(); err != nil {
 		return Claim{}, err
@@ -181,6 +188,7 @@ func RenewClaim(claim Claim, actorID string, extension time.Duration, now time.T
 		return Claim{}, err
 	}
 	claim.ExpiresAt = claim.ExpiresAt.Add(extension)
+	claim.Version++
 	return claim, nil
 }
 
@@ -194,6 +202,7 @@ func ReleaseClaim(claim Claim, actorID, reason string, now time.Time) (Claim, er
 	}
 	claim.ReleasedAt = now.UTC()
 	claim.ReleaseReason = reason
+	claim.Version++
 	return claim, nil
 }
 
@@ -229,6 +238,7 @@ type ProgressEntry struct {
 	ID         string
 	WorkItemID string
 	ActorID    string
+	Version    int
 	Summary    string
 	Completed  []string
 	Remaining  []string
@@ -240,6 +250,7 @@ type ProgressEntry struct {
 type ManualBlocker struct {
 	ID         string
 	WorkItemID string
+	Version    int
 	Reason     string
 	Status     string
 	CreatedBy  string
@@ -250,7 +261,7 @@ type ManualBlocker struct {
 }
 
 func NewManualBlocker(id, workItemID, reason, actor string, now time.Time) (ManualBlocker, error) {
-	blocker := ManualBlocker{ID: strings.TrimSpace(id), WorkItemID: strings.TrimSpace(workItemID), Reason: strings.TrimSpace(reason), Status: "active", CreatedBy: strings.TrimSpace(actor), CreatedAt: now.UTC()}
+	blocker := ManualBlocker{ID: strings.TrimSpace(id), WorkItemID: strings.TrimSpace(workItemID), Version: 1, Reason: strings.TrimSpace(reason), Status: "active", CreatedBy: strings.TrimSpace(actor), CreatedAt: now.UTC()}
 	if blocker.ID == "" || blocker.WorkItemID == "" || blocker.Reason == "" || blocker.CreatedBy == "" {
 		return ManualBlocker{}, errors.New("manual blocker requires id, work item, reason, and actor")
 	}
@@ -266,6 +277,7 @@ func ResolveManualBlocker(blocker ManualBlocker, actor, resolution string, now t
 		return ManualBlocker{}, errors.New("manual blocker resolution requires an actor and resolution")
 	}
 	blocker.Status, blocker.ResolvedBy, blocker.Resolution, blocker.ResolvedAt = "resolved", actor, resolution, now.UTC()
+	blocker.Version++
 	return blocker, nil
 }
 
@@ -286,6 +298,7 @@ func NewProgressEntry(entry ProgressEntry, now time.Time) (ProgressEntry, error)
 		return ProgressEntry{}, fmt.Errorf("progress discovered: %w", err)
 	}
 	entry.CreatedAt = now.UTC()
+	entry.Version = 1
 	if err := entry.Validate(); err != nil {
 		return ProgressEntry{}, err
 	}

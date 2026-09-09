@@ -281,6 +281,7 @@ type Decision struct {
 	ID           string
 	ObjectiveID  string
 	WorkItemID   string
+	Version      int
 	Title        string
 	Outcome      string
 	Rationale    string
@@ -307,6 +308,7 @@ func NewAcceptedDecision(decision Decision, now time.Time) (Decision, error) {
 	decision.Status = DecisionAccepted
 	decision.DecidedAt = now.UTC()
 	decision.CreatedAt = now.UTC()
+	decision.Version = 1
 	return decision, nil
 }
 
@@ -315,6 +317,7 @@ func SupersedeDecision(decision Decision) (Decision, error) {
 		return Decision{}, errors.New("only accepted decisions can be superseded")
 	}
 	decision.Status = DecisionSuperseded
+	decision.Version++
 	return decision, nil
 }
 

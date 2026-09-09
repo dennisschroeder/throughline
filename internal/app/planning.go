@@ -58,7 +58,7 @@ func (s *Service) GetDecision(ctx context.Context, id string) (work.Decision, er
 	return decision, err
 }
 
-func (s *Service) TransitionObjective(ctx context.Context, command TransitionObjectiveCommand) (work.Objective, error) {
+func (s *Service) transitionObjectiveMutation(ctx context.Context, command TransitionObjectiveCommand) (work.Objective, error) {
 	if strings.TrimSpace(command.ActorID) == "" {
 		return work.Objective{}, errors.New("objective transition requires an actor")
 	}
@@ -106,7 +106,7 @@ func (s *Service) TransitionObjective(ctx context.Context, command TransitionObj
 	return transitioned, nil
 }
 
-func (s *Service) RecordContext(ctx context.Context, command RecordContextCommand) (work.ContextRecord, error) {
+func (s *Service) recordContextMutation(ctx context.Context, command RecordContextCommand) (work.ContextRecord, error) {
 	if replay, found, err := replayIdempotently[work.ContextRecord](ctx, s, command.ActorID, command.IdempotencyKey, "record_context", command); err != nil {
 		return work.ContextRecord{}, err
 	} else if found {
@@ -187,7 +187,7 @@ type TransitionContextCommand struct {
 	IdempotencyKey  string
 }
 
-func (s *Service) TransitionContext(ctx context.Context, command TransitionContextCommand) (work.ContextRecord, error) {
+func (s *Service) transitionContextMutation(ctx context.Context, command TransitionContextCommand) (work.ContextRecord, error) {
 	var transitioned work.ContextRecord
 	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		transition := func() (work.ContextRecord, error) {
@@ -231,7 +231,7 @@ type AskQuestionCommand struct {
 	IdempotencyKey         string
 }
 
-func (s *Service) AskQuestion(ctx context.Context, command AskQuestionCommand) (work.Question, error) {
+func (s *Service) askQuestionMutation(ctx context.Context, command AskQuestionCommand) (work.Question, error) {
 	if replay, found, err := replayIdempotently[work.Question](ctx, s, command.ActorID, command.IdempotencyKey, "ask_question", command); err != nil {
 		return work.Question{}, err
 	} else if found {
@@ -292,7 +292,7 @@ type WaiveQuestionCommand struct {
 	IdempotencyKey  string
 }
 
-func (s *Service) AnswerQuestion(ctx context.Context, command AnswerQuestionCommand) (work.Question, error) {
+func (s *Service) answerQuestionMutation(ctx context.Context, command AnswerQuestionCommand) (work.Question, error) {
 	var answered work.Question
 	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		result, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "answer_question", command, func() (work.Question, error) {
@@ -323,7 +323,7 @@ func (s *Service) AnswerQuestion(ctx context.Context, command AnswerQuestionComm
 	return answered, nil
 }
 
-func (s *Service) WaiveQuestion(ctx context.Context, command WaiveQuestionCommand) (work.Question, error) {
+func (s *Service) waiveQuestionMutation(ctx context.Context, command WaiveQuestionCommand) (work.Question, error) {
 	var waived work.Question
 	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		result, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "waive_question", command, func() (work.Question, error) {
@@ -366,7 +366,7 @@ type RecordDecisionCommand struct {
 	IdempotencyKey string
 }
 
-func (s *Service) RecordDecision(ctx context.Context, command RecordDecisionCommand) (work.Decision, error) {
+func (s *Service) recordDecisionMutation(ctx context.Context, command RecordDecisionCommand) (work.Decision, error) {
 	if replay, found, err := replayIdempotently[work.Decision](ctx, s, command.ActorID, command.IdempotencyKey, "record_decision", command); err != nil {
 		return work.Decision{}, err
 	} else if found {
@@ -537,7 +537,7 @@ type generatedExternalAction struct {
 	command ProposedExternalAction
 }
 
-func (s *Service) ProposePlan(ctx context.Context, command ProposePlanCommand) (ports.PlanContext, error) {
+func (s *Service) proposePlanMutation(ctx context.Context, command ProposePlanCommand) (ports.PlanContext, error) {
 	if replay, found, err := replayIdempotently[ports.PlanContext](ctx, s, command.ActorID, command.IdempotencyKey, "propose_plan", command); err != nil {
 		return ports.PlanContext{}, err
 	} else if found {
@@ -880,7 +880,7 @@ type RequestApprovalCommand struct {
 	ExpectedTargetVersion int
 }
 
-func (s *Service) RequestApproval(ctx context.Context, command RequestApprovalCommand) (work.Approval, error) {
+func (s *Service) requestApprovalMutation(ctx context.Context, command RequestApprovalCommand) (work.Approval, error) {
 	if replay, found, err := replayIdempotently[work.Approval](ctx, s, command.ActorID, command.IdempotencyKey, "request_approval", command); err != nil {
 		return work.Approval{}, err
 	} else if found {
@@ -984,7 +984,7 @@ func (s *Service) GetApproval(ctx context.Context, id string) (work.Approval, er
 	return approval, err
 }
 
-func (s *Service) ResolveApproval(ctx context.Context, command ResolveApprovalCommand) (work.Approval, error) {
+func (s *Service) resolveApprovalMutation(ctx context.Context, command ResolveApprovalCommand) (work.Approval, error) {
 	var result work.Approval
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		resolved, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "resolve_approval", command, func() (work.Approval, error) {
@@ -1019,7 +1019,7 @@ func (s *Service) ResolveApproval(ctx context.Context, command ResolveApprovalCo
 	return result, nil
 }
 
-func (s *Service) ReviewPlan(ctx context.Context, command ReviewPlanCommand) (work.Plan, error) {
+func (s *Service) reviewPlanMutation(ctx context.Context, command ReviewPlanCommand) (work.Plan, error) {
 	if replay, found, err := replayIdempotently[work.Plan](ctx, s, command.ReviewerActorID, command.IdempotencyKey, "review_plan", command); err != nil {
 		return work.Plan{}, err
 	} else if found {
@@ -1101,7 +1101,7 @@ type ProposeOutputProfileCommand struct {
 	Supersedes     string
 }
 
-func (s *Service) ProposeOutputProfile(ctx context.Context, command ProposeOutputProfileCommand) (output.Profile, error) {
+func (s *Service) proposeOutputProfileMutation(ctx context.Context, command ProposeOutputProfileCommand) (output.Profile, error) {
 	if replay, found, err := replayIdempotently[output.Profile](ctx, s, command.ActorID, command.IdempotencyKey, "propose_output_profile", command); err != nil {
 		return output.Profile{}, err
 	} else if found {
@@ -1204,7 +1204,7 @@ type ReviewOutputProfileCommand struct {
 	Reason          string
 }
 
-func (s *Service) ReviewOutputProfile(ctx context.Context, command ReviewOutputProfileCommand) (output.Profile, error) {
+func (s *Service) reviewOutputProfileMutation(ctx context.Context, command ReviewOutputProfileCommand) (output.Profile, error) {
 	var reviewed output.Profile
 	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		result, err := executeIdempotently(ctx, s, repository, command.ReviewerActorID, command.IdempotencyKey, "review_output_profile", command, func() (output.Profile, error) {

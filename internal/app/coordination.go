@@ -18,7 +18,7 @@ type RegisterActorCommand struct {
 	IdempotencyKey string
 }
 
-func (s *Service) RegisterActor(ctx context.Context, command RegisterActorCommand) (work.Actor, error) {
+func (s *Service) registerActorMutation(ctx context.Context, command RegisterActorCommand) (work.Actor, error) {
 	actor, err := work.NewActor(command.Actor, s.clock.Now())
 	if err != nil {
 		return work.Actor{}, err
@@ -69,7 +69,7 @@ type ApproveWorkItemExecutionCommand struct {
 	ExpiresAt       *time.Time
 }
 
-func (s *Service) ApproveWorkItemExecution(ctx context.Context, command ApproveWorkItemExecutionCommand) (work.ExecutionApproval, error) {
+func (s *Service) approveWorkItemExecutionMutation(ctx context.Context, command ApproveWorkItemExecutionCommand) (work.ExecutionApproval, error) {
 	if replay, found, err := replayIdempotently[work.ExecutionApproval](ctx, s, command.ActorID, command.IdempotencyKey, "approve_work_item_execution", command); err != nil {
 		return work.ExecutionApproval{}, err
 	} else if found {
@@ -120,7 +120,7 @@ func (s *Service) ApproveWorkItemExecution(ctx context.Context, command ApproveW
 	return result, nil
 }
 
-func (s *Service) AssignActorCapability(ctx context.Context, command AssignActorCapabilityCommand) (ActorCapability, error) {
+func (s *Service) assignActorCapabilityMutation(ctx context.Context, command AssignActorCapabilityCommand) (ActorCapability, error) {
 	capability, err := work.NewCapability(command.Capability, command.Description)
 	if err != nil {
 		return ActorCapability{}, err
@@ -182,7 +182,7 @@ type ClaimGateError struct {
 
 func (e ClaimGateError) Error() string { return "work item cannot be claimed" }
 
-func (s *Service) ClaimWorkItem(ctx context.Context, command ClaimWorkItemCommand) (ClaimResult, error) {
+func (s *Service) claimWorkItemMutation(ctx context.Context, command ClaimWorkItemCommand) (ClaimResult, error) {
 	if replay, found, err := replayIdempotently[ClaimResult](ctx, s, command.ActorID, command.IdempotencyKey, "claim_work_item", command); err != nil {
 		return ClaimResult{}, err
 	} else if found {
@@ -282,7 +282,7 @@ type RenewClaimCommand struct {
 	Extension       time.Duration
 }
 
-func (s *Service) RenewClaim(ctx context.Context, command RenewClaimCommand) (ClaimResult, error) {
+func (s *Service) renewClaimMutation(ctx context.Context, command RenewClaimCommand) (ClaimResult, error) {
 	var result ClaimResult
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		var err error
@@ -351,7 +351,7 @@ type ReleaseClaimCommand struct {
 	ReturnToReady   bool
 }
 
-func (s *Service) ReleaseClaim(ctx context.Context, command ReleaseClaimCommand) (ClaimResult, error) {
+func (s *Service) releaseClaimMutation(ctx context.Context, command ReleaseClaimCommand) (ClaimResult, error) {
 	var result ClaimResult
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		var err error
@@ -476,7 +476,7 @@ type ProgressResult struct {
 	WorkItem work.WorkItem
 }
 
-func (s *Service) AppendProgress(ctx context.Context, command AppendProgressCommand) (ProgressResult, error) {
+func (s *Service) appendProgressMutation(ctx context.Context, command AppendProgressCommand) (ProgressResult, error) {
 	if replay, found, err := replayIdempotently[ProgressResult](ctx, s, command.ActorID, command.IdempotencyKey, "append_progress", command); err != nil {
 		return ProgressResult{}, err
 	} else if found {
@@ -546,7 +546,7 @@ type ArtifactResult struct {
 	WorkItem work.WorkItem
 }
 
-func (s *Service) AttachArtifact(ctx context.Context, command AttachArtifactCommand) (ArtifactResult, error) {
+func (s *Service) attachArtifactMutation(ctx context.Context, command AttachArtifactCommand) (ArtifactResult, error) {
 	if replay, found, err := replayIdempotently[ArtifactResult](ctx, s, command.ActorID, command.IdempotencyKey, "attach_artifact", command); err != nil {
 		return ArtifactResult{}, err
 	} else if found {

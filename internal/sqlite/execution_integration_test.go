@@ -29,20 +29,20 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 		{Actor: work.Actor{ID: "agent:planner", Kind: work.ActorTypeAgent, DisplayName: "Planner"}, IdempotencyKey: "register-planner"},
 		{Actor: work.Actor{ID: "human:reviewer", Kind: work.ActorTypeHuman, DisplayName: "Reviewer"}, IdempotencyKey: "register-reviewer"},
 	} {
-		if _, err := service.RegisterActor(ctx, command); err != nil {
+		if _, err := app.UnwrapMutation(service.RegisterActor(ctx, command)); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	producerObjective, err := service.CreateObjective(ctx, app.CreateObjectiveCommand{
+	producerObjective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{
 		ActorID: "human:sponsor", IdempotencyKey: "create-producer-objective",
 		Key: "OBJ-DOSSIER", Title: "Produce a reusable research dossier",
 		DesiredOutcome: "A validated source-auditing dossier can be reused exactly.", Phase: work.ObjectivePlanning,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := service.ProposePlan(ctx, app.ProposePlanCommand{
+	plan, err := app.UnwrapMutation(service.ProposePlan(ctx, app.ProposePlanCommand{
 		ObjectiveID: producerObjective.ID, ActorID: "agent:planner", IdempotencyKey: "propose-producer-plan", Title: "Research and synthesize", Revision: 1,
 		Items: []app.ProposedWorkItem{
 			{
@@ -59,32 +59,32 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 				Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 			},
 		},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: plan.Plan.ID, ReviewerActorID: "human:sponsor", IdempotencyKey: "review-producer-plan", Decision: work.PlanApproved, Reason: "The contracts are explicit.", ExpectedVersion: 1}); err != nil {
+	if _, err := app.UnwrapMutation(service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: plan.Plan.ID, ReviewerActorID: "human:sponsor", IdempotencyKey: "review-producer-plan", Decision: work.PlanApproved, Reason: "The contracts are explicit.", ExpectedVersion: 1})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: producerObjective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:sponsor", IdempotencyKey: "transition-producer-objective", Reason: "Begin approved work.", ExpectedVersion: 1}); err != nil {
+	if _, err := app.UnwrapMutation(service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: producerObjective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:sponsor", IdempotencyKey: "transition-producer-objective", Reason: "Begin approved work.", ExpectedVersion: 1})); err != nil {
 		t.Fatal(err)
 	}
 
 	items := itemsByKey(plan.Items)
 	research := items["TH-DOSSIER"]
 	skill := items["TH-SKILL"]
-	research, err = service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: research.ID, TargetStatus: work.StatusReady, ActorID: "human:sponsor", Reason: "Approved for execution.", ExpectedVersion: 2, IdempotencyKey: "ready-research"})
+	research, err = app.UnwrapMutation(service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: research.ID, TargetStatus: work.StatusReady, ActorID: "human:sponsor", Reason: "Approved for execution.", ExpectedVersion: 2, IdempotencyKey: "ready-research"}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	skill, err = service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: skill.ID, TargetStatus: work.StatusReady, ActorID: "human:sponsor", Reason: "Queue after research.", ExpectedVersion: 2, IdempotencyKey: "ready-skill"})
+	skill, err = app.UnwrapMutation(service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: skill.ID, TargetStatus: work.StatusReady, ActorID: "human:sponsor", Reason: "Queue after research.", ExpectedVersion: 2, IdempotencyKey: "ready-skill"}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.LinkDependency(ctx, app.LinkDependencyCommand{WorkItemID: skill.ID, DependsOnWorkItemID: research.ID, Kind: work.DependencyHard, ActorID: "agent:planner", ExpectedVersion: skill.Version, IdempotencyKey: "link-skill-research"}); err != nil {
+	if _, err := app.UnwrapMutation(service.LinkDependency(ctx, app.LinkDependencyCommand{WorkItemID: skill.ID, DependsOnWorkItemID: research.ID, Kind: work.DependencyHard, ActorID: "agent:planner", ExpectedVersion: skill.Version, IdempotencyKey: "link-skill-research"})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.LinkDependency(ctx, app.LinkDependencyCommand{WorkItemID: research.ID, DependsOnWorkItemID: skill.ID, Kind: work.DependencyHard, ActorID: "agent:planner", ExpectedVersion: research.Version, IdempotencyKey: "link-research-skill"}); err == nil {
+	if _, err := app.UnwrapMutation(service.LinkDependency(ctx, app.LinkDependencyCommand{WorkItemID: research.ID, DependsOnWorkItemID: skill.ID, Kind: work.DependencyHard, ActorID: "agent:planner", ExpectedVersion: research.Version, IdempotencyKey: "link-research-skill"})); err == nil {
 		t.Fatal("expected a hard dependency cycle to be rejected")
 	}
 	ready, err := service.ListReadyWork(ctx)
@@ -98,54 +98,54 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := producerContext.ExpectedOutputs[0].ExpectedOutput
-	revision, err := service.CreateOutputRevision(ctx, app.CreateOutputRevisionCommand{
+	revision, err := app.UnwrapMutation(service.CreateOutputRevision(ctx, app.CreateOutputRevisionCommand{
 		ExpectedOutputID: expected.ID, ActorID: "agent:researcher", IdempotencyKey: "create-producer-revision", ContentDigest: "sha256:dossier-v1",
 		Artifacts: []app.OutputArtifactInput{{Kind: "document", URI: "file:///tmp/source-auditing-dossier.md", Title: "Source-auditing dossier", Role: "primary"}},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	consumerObjective, err := service.CreateObjective(ctx, app.CreateObjectiveCommand{
+	consumerObjective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{
 		ActorID: "human:sponsor", IdempotencyKey: "create-consumer-objective",
 		Key: "OBJ-REUSE", Title: "Reuse the accepted dossier", DesiredOutcome: "A second objective consumes the exact reviewed result.", Phase: work.ObjectivePlanning,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	consumerPlan, err := service.ProposePlan(ctx, app.ProposePlanCommand{
+	consumerPlan, err := app.UnwrapMutation(service.ProposePlan(ctx, app.ProposePlanCommand{
 		ObjectiveID: consumerObjective.ID, ActorID: "agent:planner", IdempotencyKey: "propose-consumer-plan", Title: "Apply the dossier", Revision: 1,
 		Items: []app.ProposedWorkItem{{
 			ClientRef: "apply", Key: "TH-APPLY", Title: "Apply the reviewed source-auditing method", Kind: "workflow_design",
 			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 		}},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: consumerPlan.Plan.ID, ReviewerActorID: "human:sponsor", IdempotencyKey: "review-consumer-plan", Decision: work.PlanApproved, Reason: "Reuse is explicit.", ExpectedVersion: 1}); err != nil {
+	if _, err := app.UnwrapMutation(service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: consumerPlan.Plan.ID, ReviewerActorID: "human:sponsor", IdempotencyKey: "review-consumer-plan", Decision: work.PlanApproved, Reason: "Reuse is explicit.", ExpectedVersion: 1})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: consumerObjective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:sponsor", IdempotencyKey: "transition-consumer-objective", Reason: "Begin reuse.", ExpectedVersion: 1}); err != nil {
+	if _, err := app.UnwrapMutation(service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: consumerObjective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:sponsor", IdempotencyKey: "transition-consumer-objective", Reason: "Begin reuse.", ExpectedVersion: 1})); err != nil {
 		t.Fatal(err)
 	}
 	consumer := consumerPlan.Items[0].WorkItem
-	consumer, err = service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: consumer.ID, TargetStatus: work.StatusReady, ActorID: "human:sponsor", Reason: "Queue when the dossier is accepted.", ExpectedVersion: 2, IdempotencyKey: "ready-consumer"})
+	consumer, err = app.UnwrapMutation(service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: consumer.ID, TargetStatus: work.StatusReady, ActorID: "human:sponsor", Reason: "Queue when the dossier is accepted.", ExpectedVersion: 2, IdempotencyKey: "ready-consumer"}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.AddOutputRequirement(ctx, app.AddOutputRequirementCommand{
+	if _, err := app.UnwrapMutation(service.AddOutputRequirement(ctx, app.AddOutputRequirementCommand{
 		WorkItemID: consumer.ID, RequiredOutputRevisionID: revision.ID, RequiredProfileName: "research_dossier",
 		VersionConstraint: "=1", Required: true, ActorID: "agent:planner", ExpectedVersion: consumer.Version, IdempotencyKey: "invalid-requirement-ambiguous",
-	}); err == nil {
+	})); err == nil {
 		t.Fatal("expected an ambiguous output requirement target to be rejected")
 	}
-	if _, err := service.AddOutputRequirement(ctx, app.AddOutputRequirementCommand{
+	if _, err := app.UnwrapMutation(service.AddOutputRequirement(ctx, app.AddOutputRequirementCommand{
 		WorkItemID: consumer.ID, Required: true, ActorID: "agent:planner", ExpectedVersion: consumer.Version, IdempotencyKey: "invalid-requirement-missing",
-	}); err == nil {
+	})); err == nil {
 		t.Fatal("expected a missing output requirement target to be rejected")
 	}
-	if _, err := service.AddOutputRequirement(ctx, app.AddOutputRequirementCommand{WorkItemID: consumer.ID, RequiredOutputRevisionID: revision.ID, Required: true, Note: "Reuse this exact reviewed dossier.", ActorID: "agent:planner", ExpectedVersion: consumer.Version, IdempotencyKey: "require-exact-revision"}); err != nil {
+	if _, err := app.UnwrapMutation(service.AddOutputRequirement(ctx, app.AddOutputRequirementCommand{WorkItemID: consumer.ID, RequiredOutputRevisionID: revision.ID, Required: true, Note: "Reuse this exact reviewed dossier.", ActorID: "agent:planner", ExpectedVersion: consumer.Version, IdempotencyKey: "require-exact-revision"})); err != nil {
 		t.Fatal(err)
 	}
 	ready, err = service.ListReadyWork(ctx)
@@ -162,7 +162,7 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	}
 	for index, command := range validations {
 		command.IdempotencyKey = "record-validation-" + string(rune('a'+index))
-		revision, err = service.RecordValidation(ctx, command)
+		revision, err = app.UnwrapMutation(service.RecordValidation(ctx, command))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -170,36 +170,36 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	if revision.AcceptanceState != output.RevisionAccepted {
 		t.Fatalf("revision state = %q", revision.AcceptanceState)
 	}
-	revision, err = service.RecordValidation(ctx, app.RecordValidationCommand{
+	revision, err = app.UnwrapMutation(service.RecordValidation(ctx, app.RecordValidationCommand{
 		OutputRevisionID: revision.ID, CriterionRef: "consumer-readiness", ValidatorKind: output.ValidatorSuccessorUse,
 		Verdict: output.VerdictPassed, VerifierActorID: "agent:consumer", IdempotencyKey: "record-consumer-readiness", Details: json.RawMessage(`{"summary":"The accepted dossier is usable by its declared consumer."}`),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if revision.AcceptanceState != output.RevisionAccepted {
 		t.Fatal("additional append-only evidence changed accepted state")
 	}
-	if _, err := service.RecordValidation(ctx, app.RecordValidationCommand{
+	if _, err := app.UnwrapMutation(service.RecordValidation(ctx, app.RecordValidationCommand{
 		OutputRevisionID: revision.ID, CriterionRef: "structure", ValidatorKind: output.ValidatorStructure,
 		Verdict: output.VerdictFailed, VerifierActorID: "agent:validator", IdempotencyKey: "record-late-contradiction", Details: json.RawMessage(`{"summary":"Late contradictory verdict."}`),
-	}); err == nil {
+	})); err == nil {
 		t.Fatal("expected contract validation to be closed after acceptance")
 	}
-	if _, err := service.RecordValidation(ctx, app.RecordValidationCommand{
+	if _, err := app.UnwrapMutation(service.RecordValidation(ctx, app.RecordValidationCommand{
 		OutputRevisionID: revision.ID, CriterionRef: "structure", ValidatorKind: output.ValidatorSuccessorUse,
 		Verdict: output.VerdictPassed, VerifierActorID: "agent:consumer", IdempotencyKey: "record-shadowed-criterion", Details: json.RawMessage(`{"summary":"Attempted criterion shadowing."}`),
-	}); err == nil {
+	})); err == nil {
 		t.Fatal("expected successor-use evidence to reject an acceptance criterion reference")
 	}
 
 	criterion := producerContext.AcceptanceCriteria[0]
-	if _, err := service.ResolveAcceptanceCriterion(ctx, app.ResolveAcceptanceCriterionCommand{CriterionID: criterion.ID, Status: work.AcceptanceSatisfied, ActorID: "human:reviewer", Rationale: "The accepted dossier meets the criterion.", ExpectedWorkItemVersion: research.Version, IdempotencyKey: "resolve-research-criterion"}); err != nil {
+	if _, err := app.UnwrapMutation(service.ResolveAcceptanceCriterion(ctx, app.ResolveAcceptanceCriterionCommand{CriterionID: criterion.ID, Status: work.AcceptanceSatisfied, ActorID: "human:reviewer", Rationale: "The accepted dossier meets the criterion.", ExpectedWorkItemVersion: research.Version, IdempotencyKey: "resolve-research-criterion"})); err != nil {
 		t.Fatal(err)
 	}
 	research.Version++
 	for _, target := range []work.ExecutionStatus{work.StatusInProgress, work.StatusReview, work.StatusDone} {
-		research, err = service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: research.ID, TargetStatus: target, ActorID: "agent:researcher", Reason: "Advance validated dossier work.", ExpectedVersion: research.Version, IdempotencyKey: "advance-research-" + string(target)})
+		research, err = app.UnwrapMutation(service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: research.ID, TargetStatus: target, ActorID: "agent:researcher", Reason: "Advance validated dossier work.", ExpectedVersion: research.Version, IdempotencyKey: "advance-research-" + string(target)}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -237,10 +237,10 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	if len(reloadedProducer.OutputRevisions) != 1 || len(reloadedProducer.OutputRevisions[0].Artifacts) != 1 || len(reloadedProducer.OutputRevisions[0].Validations) != 5 || reloadedProducer.OutputRevisions[0].Revision.AcceptanceState != output.RevisionAccepted {
 		t.Fatalf("structured producer output context = %#v", reloadedProducer.OutputRevisions)
 	}
-	revision2, err := service.CreateOutputRevision(ctx, app.CreateOutputRevisionCommand{
+	revision2, err := app.UnwrapMutation(service.CreateOutputRevision(ctx, app.CreateOutputRevisionCommand{
 		ExpectedOutputID: expected.ID, ActorID: "agent:researcher", IdempotencyKey: "create-producer-revision-v2", ContentDigest: "sha256:dossier-v2",
 		Artifacts: []app.OutputArtifactInput{{Kind: "document", URI: "file:///tmp/source-auditing-dossier.md", Title: "Updated source-auditing dossier", Role: "primary"}},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,10 +274,10 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	if len(activities) < 6 || !foundDone {
 		t.Fatalf("research activity = %#v", activities)
 	}
-	cancelled, err := service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{
+	cancelled, err := app.UnwrapMutation(service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{
 		WorkItemID: consumer.ID, TargetStatus: work.StatusCancelled, ActorID: "human:sponsor",
 		Reason: "The second objective was intentionally stopped.", ExpectedVersion: consumerContext.WorkItem.Version, IdempotencyKey: "cancel-consumer",
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

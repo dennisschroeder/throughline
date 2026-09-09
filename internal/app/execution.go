@@ -22,7 +22,7 @@ type TransitionWorkItemCommand struct {
 	IdempotencyKey  string
 }
 
-func (s *Service) TransitionWorkItem(ctx context.Context, command TransitionWorkItemCommand) (work.WorkItem, error) {
+func (s *Service) transitionWorkItemMutation(ctx context.Context, command TransitionWorkItemCommand) (work.WorkItem, error) {
 	var transitioned work.WorkItem
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		var err error
@@ -139,7 +139,7 @@ type ResolveAcceptanceCriterionCommand struct {
 	IdempotencyKey          string
 }
 
-func (s *Service) ResolveAcceptanceCriterion(ctx context.Context, command ResolveAcceptanceCriterionCommand) (work.AcceptanceCriterion, error) {
+func (s *Service) resolveAcceptanceCriterionMutation(ctx context.Context, command ResolveAcceptanceCriterionCommand) (work.AcceptanceCriterion, error) {
 	var resolved work.AcceptanceCriterion
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		var err error
@@ -198,7 +198,7 @@ type BlockWorkItemCommand struct {
 	Reason          string
 }
 
-func (s *Service) BlockWorkItem(ctx context.Context, command BlockWorkItemCommand) (work.ManualBlocker, error) {
+func (s *Service) blockWorkItemMutation(ctx context.Context, command BlockWorkItemCommand) (work.ManualBlocker, error) {
 	if replay, found, err := replayIdempotently[work.ManualBlocker](ctx, s, command.ActorID, command.IdempotencyKey, "block_work_item", command); err != nil {
 		return work.ManualBlocker{}, err
 	} else if found {
@@ -251,7 +251,7 @@ type UnblockWorkItemCommand struct {
 	Resolution      string
 }
 
-func (s *Service) UnblockWorkItem(ctx context.Context, command UnblockWorkItemCommand) (work.ManualBlocker, error) {
+func (s *Service) unblockWorkItemMutation(ctx context.Context, command UnblockWorkItemCommand) (work.ManualBlocker, error) {
 	var blocker work.ManualBlocker
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		resolved, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "unblock_work_item", command, func() (work.ManualBlocker, error) {
@@ -292,7 +292,7 @@ func (s *Service) UnblockWorkItem(ctx context.Context, command UnblockWorkItemCo
 	return blocker, nil
 }
 
-func (s *Service) LinkDependency(ctx context.Context, command LinkDependencyCommand) (work.Dependency, error) {
+func (s *Service) linkDependencyMutation(ctx context.Context, command LinkDependencyCommand) (work.Dependency, error) {
 	if replay, found, err := replayIdempotently[work.Dependency](ctx, s, command.ActorID, command.IdempotencyKey, "link_dependency", command); err != nil {
 		return work.Dependency{}, err
 	} else if found {
@@ -365,7 +365,7 @@ type UnlinkDependencyCommand struct {
 	IdempotencyKey      string
 }
 
-func (s *Service) UnlinkDependency(ctx context.Context, command UnlinkDependencyCommand) (work.WorkItem, error) {
+func (s *Service) unlinkDependencyMutation(ctx context.Context, command UnlinkDependencyCommand) (work.WorkItem, error) {
 	var item work.WorkItem
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		result, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "unlink_dependency", command, func() (work.WorkItem, error) {
@@ -414,7 +414,7 @@ type CreateOutputRevisionCommand struct {
 	Artifacts        []OutputArtifactInput
 }
 
-func (s *Service) CreateOutputRevision(ctx context.Context, command CreateOutputRevisionCommand) (output.OutputRevision, error) {
+func (s *Service) createOutputRevisionMutation(ctx context.Context, command CreateOutputRevisionCommand) (output.OutputRevision, error) {
 	if replay, found, err := replayIdempotently[output.OutputRevision](ctx, s, command.ActorID, command.IdempotencyKey, "create_output_revision", command); err != nil {
 		return output.OutputRevision{}, err
 	} else if found {
@@ -520,7 +520,7 @@ type RecordValidationCommand struct {
 	IdempotencyKey     string
 }
 
-func (s *Service) RecordValidation(ctx context.Context, command RecordValidationCommand) (output.OutputRevision, error) {
+func (s *Service) recordValidationMutation(ctx context.Context, command RecordValidationCommand) (output.OutputRevision, error) {
 	if replay, found, err := replayIdempotently[output.OutputRevision](ctx, s, command.VerifierActorID, command.IdempotencyKey, "record_validation", command); err != nil {
 		return output.OutputRevision{}, err
 	} else if found {
@@ -622,7 +622,7 @@ type AddOutputRequirementCommand struct {
 	IdempotencyKey           string
 }
 
-func (s *Service) AddOutputRequirement(ctx context.Context, command AddOutputRequirementCommand) (output.OutputRequirement, error) {
+func (s *Service) addOutputRequirementMutation(ctx context.Context, command AddOutputRequirementCommand) (output.OutputRequirement, error) {
 	if replay, found, err := replayIdempotently[output.OutputRequirement](ctx, s, command.ActorID, command.IdempotencyKey, "add_output_requirement", command); err != nil {
 		return output.OutputRequirement{}, err
 	} else if found {

@@ -61,9 +61,9 @@ WHERE id = ? AND version = ?`, action.ActionType, action.Title, action.Rationale
 func (r *transactionRepository) CreateExternalActionRevision(ctx context.Context, revision authority.ExternalActionRevision) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO external_action_revisions
-  (external_action_id, revision, authorization_subject_json, authorization_subject_hash, proposed_by, proposed_at)
-VALUES (?, ?, ?, ?, ?, ?)`, revision.ExternalActionID, revision.Revision, string(revision.AuthorizationSubject),
-		revision.AuthorizationSubjectHash, revision.ProposedBy, formatTime(revision.ProposedAt))
+  (external_action_id, revision, authorization_subject_json, authorization_subject_hash, proposed_by, proposed_at, version)
+VALUES (?, ?, ?, ?, ?, ?, ?)`, revision.ExternalActionID, revision.Revision, string(revision.AuthorizationSubject),
+		revision.AuthorizationSubjectHash, revision.ProposedBy, formatTime(revision.ProposedAt), revision.Version)
 	if err != nil {
 		return fmt.Errorf("insert external action revision: %w", err)
 	}
@@ -86,13 +86,13 @@ WHERE external_action_id = ? AND revision = (
 func (r *transactionRepository) CreateActionApproval(ctx context.Context, approval authority.ActionApproval) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO approvals
-  (id, external_action_id, external_action_revision, approved_for_actor_id, authorization_subject_hash,
-   constraints_json, expires_at, request, status, requested_by, requested_at, resolved_by, resolved_at, rationale)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, approval.ID, approval.ExternalActionID,
+	(id, external_action_id, external_action_revision, approved_for_actor_id, authorization_subject_hash,
+	 constraints_json, expires_at, request, status, requested_by, requested_at, resolved_by, resolved_at, rationale, version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, approval.ID, approval.ExternalActionID,
 		approval.ExternalActionRevision, approval.ApprovedForActorID, approval.AuthorizationSubjectHash,
 		string(approval.Constraints), nullableTimePtr(approval.ExpiresAt), approval.Request, approval.Status,
 		approval.RequestedBy, formatTime(approval.RequestedAt), nullableString(approval.ResolvedBy),
-		nullableTimePtr(approval.ResolvedAt), approval.Rationale)
+		nullableTimePtr(approval.ResolvedAt), approval.Rationale, approval.Version)
 	if err != nil {
 		return fmt.Errorf("insert action approval: %w", err)
 	}
@@ -106,9 +106,9 @@ func (r *transactionRepository) ActionApproval(ctx context.Context, id string) (
 
 func (r *transactionRepository) UpdateActionApproval(ctx context.Context, approval authority.ActionApproval) error {
 	result, err := r.transaction.ExecContext(ctx, `
-UPDATE approvals SET status = ?, resolved_by = ?, resolved_at = ?, rationale = ?
-WHERE id = ? AND status IN ('requested', 'approved')`, approval.Status, nullableString(approval.ResolvedBy),
-		nullableTimePtr(approval.ResolvedAt), approval.Rationale, approval.ID)
+UPDATE approvals SET status = ?, resolved_by = ?, resolved_at = ?, rationale = ?, version = ?
+WHERE id = ? AND status IN ('requested', 'approved') AND version = ?`, approval.Status, nullableString(approval.ResolvedBy),
+		nullableTimePtr(approval.ResolvedAt), approval.Rationale, approval.Version, approval.ID, approval.Version-1)
 	if err != nil {
 		return fmt.Errorf("update action approval: %w", err)
 	}
@@ -118,12 +118,12 @@ WHERE id = ? AND status IN ('requested', 'approved')`, approval.Status, nullable
 func (r *transactionRepository) CreateAuthorityGrant(ctx context.Context, grant authority.AuthorityGrant) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO authority_grants
-  (id, external_action_id, external_action_revision, principal_actor_id, authorization_subject_hash,
-   constraints_json, source_approval_id, granted_by, granted_at, expires_at, revoked_by, revoked_at, revocation_reason)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, grant.ID, grant.ExternalActionID, grant.ActionRevision,
+	(id, external_action_id, external_action_revision, principal_actor_id, authorization_subject_hash,
+	 constraints_json, source_approval_id, granted_by, granted_at, expires_at, revoked_by, revoked_at, revocation_reason, version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, grant.ID, grant.ExternalActionID, grant.ActionRevision,
 		grant.PrincipalActorID, grant.AuthorizationSubjectHash, string(grant.Constraints), grant.SourceApprovalID,
 		grant.GrantedBy, formatTime(grant.GrantedAt), nullableTimePtr(grant.ExpiresAt), nullableString(grant.RevokedBy),
-		nullableTimePtr(grant.RevokedAt), "")
+		nullableTimePtr(grant.RevokedAt), "", grant.Version)
 	if err != nil {
 		return fmt.Errorf("insert authority grant: %w", err)
 	}
@@ -142,9 +142,9 @@ func (r *transactionRepository) AuthorityGrantByApproval(ctx context.Context, ap
 
 func (r *transactionRepository) UpdateAuthorityGrant(ctx context.Context, grant authority.AuthorityGrant) error {
 	result, err := r.transaction.ExecContext(ctx, `
-UPDATE authority_grants SET revoked_by = ?, revoked_at = ?, revocation_reason = ?
-WHERE id = ? AND revoked_at IS NULL`, nullableString(grant.RevokedBy), nullableTimePtr(grant.RevokedAt),
-		"revoked", grant.ID)
+UPDATE authority_grants SET revoked_by = ?, revoked_at = ?, revocation_reason = ?, version = ?
+WHERE id = ? AND revoked_at IS NULL AND version = ?`, nullableString(grant.RevokedBy), nullableTimePtr(grant.RevokedAt),
+		"revoked", grant.Version, grant.ID, grant.Version-1)
 	if err != nil {
 		return fmt.Errorf("revoke authority grant: %w", err)
 	}
@@ -171,11 +171,11 @@ func (r *transactionRepository) CreateExternalActionExecution(ctx context.Contex
 	}
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO external_action_executions
-  (id, external_action_id, external_action_revision, principal_actor_id, authority_grant_id, state,
-   started_at, finished_at, result_json, evidence_artifact_id)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, execution.ID, execution.ExternalActionID, execution.ActionRevision,
+	(id, external_action_id, external_action_revision, principal_actor_id, authority_grant_id, state,
+	 started_at, finished_at, result_json, evidence_artifact_id, version)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, execution.ID, execution.ExternalActionID, execution.ActionRevision,
 		execution.PrincipalActorID, execution.AuthorityGrantID, executionStateForStorage(execution.State),
-		formatTime(execution.StartedAt), nullableTime(execution.FinishedAt), result, nullableString(evidenceArtifactID))
+		formatTime(execution.StartedAt), nullableTime(execution.FinishedAt), result, nullableString(evidenceArtifactID), execution.Version)
 	if err != nil {
 		return fmt.Errorf("insert external action execution: %w", err)
 	}
@@ -189,9 +189,9 @@ func (r *transactionRepository) ExternalActionExecution(ctx context.Context, id 
 
 func (r *transactionRepository) UpdateExternalActionExecution(ctx context.Context, execution authority.ExternalActionExecution, evidenceArtifactID string) error {
 	result, err := r.transaction.ExecContext(ctx, `
-UPDATE external_action_executions SET state = ?, finished_at = ?, result_json = ?, evidence_artifact_id = ?
-WHERE id = ? AND state = 'executing'`, executionStateForStorage(execution.State), formatTime(execution.FinishedAt),
-		string(execution.Result), nullableString(evidenceArtifactID), execution.ID)
+UPDATE external_action_executions SET state = ?, finished_at = ?, result_json = ?, evidence_artifact_id = ?, version = ?
+WHERE id = ? AND state = 'executing' AND version = ?`, executionStateForStorage(execution.State), formatTime(execution.FinishedAt),
+		string(execution.Result), nullableString(evidenceArtifactID), execution.Version, execution.ID, execution.Version-1)
 	if err != nil {
 		return fmt.Errorf("complete external action execution: %w", err)
 	}
@@ -267,22 +267,22 @@ SELECT id, work_item_id, action_type, required, title, rationale, current_revisi
 FROM external_actions`
 
 const externalActionRevisionSelect = `
-SELECT external_action_id, revision, authorization_subject_json, authorization_subject_hash, proposed_by, proposed_at
+SELECT external_action_id, revision, authorization_subject_json, authorization_subject_hash, proposed_by, proposed_at, version
 FROM external_action_revisions`
 
 const actionApprovalSelect = `
 SELECT id, external_action_id, external_action_revision, approved_for_actor_id, authorization_subject_hash,
-       constraints_json, expires_at, request, status, requested_by, requested_at, resolved_by, resolved_at, rationale
+       constraints_json, expires_at, request, status, requested_by, requested_at, resolved_by, resolved_at, rationale, version
 FROM approvals`
 
 const authorityGrantSelect = `
 SELECT id, external_action_id, external_action_revision, principal_actor_id, authorization_subject_hash,
-       constraints_json, source_approval_id, granted_by, granted_at, expires_at, revoked_by, revoked_at
+       constraints_json, source_approval_id, granted_by, granted_at, expires_at, revoked_by, revoked_at, version
 FROM authority_grants`
 
 const externalActionExecutionSelect = `
 SELECT id, external_action_id, external_action_revision, principal_actor_id, authority_grant_id, state,
-       started_at, finished_at, result_json, evidence_artifact_id
+       started_at, finished_at, result_json, evidence_artifact_id, version
 FROM external_action_executions`
 
 func scanExternalAction(row scanner) (authority.ExternalAction, error) {
@@ -307,7 +307,7 @@ func scanExternalActionRevision(row scanner) (authority.ExternalActionRevision, 
 	var revision authority.ExternalActionRevision
 	var subject, proposedAt string
 	if err := row.Scan(&revision.ExternalActionID, &revision.Revision, &subject,
-		&revision.AuthorizationSubjectHash, &revision.ProposedBy, &proposedAt); err != nil {
+		&revision.AuthorizationSubjectHash, &revision.ProposedBy, &proposedAt, &revision.Version); err != nil {
 		return authority.ExternalActionRevision{}, err
 	}
 	revision.AuthorizationSubject = json.RawMessage(subject)
@@ -323,7 +323,7 @@ func scanActionApproval(row scanner) (authority.ActionApproval, error) {
 	var requestedAt string
 	if err := row.Scan(&approval.ID, &approval.ExternalActionID, &approval.ExternalActionRevision, &approval.ApprovedForActorID,
 		&approval.AuthorizationSubjectHash, &constraints, &expiresAt, &approval.Request, &approval.Status,
-		&approval.RequestedBy, &requestedAt, &resolvedBy, &resolvedAt, &approval.Rationale); err != nil {
+		&approval.RequestedBy, &requestedAt, &resolvedBy, &resolvedAt, &approval.Rationale, &approval.Version); err != nil {
 		return authority.ActionApproval{}, err
 	}
 	approval.Constraints = json.RawMessage(constraints)
@@ -358,7 +358,7 @@ func scanAuthorityGrant(row scanner) (authority.AuthorityGrant, error) {
 	var expiresAt, revokedAt, revokedBy sql.NullString
 	if err := row.Scan(&grant.ID, &grant.ExternalActionID, &grant.ActionRevision, &grant.PrincipalActorID,
 		&grant.AuthorizationSubjectHash, &constraints, &grant.SourceApprovalID, &grant.GrantedBy, &grantedAt,
-		&expiresAt, &revokedBy, &revokedAt); err != nil {
+		&expiresAt, &revokedBy, &revokedAt, &grant.Version); err != nil {
 		return authority.AuthorityGrant{}, err
 	}
 	grant.Constraints = json.RawMessage(constraints)
@@ -395,7 +395,7 @@ func scanExternalActionExecution(row scanner) (authority.ExternalActionExecution
 	var evidenceID sql.NullString
 	var result string
 	if err := row.Scan(&execution.ID, &execution.ExternalActionID, &execution.ActionRevision, &execution.PrincipalActorID,
-		&execution.AuthorityGrantID, &state, &startedAt, &finishedAt, &result, &evidenceID); err != nil {
+		&execution.AuthorityGrantID, &state, &startedAt, &finishedAt, &result, &evidenceID, &execution.Version); err != nil {
 		return authority.ExternalActionExecution{}, err
 	}
 	execution.Result = json.RawMessage(result)

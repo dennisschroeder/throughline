@@ -14,6 +14,7 @@ import (
 type Artifact struct {
 	ID         string
 	WorkItemID string
+	Version    int
 	Kind       string
 	URI        string
 	Title      string
@@ -47,6 +48,7 @@ func NewArtifact(artifact Artifact, now time.Time) (Artifact, error) {
 	}
 	artifact.Metadata = append(json.RawMessage(nil), artifact.Metadata...)
 	artifact.CreatedAt = now.UTC()
+	artifact.Version = 1
 	return artifact, nil
 }
 
@@ -71,6 +73,7 @@ type OutputRevision struct {
 	ExpectedOutputID string
 	OutputProfileID  string
 	Revision         int
+	StateVersion     int
 	Artifacts        []RevisionArtifact
 	ContentDigest    string
 	AcceptanceState  RevisionAcceptanceState
@@ -120,6 +123,7 @@ func NewOutputRevision(id string, expected ExpectedOutput, profile Profile, revi
 		ExpectedOutputID: expected.ID,
 		OutputProfileID:  profile.ID,
 		Revision:         revision,
+		StateVersion:     1,
 		Artifacts:        bindings,
 		ContentDigest:    strings.TrimSpace(contentDigest),
 		AcceptanceState:  RevisionProduced,
@@ -152,6 +156,7 @@ const (
 type ValidationRecord struct {
 	ID                 string
 	OutputRevisionID   string
+	Version            int
 	CriterionRef       string
 	ValidatorKind      ValidatorKind
 	Verdict            ValidationVerdict
@@ -211,6 +216,7 @@ func NewValidationRecord(id string, revision OutputRevision, criterionRef string
 	return ValidationRecord{
 		ID:                 id,
 		OutputRevisionID:   revision.ID,
+		Version:            1,
 		CriterionRef:       criterionRef,
 		ValidatorKind:      kind,
 		Verdict:            verdict,
@@ -258,6 +264,7 @@ func AcceptOutputRevision(revision OutputRevision, expected ExpectedOutput, prof
 	accepted := revision
 	accepted.Artifacts = append([]RevisionArtifact(nil), revision.Artifacts...)
 	accepted.AcceptanceState = RevisionAccepted
+	accepted.StateVersion++
 	accepted.AcceptedBy = acceptedBy
 	accepted.AcceptedAt = now.UTC()
 	accepted.AcceptanceReason = reason
@@ -393,6 +400,7 @@ func (verdict ValidationVerdict) supported() bool {
 type OutputRequirement struct {
 	ID                       string
 	WorkItemID               string
+	Version                  int
 	RequiredOutputRevisionID string
 	RequiredProfileName      string
 	VersionConstraint        string
@@ -405,6 +413,7 @@ func NewExactOutputRequirement(id, workItemID string, revision OutputRevision, r
 		ID:                       strings.TrimSpace(id),
 		WorkItemID:               strings.TrimSpace(workItemID),
 		RequiredOutputRevisionID: strings.TrimSpace(revision.ID),
+		Version:                  1,
 		Required:                 required,
 		Note:                     strings.TrimSpace(note),
 	}
@@ -418,6 +427,7 @@ func NewProfileOutputRequirement(id, workItemID, profileName, versionConstraint 
 	requirement := OutputRequirement{
 		ID:                  strings.TrimSpace(id),
 		WorkItemID:          strings.TrimSpace(workItemID),
+		Version:             1,
 		RequiredProfileName: strings.TrimSpace(profileName),
 		VersionConstraint:   strings.TrimSpace(versionConstraint),
 		Required:            required,

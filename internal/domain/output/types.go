@@ -88,6 +88,7 @@ func ReviewProfile(profile Profile, decision ProfileState, reviewer, reason stri
 type ExpectedOutput struct {
 	ID              string
 	WorkItemID      string
+	Version         int
 	Name            string
 	OutputProfileID string
 	Contract        json.RawMessage
@@ -117,6 +118,7 @@ func NewExpectedOutput(id, workItemID, name string, profile Profile, contract js
 	expected := ExpectedOutput{
 		ID:              strings.TrimSpace(id),
 		WorkItemID:      strings.TrimSpace(workItemID),
+		Version:         1,
 		Name:            strings.TrimSpace(name),
 		OutputProfileID: profile.ID,
 		Contract:        append(json.RawMessage(nil), contract...),

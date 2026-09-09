@@ -122,16 +122,16 @@ func target(id string, generation int64) registry.WorkspaceTarget {
 
 func createObjective(t *testing.T, ctx context.Context, service *app.Service, key string) work.Objective {
 	t.Helper()
-	if _, err := service.RegisterActor(ctx, app.RegisterActorCommand{
+	if _, err := app.UnwrapMutation(service.RegisterActor(ctx, app.RegisterActorCommand{
 		Actor:          work.Actor{ID: "agent:test", Kind: work.ActorTypeAgent, DisplayName: "test"},
 		IdempotencyKey: "register-" + key,
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
-	objective, err := service.CreateObjective(ctx, app.CreateObjectiveCommand{
+	objective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{
 		ActorID: "agent:test", IdempotencyKey: "create-" + key,
 		Key: key, Title: key, DesiredOutcome: "isolation probe", Phase: work.ObjectiveIdea,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

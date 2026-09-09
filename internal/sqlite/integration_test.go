@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -34,10 +35,10 @@ func TestInitializationAndDomainNeutralVerticalSlice(t *testing.T) {
 	assertInitializationState(t, database)
 
 	service := app.NewService(database.Store(), &testIDs{}, testClock{})
-	if _, err := service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: "human:owner", Kind: work.ActorTypeHuman, DisplayName: "Owner"}, IdempotencyKey: "register-owner"}); err != nil {
+	if _, err := app.UnwrapMutation(service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: "human:owner", Kind: work.ActorTypeHuman, DisplayName: "Owner"}, IdempotencyKey: "register-owner"})); err != nil {
 		t.Fatal(err)
 	}
-	objective, err := service.CreateObjective(ctx, app.CreateObjectiveCommand{
+	objective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{
 		ActorID:        "human:owner",
 		IdempotencyKey: "create-objective-integration",
 		Key:            "OBJ-DOSSIER",
@@ -45,11 +46,11 @@ func TestInitializationAndDomainNeutralVerticalSlice(t *testing.T) {
 		Description:    "Synthesize source-linked policy evidence for a human decision.",
 		DesiredOutcome: "A reviewed dossier with findings, sources, and explicit uncertainty.",
 		Phase:          work.ObjectivePlanning,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := service.CreatePlan(ctx, app.CreatePlanCommand{
+	plan, err := app.UnwrapMutation(service.CreatePlan(ctx, app.CreatePlanCommand{
 		ActorID:         "human:owner",
 		IdempotencyKey:  "create-plan-integration",
 		ObjectiveID:     objective.ID,
@@ -57,11 +58,11 @@ func TestInitializationAndDomainNeutralVerticalSlice(t *testing.T) {
 		Summary:         "Collect sources, synthesize findings, and submit the dossier for review.",
 		Revision:        1,
 		CommitmentState: work.PlanDraft,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	item, err := service.CreateWorkItem(ctx, app.CreateWorkItemCommand{
+	item, err := app.UnwrapMutation(service.CreateWorkItem(ctx, app.CreateWorkItemCommand{
 		ActorID:           "human:owner",
 		IdempotencyKey:    "create-work-item-integration",
 		Key:               "TH-1",
@@ -77,11 +78,11 @@ func TestInitializationAndDomainNeutralVerticalSlice(t *testing.T) {
 		ExecutionPolicy:   work.PolicyAgentMayPropose,
 		RequiredActorKind: work.ActorAny,
 		AttentionState:    work.AttentionNeedsHumanReview,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.DefineExpectedOutput(ctx, app.DefineExpectedOutputCommand{
+	_, err = app.UnwrapMutation(service.DefineExpectedOutput(ctx, app.DefineExpectedOutputCommand{
 		ActorID:         "human:owner",
 		WorkItemID:      item.ID,
 		Name:            "Policy research dossier",
@@ -93,7 +94,7 @@ func TestInitializationAndDomainNeutralVerticalSlice(t *testing.T) {
 		Ordinal:         1,
 		ExpectedVersion: item.Version,
 		IdempotencyKey:  "define-policy-output",
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,6 +115,89 @@ func TestInitializationAndDomainNeutralVerticalSlice(t *testing.T) {
 	}
 }
 
+func TestMutationEffectsReplayAcrossRestartAndLegacyResponseUpgrade(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "effects.db")
+	database, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	service := app.NewService(database.Store(), &testIDs{}, testClock{})
+	if _, err := app.UnwrapMutation(service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: "human:effects", Kind: work.ActorTypeHuman, DisplayName: "Effects"}, IdempotencyKey: "register"})); err != nil {
+		t.Fatal(err)
+	}
+	command := app.CreateObjectiveCommand{ActorID: "human:effects", IdempotencyKey: "objective", Key: "OBJ-EFFECTS", Title: "Effect replay", Phase: work.ObjectiveIdea}
+	created, err := service.CreateObjective(ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objective := created.Result
+	effects := created.Effects
+	if len(effects) != 1 || effects[0].Kind != "objective" || effects[0].ID != objective.ID || effects[0].Version != objective.Version {
+		t.Fatalf("first mutation effects = %#v, want committed objective version", effects)
+	}
+	var response string
+	if err := database.db.QueryRowContext(ctx, "SELECT response_json FROM idempotency_records WHERE actor_id = ? AND key = ?", command.ActorID, command.IdempotencyKey).Scan(&response); err != nil {
+		t.Fatal(err)
+	}
+	var legacy map[string]any
+	if err := json.Unmarshal([]byte(response), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	delete(legacy, "effects")
+	legacyResponse, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.db.ExecContext(ctx, "UPDATE idempotency_records SET response_json = ? WHERE actor_id = ? AND key = ?", legacyResponse, command.ActorID, command.IdempotencyKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	replayService := app.NewService(reopened.Store(), &testIDs{fail: true}, testClock{})
+	replayedMutation, err := replayService.CreateObjective(ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayedMutation.Result.ID != objective.ID || !slices.Equal(replayedMutation.Effects, created.Effects) {
+		t.Fatalf("restart replay = %#v, want %#v", replayedMutation, created)
+	}
+	var replayedResponse string
+	if err := reopened.db.QueryRowContext(ctx, "SELECT response_json FROM idempotency_records WHERE actor_id = ? AND key = ?", command.ActorID, command.IdempotencyKey).Scan(&replayedResponse); err != nil {
+		t.Fatal(err)
+	}
+	if replayedResponse != string(legacyResponse) {
+		t.Fatalf("restart replay rewrote idempotency response\ngot:  %s\nwant: %s", replayedResponse, legacyResponse)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	legacyDatabase, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer legacyDatabase.Close()
+	legacyReplay, err := app.NewService(legacyDatabase.Store(), &testIDs{fail: true}, testClock{}).CreateObjective(ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyReplay.Result.ID != objective.ID || len(legacyReplay.Effects) != 1 || legacyReplay.Effects[0].Kind != "objective" || legacyReplay.Effects[0].ID != objective.ID || legacyReplay.Effects[0].Version != objective.Version {
+		t.Fatalf("legacy replay = %#v, want original objective effect", legacyReplay)
+	}
+}
+
 func TestCreateObjectiveReplayDoesNotAllocateAnID(t *testing.T) {
 	ctx := context.Background()
 	database, err := Open(ctx, filepath.Join(t.TempDir(), "idempotency.db"))
@@ -127,13 +211,13 @@ func TestCreateObjectiveReplayDoesNotAllocateAnID(t *testing.T) {
 	ids := &testIDs{}
 	service := app.NewService(database.Store(), ids, testClock{})
 	command := app.CreateObjectiveCommand{ActorID: "human:owner", IdempotencyKey: "replay-objective", Key: "OBJ-REPLAY", Title: "Replay safely", DesiredOutcome: "No second ID allocation", Phase: work.ObjectiveIdea}
-	first, err := service.CreateObjective(ctx, command)
+	first, err := app.UnwrapMutation(service.CreateObjective(ctx, command))
 	if err != nil {
 		t.Fatal(err)
 	}
 	allocated := ids.next
 	ids.fail = true
-	replayed, err := service.CreateObjective(ctx, command)
+	replayed, err := app.UnwrapMutation(service.CreateObjective(ctx, command))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +225,7 @@ func TestCreateObjectiveReplayDoesNotAllocateAnID(t *testing.T) {
 		t.Fatalf("replay = %#v, allocated IDs = %d, want original %#v and %d", replayed, ids.next, first, allocated)
 	}
 	command.Title = "Changed request"
-	if _, err := service.CreateObjective(ctx, command); !errors.Is(err, ports.ErrIdempotencyMismatch) {
+	if _, err := app.UnwrapMutation(service.CreateObjective(ctx, command)); !errors.Is(err, ports.ErrIdempotencyMismatch) {
 		t.Fatalf("mismatched request error = %v", err)
 	}
 }
@@ -157,24 +241,24 @@ func TestCreateWorkItemPersistsInitialExecutionGraphAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := app.NewService(database.Store(), &testIDs{}, testClock{})
-	if _, err := service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: "human:owner", Kind: work.ActorTypeHuman, DisplayName: "Owner"}, IdempotencyKey: "register-owner-compound"}); err != nil {
+	if _, err := app.UnwrapMutation(service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: "human:owner", Kind: work.ActorTypeHuman, DisplayName: "Owner"}, IdempotencyKey: "register-owner-compound"})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.AssignActorCapability(ctx, app.AssignActorCapabilityCommand{ActorID: "human:owner", GrantedBy: "human:owner", Capability: "web_research", Description: "Research web sources", IdempotencyKey: "assign-compound-capability"}); err != nil {
+	if _, err := app.UnwrapMutation(service.AssignActorCapability(ctx, app.AssignActorCapabilityCommand{ActorID: "human:owner", GrantedBy: "human:owner", Capability: "web_research", Description: "Research web sources", IdempotencyKey: "assign-compound-capability"})); err != nil {
 		t.Fatal(err)
 	}
-	objective, err := service.CreateObjective(ctx, app.CreateObjectiveCommand{ActorID: "human:owner", IdempotencyKey: "create-compound-objective", Key: "OBJ-COMPOUND", Title: "Create an execution graph", DesiredOutcome: "Initial work-item details are durable together.", Phase: work.ObjectivePlanning})
+	objective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{ActorID: "human:owner", IdempotencyKey: "create-compound-objective", Key: "OBJ-COMPOUND", Title: "Create an execution graph", DesiredOutcome: "Initial work-item details are durable together.", Phase: work.ObjectivePlanning}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := service.ProposePlan(ctx, app.ProposePlanCommand{ObjectiveID: objective.ID, ActorID: "human:owner", IdempotencyKey: "propose-compound-plan", Title: "Execution graph plan", Revision: 1, Items: []app.ProposedWorkItem{{ClientRef: "seed", Key: "TH-SEED", Title: "Seed the approved plan", Kind: "research", Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny}}})
+	plan, err := app.UnwrapMutation(service.ProposePlan(ctx, app.ProposePlanCommand{ObjectiveID: objective.ID, ActorID: "human:owner", IdempotencyKey: "propose-compound-plan", Title: "Execution graph plan", Revision: 1, Items: []app.ProposedWorkItem{{ClientRef: "seed", Key: "TH-SEED", Title: "Seed the approved plan", Kind: "research", Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny}}}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: plan.Plan.ID, ReviewerActorID: "human:owner", IdempotencyKey: "approve-compound-plan", Decision: work.PlanApproved, Reason: "The initial item is ready for execution.", ExpectedVersion: 1}); err != nil {
+	if _, err := app.UnwrapMutation(service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: plan.Plan.ID, ReviewerActorID: "human:owner", IdempotencyKey: "approve-compound-plan", Decision: work.PlanApproved, Reason: "The initial item is ready for execution.", ExpectedVersion: 1})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: objective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:owner", IdempotencyKey: "execute-compound-objective", Reason: "Approved plan is executing.", ExpectedVersion: 1}); err != nil {
+	if _, err := app.UnwrapMutation(service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: objective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:owner", IdempotencyKey: "execute-compound-objective", Reason: "Approved plan is executing.", ExpectedVersion: 1})); err != nil {
 		t.Fatal(err)
 	}
 
@@ -190,16 +274,17 @@ func TestCreateWorkItemPersistsInitialExecutionGraphAtomically(t *testing.T) {
 		ExternalActions:      []app.ProposedExternalAction{{Required: true, Title: "Publish the reviewed dossier", Rationale: "Publication is externally authorized.", AuthorizationSubject: json.RawMessage(`{"action_type":"document.publish","target":{"repository":"research"},"arguments":[],"scope":{},"permissions":["document.write"],"credential_requirements":[],"constraints":{}}`)}},
 		Dependencies:         []app.CreateWorkItemDependency{{DependsOnWorkItemID: plan.Items[0].WorkItem.ID, Kind: work.DependencyHard, Note: "Use the approved plan seed."}},
 	}
-	item, err := service.CreateWorkItem(ctx, command)
+	created, err := service.CreateWorkItem(ctx, command)
 	if err != nil {
 		t.Fatal(err)
 	}
-	replayed, err := service.CreateWorkItem(ctx, command)
+	item := created.Result
+	replayedMutation, err := service.CreateWorkItem(ctx, command)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replayed.ID != item.ID {
-		t.Fatalf("replayed item ID = %q, want %q", replayed.ID, item.ID)
+	if replayedMutation.Result.ID != item.ID || !slices.Equal(replayedMutation.Effects, created.Effects) {
+		t.Fatalf("replayed mutation = %#v, want %#v", replayedMutation, created)
 	}
 	contextResult, err := service.GetWorkItem(ctx, item.ID)
 	if err != nil {
@@ -211,11 +296,70 @@ func TestCreateWorkItemPersistsInitialExecutionGraphAtomically(t *testing.T) {
 	if contextResult.WorkItem.CommitmentState != work.ItemAccepted || contextResult.WorkItem.ExecutionStatus != work.StatusReady {
 		t.Fatalf("compound item state = %#v", contextResult.WorkItem)
 	}
+	wantEffects := map[string]int{
+		"work_item:" + item.ID:                                                          1,
+		"work_item_capability:" + item.ID + ":web_research":                             1,
+		"acceptance_criterion:" + contextResult.AcceptanceCriteria[0].ID:                1,
+		"expected_output:" + contextResult.ExpectedOutputs[0].ExpectedOutput.ID:         1,
+		"output_requirement:" + contextResult.OutputRequirements[0].ID:                  1,
+		"external_action:" + contextResult.ExternalActions[0].Action.ID:                 1,
+		"external_action_revision:" + contextResult.ExternalActions[0].Action.ID + ":1": 1,
+		"dependency:" + contextResult.Dependencies[0].ID:                                1,
+	}
+	assertEffects(t, created.Effects, wantEffects)
 
 	command.IdempotencyKey = "create-premature-accepted-item"
 	command.PlanID = ""
-	if _, err := service.CreateWorkItem(ctx, command); err == nil {
+	if _, err := app.UnwrapMutation(service.CreateWorkItem(ctx, command)); err == nil {
 		t.Fatal("expected accepted ready item without an approved plan to be rejected")
+	}
+}
+
+func TestActivityOnlyMutationHasEmptyEffects(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "activity-only.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	service := app.NewService(database.Store(), &testIDs{}, testClock{})
+	mutation, err := service.RequestAttention(ctx, app.RequestAttentionCommand{
+		TargetKind: "review", TargetID: "review:effects", ActorID: "human:owner",
+		IdempotencyKey: "request-review-attention", AttentionState: work.AttentionNeedsHumanReview,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mutation.Effects == nil || len(mutation.Effects) != 0 {
+		t.Fatalf("activity-only effects = %#v, want non-nil empty list", mutation.Effects)
+	}
+	replayed, err := service.RequestAttention(ctx, app.RequestAttentionCommand{
+		TargetKind: "review", TargetID: "review:effects", ActorID: "human:owner",
+		IdempotencyKey: "request-review-attention", AttentionState: work.AttentionNeedsHumanReview,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.Effects == nil || len(replayed.Effects) != 0 {
+		t.Fatalf("activity-only replay effects = %#v, want non-nil empty list", replayed.Effects)
+	}
+}
+
+func assertEffects(t *testing.T, effects []app.Effect, want map[string]int) {
+	t.Helper()
+	got := make(map[string]int, len(effects))
+	for _, effect := range effects {
+		key := effect.Kind + ":" + effect.ID
+		if _, duplicate := got[key]; duplicate {
+			t.Fatalf("duplicate effect %q in %#v", key, effects)
+		}
+		got[key] = effect.Version
+	}
+	if !maps.Equal(got, want) {
+		t.Fatalf("effects = %#v, want %#v", got, want)
 	}
 }
 
@@ -230,15 +374,15 @@ func TestPatchWorkItemPersistsNonWorkflowGraphFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := app.NewService(database.Store(), &testIDs{}, testClock{})
-	objective, err := service.CreateObjective(ctx, app.CreateObjectiveCommand{ActorID: "human:owner", IdempotencyKey: "create-patch-objective", Key: "OBJ-PATCH", Title: "Patch non-workflow fields", DesiredOutcome: "Safe graph edits are durable.", Phase: work.ObjectivePlanning})
+	objective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{ActorID: "human:owner", IdempotencyKey: "create-patch-objective", Key: "OBJ-PATCH", Title: "Patch non-workflow fields", DesiredOutcome: "Safe graph edits are durable.", Phase: work.ObjectivePlanning}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent, err := service.CreateWorkItem(ctx, app.CreateWorkItemCommand{ActorID: "human:owner", IdempotencyKey: "create-patch-parent", Key: "TH-PATCH-PARENT", ObjectiveID: objective.ID, Title: "Parent", Kind: "research", CommitmentState: work.ItemProposed, ExecutionStatus: work.StatusBacklog, Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny, AttentionState: work.AttentionNone})
+	parent, err := app.UnwrapMutation(service.CreateWorkItem(ctx, app.CreateWorkItemCommand{ActorID: "human:owner", IdempotencyKey: "create-patch-parent", Key: "TH-PATCH-PARENT", ObjectiveID: objective.ID, Title: "Parent", Kind: "research", CommitmentState: work.ItemProposed, ExecutionStatus: work.StatusBacklog, Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny, AttentionState: work.AttentionNone}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err := service.CreateWorkItem(ctx, app.CreateWorkItemCommand{ActorID: "human:owner", IdempotencyKey: "create-patch-child", Key: "TH-PATCH-CHILD", ObjectiveID: objective.ID, Title: "Child", Kind: "research", CommitmentState: work.ItemProposed, ExecutionStatus: work.StatusBacklog, Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny, AttentionState: work.AttentionNone, RequiredCapabilities: []string{"initial_capability"}, AcceptanceCriteria: []app.ProposedAcceptanceCriterion{{Text: "The update is recovered from SQLite.", Required: true, Ordinal: 1}}})
+	child, err := app.UnwrapMutation(service.CreateWorkItem(ctx, app.CreateWorkItemCommand{ActorID: "human:owner", IdempotencyKey: "create-patch-child", Key: "TH-PATCH-CHILD", ObjectiveID: objective.ID, Title: "Child", Kind: "research", CommitmentState: work.ItemProposed, ExecutionStatus: work.StatusBacklog, Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny, AttentionState: work.AttentionNone, RequiredCapabilities: []string{"retained_capability", "removed_capability"}, AcceptanceCriteria: []app.ProposedAcceptanceCriterion{{Text: "The update is recovered from SQLite.", Required: true, Ordinal: 1}}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,8 +390,8 @@ func TestPatchWorkItemPersistsNonWorkflowGraphFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	capabilities := []string{"replacement_capability"}
-	patched, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{
+	capabilities := []string{"retained_capability", "added_capability"}
+	mutation, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{
 		WorkItemID: child.ID, ActorID: "human:owner", IdempotencyKey: "patch-child-graph", ExpectedVersion: child.Version, ParentID: &parent.ID, RequiredCapabilities: &capabilities,
 		AcceptanceCriterionResolutions: []app.PatchAcceptanceCriterionResolution{{CriterionID: before.AcceptanceCriteria[0].ID, Status: work.AcceptanceSatisfied, Rationale: "Checked the durable context."}},
 		ExpectedOutputsToAdd:           []app.ProposedExpectedOutput{{Name: "Patched dossier", ProfileName: "research_dossier", ProfileVersion: 1, Required: true, Ordinal: 1}},
@@ -255,6 +399,7 @@ func TestPatchWorkItemPersistsNonWorkflowGraphFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	patched := mutation.Result
 	if patched.Version != child.Version+1 || patched.ParentID != parent.ID {
 		t.Fatalf("patched item = %#v", patched)
 	}
@@ -262,13 +407,30 @@ func TestPatchWorkItemPersistsNonWorkflowGraphFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(after.RequiredCapabilities) != 1 || after.RequiredCapabilities[0] != "replacement_capability" || len(after.AcceptanceCriteria) != 1 || after.AcceptanceCriteria[0].Status != work.AcceptanceSatisfied || after.AcceptanceCriteria[0].ResolvedBy != "human:owner" || len(after.ExpectedOutputs) != 1 {
+	// The store lists required capabilities by slug, so compare sets rather than
+	// the order the patch happened to pass them in.
+	if !slices.Equal(after.RequiredCapabilities, []string{"added_capability", "retained_capability"}) || len(after.AcceptanceCriteria) != 1 || after.AcceptanceCriteria[0].Status != work.AcceptanceSatisfied || after.AcceptanceCriteria[0].ResolvedBy != "human:owner" || len(after.ExpectedOutputs) != 1 || after.ExpectedOutputs[0].ExpectedOutput.Version != 1 {
 		t.Fatalf("patched item context = %#v", after)
 	}
-	if _, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{WorkItemID: parent.ID, ActorID: "human:owner", IdempotencyKey: "patch-parent-cycle", ExpectedVersion: parent.Version, ParentID: &child.ID}); err == nil {
+	assertEffects(t, mutation.Effects, map[string]int{
+		"work_item_capability:" + child.ID + ":removed_capability":      1,
+		"capability:added_capability":                                   1,
+		"work_item_capability:" + child.ID + ":added_capability":        1,
+		"acceptance_criterion:" + before.AcceptanceCriteria[0].ID:       2,
+		"expected_output:" + after.ExpectedOutputs[0].ExpectedOutput.ID: 1,
+		"work_item:" + child.ID:                                         2,
+	})
+	var retainedVersion int
+	if err := database.db.QueryRowContext(ctx, "SELECT version FROM work_item_capabilities WHERE work_item_id = ? AND capability_slug = ?", child.ID, "retained_capability").Scan(&retainedVersion); err != nil {
+		t.Fatal(err)
+	}
+	if retainedVersion != 1 {
+		t.Fatalf("retained capability version = %d, want 1", retainedVersion)
+	}
+	if _, err := app.UnwrapMutation(service.PatchWorkItem(ctx, app.PatchWorkItemCommand{WorkItemID: parent.ID, ActorID: "human:owner", IdempotencyKey: "patch-parent-cycle", ExpectedVersion: parent.Version, ParentID: &child.ID})); err == nil {
 		t.Fatal("expected recursive parent update to be rejected")
 	}
-	if _, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{WorkItemID: child.ID, ActorID: "human:owner", IdempotencyKey: "patch-stale-child", ExpectedVersion: child.Version, Title: stringPointer("stale update")}); err == nil {
+	if _, err := app.UnwrapMutation(service.PatchWorkItem(ctx, app.PatchWorkItemCommand{WorkItemID: child.ID, ActorID: "human:owner", IdempotencyKey: "patch-stale-child", ExpectedVersion: child.Version, Title: stringPointer("stale update")})); err == nil {
 		t.Fatal("expected stale patch to be rejected")
 	}
 }
@@ -281,7 +443,7 @@ func assertInitializationState(t *testing.T, database *Database) {
 		query string
 		want  int
 	}{
-		{"SELECT COUNT(*) FROM schema_migrations", 10},
+		{"SELECT COUNT(*) FROM schema_migrations", 11},
 		{"SELECT COUNT(*) FROM output_profiles", 8},
 		{"SELECT COUNT(*) FROM output_profiles WHERE lifecycle_state = 'active' AND built_in = 1", 8},
 		{"PRAGMA foreign_keys", 1},
