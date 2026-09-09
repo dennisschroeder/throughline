@@ -109,8 +109,8 @@ func TestREP02MutationOutputSchemasRequireEffects(t *testing.T) {
 
 func TestREP02ReadOnlyOutputSchemasDoNotExposeEffects(t *testing.T) {
 	_, readOnly := rep02ToolInventory(t)
-	if got := len(readOnly); got != 11 {
-		t.Fatalf("server advertises %d read-only tools, want 11: %v", got, readOnly)
+	if got := len(readOnly); got != 12 {
+		t.Fatalf("server advertises %d read-only tools, want 12: %v", got, readOnly)
 	}
 	for _, name := range readOnly {
 		t.Run(name, func(t *testing.T) {

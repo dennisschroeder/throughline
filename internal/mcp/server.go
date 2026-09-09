@@ -101,11 +101,12 @@ type adapter struct {
 }
 
 func (a *adapter) addTools(server *mcp.Server) {
-	a.add(server, "board_overview", "Compact orientation summary.", true, schemaFor[boardOverviewInput](), a.boardOverview)
+	a.add(server, "board_overview", "Compact orientation summary. objective_id accepts an objective's key.", true, schemaFor[boardOverviewInput](), a.boardOverview)
 	a.add(server, "list_items", "List structured work-item summaries.", true, schemaFor[listItemsInput](), a.listItems)
 	a.add(server, "list_ready_items", "List executable candidate work without claiming it.", true, schemaFor[listReadyInput]("actor_id"), a.listReady)
 	a.add(server, "get_item", "Retrieve structured work-item context.", true, schemaFor[getItemInput]("id"), a.getItem)
-	a.add(server, "get_objective_context", "Retrieve deterministic, bounded objective continuation context.", true, schemaFor[objectiveContextInput]("objective_id"), a.getObjectiveContext)
+	a.add(server, "list_objectives", "List every objective, including ones with no work items yet.", true, schemaFor[workspaceInput](), a.listObjectives)
+	a.add(server, "get_objective_context", "Retrieve deterministic, bounded objective continuation context. objective_id accepts an objective's key.", true, schemaFor[objectiveContextInput]("objective_id"), a.getObjectiveContext)
 	a.add(server, "get_changes", "Read cursor-based activity deltas.", true, schemaFor[changesInput](), a.getChanges)
 	a.addWorkspaceless(server, "get_semantic_model", "Read the embedded Throughline semantic model. Domain-neutral; not workspace-scoped.", true, semanticModelSchema(), a.getSemanticModel)
 	a.add(server, "list_output_profiles", "List governed persisted output profiles.", true, schemaFor[workspaceInput](), a.listProfiles)
@@ -638,6 +639,8 @@ func resultSchema(name string) map[string]any {
 		return schemaForResult[changesResult]()
 	case "get_semantic_model":
 		return semanticModelResultSchema()
+	case "list_objectives":
+		return schemaForResult[[]objectiveSummary]()
 	case "list_output_profiles":
 		return schemaForResult[[]output.Profile]()
 	case "get_output_profile", "propose_output_profile", "review_output_profile":
@@ -1310,6 +1313,51 @@ func (a *adapter) listReady(ctx context.Context, service *app.Service, raw json.
 	return ready, nil
 }
 
+// objectiveSummary is what orientation needs of an objective before choosing
+// one: how to address it, what it is, where it is in its lifecycle, and how much
+// work it holds. Zero items is a real and useful answer.
+type objectiveSummary struct {
+	ID             string              `json:"id"`
+	Key            string              `json:"key"`
+	Title          string              `json:"title"`
+	Phase          work.ObjectivePhase `json:"phase"`
+	DesiredOutcome string              `json:"desired_outcome"`
+	Version        int                 `json:"version"`
+	ItemCounts     map[string]int      `json:"item_counts"`
+}
+
+func (a *adapter) listObjectives(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
+	objectives, err := service.ListObjectives(ctx)
+	if err != nil {
+		return nil, err
+	}
+	items, err := service.ListWorkItems(ctx)
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[string]map[string]int, len(objectives))
+	for _, item := range items {
+		byStatus, ok := counts[item.Objective.ID]
+		if !ok {
+			byStatus = map[string]int{}
+			counts[item.Objective.ID] = byStatus
+		}
+		byStatus[string(item.WorkItem.ExecutionStatus)]++
+	}
+	summaries := make([]objectiveSummary, 0, len(objectives))
+	for _, objective := range objectives {
+		byStatus := counts[objective.ID]
+		if byStatus == nil {
+			byStatus = map[string]int{}
+		}
+		summaries = append(summaries, objectiveSummary{
+			ID: objective.ID, Key: objective.Key, Title: objective.Title, Phase: objective.Phase,
+			DesiredOutcome: objective.DesiredOutcome, Version: objective.Version, ItemCounts: byStatus,
+		})
+	}
+	return summaries, nil
+}
+
 type boardOverviewInput struct {
 	workspaceInput
 	ObjectiveID      string `json:"objective_id"`
@@ -1333,13 +1381,30 @@ func (a *adapter) boardOverview(ctx context.Context, service *app.Service, raw j
 	if err != nil {
 		return nil, err
 	}
+	// objectives counts objectives per phase, read from the objectives
+	// themselves. Counting the work items that happen to reference each phase
+	// reported a different number entirely, and made an objective with no items
+	// invisible to the one call an agent is told to orient with.
+	objectives, err := service.ListObjectives(ctx)
+	if err != nil {
+		return nil, err
+	}
+	objectiveID, err := resolveObjectiveIn(objectives, in.ObjectiveID)
+	if err != nil {
+		return nil, err
+	}
 	result := boardOverviewResult{ChangeCursor: fmt.Sprint(cursor), Objectives: map[string]int{}, Counts: map[string]int{}}
-	plans := map[string]bool{}
-	for _, item := range items {
-		if in.ObjectiveID != "" && item.Objective.ID != in.ObjectiveID {
+	for _, objective := range objectives {
+		if objectiveID != "" && objective.ID != objectiveID {
 			continue
 		}
-		result.Objectives[string(item.Objective.Phase)]++
+		result.Objectives[string(objective.Phase)]++
+	}
+	plans := map[string]bool{}
+	for _, item := range items {
+		if objectiveID != "" && item.Objective.ID != objectiveID {
+			continue
+		}
 		result.Counts[string(item.WorkItem.ExecutionStatus)]++
 		if item.Plan != nil && item.Plan.CommitmentState == work.PlanProposed && !plans[item.Plan.ID] {
 			result.PlansNeedingReview++
@@ -1364,7 +1429,7 @@ func (a *adapter) boardOverview(ctx context.Context, service *app.Service, raw j
 		}
 	}
 	for _, item := range ready {
-		if in.ObjectiveID == "" || item.Objective.ID == in.ObjectiveID {
+		if objectiveID == "" || item.Objective.ID == objectiveID {
 			result.ReadyHighPriority = append(result.ReadyHighPriority, item)
 		}
 	}
@@ -1424,9 +1489,13 @@ func (a *adapter) listItems(ctx context.Context, service *app.Service, raw json.
 	if err != nil {
 		return nil, err
 	}
+	objectiveID, err := resolveObjectiveReference(ctx, service, in.ObjectiveID)
+	if err != nil {
+		return nil, err
+	}
 	filtered := make([]ports.WorkItemContext, 0, len(items))
 	for _, item := range items {
-		if in.ObjectiveID != "" && item.Objective.ID != in.ObjectiveID {
+		if objectiveID != "" && item.Objective.ID != objectiveID {
 			continue
 		}
 		if in.PlanID != "" && (item.Plan == nil || item.Plan.ID != in.PlanID) {
@@ -1642,7 +1711,50 @@ func (a *adapter) getObjectiveContext(ctx context.Context, service *app.Service,
 			return nil, fmt.Errorf("get_objective_context include %q is not supported", section)
 		}
 	}
-	return service.SelectObjectiveContext(ctx, app.ObjectiveContextQuery{ObjectiveID: in.ObjectiveID, ActorID: in.ActorID, Include: in.Include, MaxItemsPerSection: in.MaxItems})
+	// objective_id accepts the readable key too, so a caller resuming from
+	// notes can address an objective by the name it was written down under.
+	objective, err := service.ResolveObjective(ctx, in.ObjectiveID)
+	if err != nil {
+		return nil, err
+	}
+	return service.SelectObjectiveContext(ctx, app.ObjectiveContextQuery{ObjectiveID: objective.ID, ActorID: in.ActorID, Include: in.Include, MaxItemsPerSection: in.MaxItems})
+}
+
+// resolveObjectiveReference turns an objective_id input into an objective's
+// identifier, accepting the readable key too. Every tool that takes
+// objective_id goes through it, because a field that resolves a key on some
+// tools and silently matches nothing on others is worse than one that never
+// accepted keys: a filter that finds no objective answers "no work here"
+// instead of "no such objective".
+func resolveObjectiveIn(objectives []work.Objective, reference string) (string, error) {
+	reference = strings.TrimSpace(reference)
+	if reference == "" {
+		return "", nil
+	}
+	key := ""
+	for _, objective := range objectives {
+		if objective.ID == reference {
+			return objective.ID, nil
+		}
+		if objective.Key == reference {
+			key = objective.ID
+		}
+	}
+	if key != "" {
+		return key, nil
+	}
+	return "", fmt.Errorf("resolve objective %q: %w", reference, ports.ErrNotFound)
+}
+
+func resolveObjectiveReference(ctx context.Context, service *app.Service, reference string) (string, error) {
+	if strings.TrimSpace(reference) == "" {
+		return "", nil
+	}
+	objective, err := service.ResolveObjective(ctx, reference)
+	if err != nil {
+		return "", err
+	}
+	return objective.ID, nil
 }
 
 func containsString(values []string, value string) bool {
@@ -1679,7 +1791,11 @@ func (a *adapter) getChanges(ctx context.Context, service *app.Service, raw json
 	if limit <= 0 || limit > 100 {
 		limit = 100
 	}
-	changes, err := service.ListActivity(ctx, app.ActivityFilter{Since: since, Limit: limit + 1, WorkItemID: in.WorkItemID, ObjectiveID: in.ObjectiveID})
+	objectiveID, err := resolveObjectiveReference(ctx, service, in.ObjectiveID)
+	if err != nil {
+		return nil, err
+	}
+	changes, err := service.ListActivity(ctx, app.ActivityFilter{Since: since, Limit: limit + 1, WorkItemID: in.WorkItemID, ObjectiveID: objectiveID})
 	if err != nil {
 		return nil, err
 	}
@@ -1794,7 +1910,11 @@ func (a *adapter) listOutputs(ctx context.Context, service *app.Service, raw jso
 	if err != nil {
 		return nil, errors.New("accepted_since must be RFC3339")
 	}
-	filter := app.AcceptedOutputFilter{ProfileName: in.ProfileName, VersionConstraint: in.Version, ObjectiveID: in.ObjectiveID, ProducedBy: in.ProducedBy, Limit: limit}
+	objectiveID, err := resolveObjectiveReference(ctx, service, in.ObjectiveID)
+	if err != nil {
+		return nil, err
+	}
+	filter := app.AcceptedOutputFilter{ProfileName: in.ProfileName, VersionConstraint: in.Version, ObjectiveID: objectiveID, ProducedBy: in.ProducedBy, Limit: limit}
 	if acceptedSince != nil {
 		filter.AcceptedSince = *acceptedSince
 	}
@@ -1852,7 +1972,11 @@ func (a *adapter) patchObjective(ctx context.Context, service *app.Service, raw 
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return service.PatchObjective(ctx, app.PatchObjectiveCommand{ObjectiveID: in.ObjectiveID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome})
+	objectiveID, err := resolveObjectiveReference(ctx, service, in.ObjectiveID)
+	if err != nil {
+		return nil, err
+	}
+	return service.PatchObjective(ctx, app.PatchObjectiveCommand{ObjectiveID: objectiveID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome})
 }
 
 type createItemInput struct {
@@ -1891,8 +2015,12 @@ func (a *adapter) createItem(ctx context.Context, service *app.Service, raw json
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
+	objectiveID, err := resolveObjectiveReference(ctx, service, in.ObjectiveID)
+	if err != nil {
+		return nil, err
+	}
 	command := app.CreateWorkItemCommand{
-		ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, ObjectiveID: in.ObjectiveID, PlanID: in.PlanID, ParentID: in.ParentID,
+		ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, ObjectiveID: objectiveID, PlanID: in.PlanID, ParentID: in.ParentID,
 		Title: in.Title, Description: in.Description, Kind: in.Kind, CommitmentState: in.CommitmentState, ExecutionStatus: in.ExecutionStatus,
 		Priority: in.Priority, EstimatedScope: in.EstimatedScope, ExecutionPolicy: in.ExecutionPolicy, RequiredActorKind: in.RequiredActorKind,
 		AttentionState: work.AttentionNone, RequiredCapabilities: in.RequiredCapabilities,
@@ -2245,7 +2373,11 @@ func (a *adapter) transitionObjective(ctx context.Context, service *app.Service,
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: in.ObjectiveID, ActorID: in.ActorID, TargetPhase: in.Target, Reason: in.Reason, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey})
+	objectiveID, err := resolveObjectiveReference(ctx, service, in.ObjectiveID)
+	if err != nil {
+		return nil, err
+	}
+	return service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: objectiveID, ActorID: in.ActorID, TargetPhase: in.Target, Reason: in.Reason, ExpectedVersion: in.ExpectedVersion, IdempotencyKey: in.IdempotencyKey})
 }
 
 type planInput struct {
@@ -2363,7 +2495,11 @@ func (a *adapter) proposePlan(ctx context.Context, service *app.Service, raw jso
 		}
 		items = append(items, converted)
 	}
-	return service.ProposePlan(ctx, app.ProposePlanCommand{ObjectiveID: in.ObjectiveID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Title: in.Title, Summary: in.Summary, Revision: in.Revision, Items: items})
+	objectiveID, err := resolveObjectiveReference(ctx, service, in.ObjectiveID)
+	if err != nil {
+		return nil, err
+	}
+	return service.ProposePlan(ctx, app.ProposePlanCommand{ObjectiveID: objectiveID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Title: in.Title, Summary: in.Summary, Revision: in.Revision, Items: items})
 }
 
 type reviewPlanInput struct {
@@ -2396,7 +2532,11 @@ func (a *adapter) recordContext(ctx context.Context, service *app.Service, raw j
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return service.RecordContext(ctx, app.RecordContextCommand{ObjectiveID: in.ObjectiveID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Kind: in.Kind, Title: in.Title, Body: in.Body, Status: in.Status, Confidence: in.Confidence, SourceURI: in.SourceURI, SupersedesID: in.SupersedesID})
+	objectiveID, err := resolveObjectiveReference(ctx, service, in.ObjectiveID)
+	if err != nil {
+		return nil, err
+	}
+	return service.RecordContext(ctx, app.RecordContextCommand{ObjectiveID: objectiveID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Kind: in.Kind, Title: in.Title, Body: in.Body, Status: in.Status, Confidence: in.Confidence, SourceURI: in.SourceURI, SupersedesID: in.SupersedesID})
 }
 
 type transitionContextInput struct {
@@ -2434,7 +2574,11 @@ func (a *adapter) recordDecision(ctx context.Context, service *app.Service, raw 
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return service.RecordDecision(ctx, app.RecordDecisionCommand{ObjectiveID: in.ObjectiveID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Title: in.Title, Decision: in.Decision, Rationale: in.Rationale, Alternatives: in.Alternatives, SupersedesID: in.SupersedesID})
+	objectiveID, err := resolveObjectiveReference(ctx, service, in.ObjectiveID)
+	if err != nil {
+		return nil, err
+	}
+	return service.RecordDecision(ctx, app.RecordDecisionCommand{ObjectiveID: objectiveID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Title: in.Title, Decision: in.Decision, Rationale: in.Rationale, Alternatives: in.Alternatives, SupersedesID: in.SupersedesID})
 }
 
 type askQuestionInput struct {
@@ -2452,7 +2596,11 @@ func (a *adapter) askQuestion(ctx context.Context, service *app.Service, raw jso
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return service.AskQuestion(ctx, app.AskQuestionCommand{ObjectiveID: in.ObjectiveID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Question: in.Question, RequiresHumanAttention: in.RequiresHumanAttention})
+	objectiveID, err := resolveObjectiveReference(ctx, service, in.ObjectiveID)
+	if err != nil {
+		return nil, err
+	}
+	return service.AskQuestion(ctx, app.AskQuestionCommand{ObjectiveID: objectiveID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Question: in.Question, RequiresHumanAttention: in.RequiresHumanAttention})
 }
 
 type answerQuestionInput struct {

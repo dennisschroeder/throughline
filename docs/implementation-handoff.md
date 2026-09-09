@@ -1125,6 +1125,7 @@ board_overview
 list_items
 list_ready_items
 get_item
+list_objectives
 get_objective_context
 get_changes
 list_output_profiles
@@ -1372,7 +1373,17 @@ Record `start`, `succeed`, or `fail` for one exact action revision, principal, a
 }
 ```
 
-`blocked` is a derived overview count, not necessarily a stored status.
+`objectives` counts objectives per phase, read from the objectives themselves, so an objective that
+has no work items yet is still counted and still visible to the one call an agent orients with.
+`counts` counts work items per execution status. `blocked` is a derived overview count, not
+necessarily a stored status.
+
+`objective_id` accepts either an objective's identifier or the readable key it is known by, on every
+tool that takes the field, so a caller resuming from notes can address an objective by the name it
+was written down under. A reference that resolves to no objective is `not_found`, including where the
+field is only a filter: answering "no work here" for an objective that does not exist is a wrong
+answer rather than an empty one. `list_objectives` returns both forms of address, along with each
+objective's phase, desired outcome and per-status item counts.
 
 #### `list_items`
 

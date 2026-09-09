@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -719,6 +720,15 @@ func (s *memoryStore) GetWorkItemContext(ctx context.Context, id string) (ports.
 		}
 	}
 	return result, nil
+}
+
+func (s *memoryStore) ListObjectives(context.Context) ([]work.Objective, error) {
+	objectives := make([]work.Objective, 0, len(s.objectives))
+	for _, objective := range s.objectives {
+		objectives = append(objectives, objective)
+	}
+	sort.Slice(objectives, func(i, j int) bool { return objectives[i].Key < objectives[j].Key })
+	return objectives, nil
 }
 
 func (s *memoryStore) GetObjectiveContext(_ context.Context, id string) (ports.ObjectiveContext, error) {

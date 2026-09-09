@@ -328,6 +328,30 @@ func requireChanged(result sql.Result) error {
 	return nil
 }
 
+// ListObjectives reads the objectives table itself. Everything that needed a
+// list of objectives used to derive one from the work items, which cannot see an
+// objective that has none: a freshly created objective was absent from the
+// board overview and unselectable in the dashboard until its first item existed.
+func (s *Store) ListObjectives(ctx context.Context) ([]work.Objective, error) {
+	rows, err := s.db.QueryContext(ctx, objectiveSelect+" ORDER BY key")
+	if err != nil {
+		return nil, fmt.Errorf("query objectives: %w", err)
+	}
+	defer rows.Close()
+	objectives := make([]work.Objective, 0)
+	for rows.Next() {
+		objective, err := scanObjective(rows)
+		if err != nil {
+			return nil, err
+		}
+		objectives = append(objectives, objective)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate objectives: %w", err)
+	}
+	return objectives, nil
+}
+
 func (s *Store) GetObjectiveContext(ctx context.Context, id string) (ports.ObjectiveContext, error) {
 	var result ports.ObjectiveContext
 	err := s.withinReadTransaction(ctx, func(reader sqlReader) error {

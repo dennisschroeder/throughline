@@ -382,3 +382,61 @@ func TestItemDetailHandlerServesReadOnlyItem(t *testing.T) {
 		t.Fatalf("expected read_only=true for an item with no open gate, got %+v", detail.WorkItem)
 	}
 }
+
+// TestSwitcherListsAndSelectsAnObjectiveWithNoWorkItems is REP-03's second
+// criterion on the server side. The switcher payload used to be derived from the
+// work items, so an objective a person had just created was missing from the
+// list and could not be selected until it had its first item.
+func TestSwitcherListsAndSelectsAnObjectiveWithNoWorkItems(t *testing.T) {
+	h := newTestHarness(t)
+	withPlan, _ := h.setupObjectiveWithOpenPlan()
+	h.login("human:reviewer")
+
+	created := h.call("create_objective", map[string]any{
+		"actor_id": "human:reviewer", "idempotency_key": "switcher-empty", "key": "OBJ-SWITCHER-EMPTY",
+		"title": "Just created, no work yet", "desired_outcome": "Selectable straight away", "phase": "discovery",
+	})
+	emptyID := created["result"].(map[string]any)["id"].(string)
+
+	var resp ObjectivesResponse
+	if status := h.getJSON("/dashboard/api/v1/objectives", &resp).StatusCode; status != http.StatusOK {
+		t.Fatalf("objectives status = %d", status)
+	}
+	if len(resp.Objectives) != 2 {
+		t.Fatalf("objectives = %+v, want both the planned and the empty one", resp.Objectives)
+	}
+	var empty *ObjectiveSummary
+	for index := range resp.Objectives {
+		if resp.Objectives[index].ID == emptyID {
+			empty = &resp.Objectives[index]
+		}
+	}
+	if empty == nil {
+		t.Fatalf("the objective with no work items is absent from the switcher: %+v", resp.Objectives)
+	}
+	if empty.ItemCount != 0 || empty.Phase != "discovery" || empty.Title != "Just created, no work yet" {
+		t.Fatalf("empty objective summary = %+v", *empty)
+	}
+
+	// Selecting it must produce a real snapshot rather than an error, and must
+	// mark it current rather than the objective that happens to have work.
+	var selected ObjectivesResponse
+	if status := h.getJSON("/dashboard/api/v1/objectives?objective_id="+emptyID, &selected).StatusCode; status != http.StatusOK {
+		t.Fatalf("objectives status when selecting the empty objective = %d", status)
+	}
+	for _, summary := range selected.Objectives {
+		if summary.Current != (summary.ID == emptyID) {
+			t.Fatalf("current flag = %+v, want only the selected objective marked current", summary)
+		}
+	}
+	var snapshot LoopSnapshot
+	if status := h.getJSON("/dashboard/api/v1/loop?objective_id="+emptyID, &snapshot).StatusCode; status != http.StatusOK {
+		t.Fatalf("loop status for the empty objective = %d", status)
+	}
+	if snapshot.Objective.ID != emptyID {
+		t.Fatalf("loop snapshot objective = %+v, want the empty one", snapshot.Objective)
+	}
+	if withPlan == emptyID {
+		t.Fatal("test setup collapsed the two objectives")
+	}
+}

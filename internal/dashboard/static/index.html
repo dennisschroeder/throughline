@@ -285,6 +285,17 @@ function announce(text){
 /* ------------------------------------------------------------------------------------
  * Bootstrapping and polling.
  * ---------------------------------------------------------------------------------- */
+function fetchObjectives(){
+  var qs = S.objectiveId ? "?objective_id=" + encodeURIComponent(S.objectiveId) : "";
+  return api("/dashboard/api/v1/objectives" + qs).then(function(resp){
+    S.objectives = resp;
+  });
+}
+
+function refreshObjectives(){
+  return fetchObjectives().then(render);
+}
+
 function boot(){
   api("/dashboard/api/v1/objectives").then(function(resp){
     S.objectives = resp;
@@ -365,7 +376,14 @@ function pollOnce(){
         S.frozenGateOrder = S.snapshot.gates.map(function(g){ return gateKey(g.kind, g.id); });
       }
       var qs2 = "?objective_id=" + encodeURIComponent(S.objectiveId);
-      api("/dashboard/api/v1/loop" + qs2).then(function(snap){ applySnapshot(snap); schedulePoll(); })
+      // Refresh the switcher alongside the snapshot. It used to be fetched once at
+      // boot, so an objective created while the page was open never appeared in it,
+      // and the item and gate counts of the ones that were listed went stale.
+      // The switcher is fetched first and stored without rendering, so a tick
+      // rebuilds the DOM once rather than twice.
+      fetchObjectives().catch(function(){}).then(function(){
+        return api("/dashboard/api/v1/loop" + qs2);
+      }).then(function(snap){ applySnapshot(snap); schedulePoll(); })
         .catch(function(){ schedulePoll(); });
       return;
     }
@@ -895,7 +913,11 @@ function wireApp(){
       S.tab = null;
       S.selection = null;
       window.history.replaceState(null, "", "?objective_id=" + encodeURIComponent(S.objectiveId));
+      // Refresh the switcher too: its rows carry the current marker, and without
+      // this the dot stays on the objective just navigated away from until some
+      // unrelated workspace change happens to trigger a poll refresh.
       loadLoop();
+      refreshObjectives().catch(function(){});
     });
   });
 

@@ -1244,6 +1244,47 @@ func (s *Service) reviewOutputProfileMutation(ctx context.Context, command Revie
 	return reviewed, nil
 }
 
+// ListObjectives returns every objective, including those with no work items.
+func (s *Service) ListObjectives(ctx context.Context) ([]work.Objective, error) {
+	objectives, err := s.store.ListObjectives(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list objectives: %w", err)
+	}
+	return objectives, nil
+}
+
+// ResolveObjective accepts either an objective's identifier or the readable key
+// it is known by, so a caller that has only the key written down can address it
+// without first listing the board. It reads the objectives table rather than
+// opening a transaction, because resolving an address is a read and a workspace
+// holds few objectives.
+func (s *Service) ResolveObjective(ctx context.Context, reference string) (work.Objective, error) {
+	reference = strings.TrimSpace(reference)
+	if reference == "" {
+		return work.Objective{}, fmt.Errorf("resolve objective: %w", ports.ErrNotFound)
+	}
+	objectives, err := s.ListObjectives(ctx)
+	if err != nil {
+		return work.Objective{}, err
+	}
+	// One pass, identifier first: an identifier is the canonical immutable
+	// address, and keys are unique, so a key can only ever be a second-best
+	// match for the same reference.
+	var byKey *work.Objective
+	for index, objective := range objectives {
+		if objective.ID == reference {
+			return objective, nil
+		}
+		if objective.Key == reference && byKey == nil {
+			byKey = &objectives[index]
+		}
+	}
+	if byKey != nil {
+		return *byKey, nil
+	}
+	return work.Objective{}, fmt.Errorf("resolve objective %q: %w", reference, ports.ErrNotFound)
+}
+
 func (s *Service) GetObjectiveContext(ctx context.Context, id string) (ports.ObjectiveContext, error) {
 	result, err := s.store.GetObjectiveContext(ctx, id)
 	if err != nil {

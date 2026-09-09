@@ -129,6 +129,7 @@ type Store interface {
 	WithinTransaction(context.Context, func(Repository) error) error
 	GetWorkItemContext(ctx context.Context, id string) (WorkItemContext, error)
 	ListWorkItemContexts(ctx context.Context) ([]WorkItemContext, error)
+	ListObjectives(ctx context.Context) ([]work.Objective, error)
 	GetObjectiveContext(ctx context.Context, id string) (ObjectiveContext, error)
 	SelectObjectiveContext(ctx context.Context, query ObjectiveContextSelectionQuery) (ObjectiveContextSelection, error)
 	ListOutputProfiles(ctx context.Context) ([]output.Profile, error)

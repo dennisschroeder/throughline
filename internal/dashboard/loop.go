@@ -13,10 +13,10 @@ import (
 	"github.com/dennisschroeder/throughline/internal/ports"
 )
 
-// ObjectivesHandler serves the switcher's contents: every objective the workspace's work
-// items currently reference (see the ListWorkItems-dedup comment on resolveObjectives below
-// for why this, and not a dedicated ListObjectives read, is the source), each with a
-// server-computed open-gate count.
+// ObjectivesHandler serves the switcher's contents: every objective in the workspace, each
+// with its item count and a server-computed open-gate count. It reads the objectives
+// themselves, so an objective a person has just created is listed and selectable before it
+// has any work items.
 func (h *Handlers) ObjectivesHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !h.hostAllowed(r) {
@@ -118,42 +118,31 @@ func (h *Handlers) ChangesHandler() http.Handler {
 	})
 }
 
-// objectivesFromItems dedups the distinct objectives referenced by this workspace's work
-// items. There is no ListObjectives read path (see the original snapshot builder this
-// package replaces), so — as before — a workspace with zero work items yields zero
-// objectives, and an objective with no work items yet is invisible to the switcher.
-func objectivesFromItems(items []ports.WorkItemContext) []work.Objective {
-	seen := make(map[string]bool)
-	var out []work.Objective
-	for _, item := range items {
-		id := item.Objective.ID
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		out = append(out, item.Objective)
-	}
-	return out
-}
-
 func resolveObjectiveID(ctx context.Context, service *app.Service, requested string, now time.Time) (string, error) {
 	if requested != "" {
 		return requested, nil
 	}
-	items, err := service.ListWorkItems(ctx)
+	objectives, err := service.ListObjectives(ctx)
 	if err != nil {
 		return "", err
 	}
-	objectives := objectivesFromItems(items)
 	if len(objectives) == 0 {
 		return "", fmt.Errorf("no objectives in this workspace")
 	}
 	if len(objectives) == 1 {
 		return objectives[0].ID, nil
 	}
+	items, err := service.ListWorkItems(ctx)
+	if err != nil {
+		return "", err
+	}
+	itemCounts := map[string]int{}
+	for _, item := range items {
+		itemCounts[item.Objective.ID]++
+	}
 	al := &actorLiveness{lastCallAt: map[string]time.Time{}, now: now}
 	best := objectives[0]
-	bestGates := -1
+	bestGates, bestItems := -1, itemCounts[objectives[0].ID]
 	for _, obj := range objectives {
 		objCtx, err := service.GetObjectiveContext(ctx, obj.ID)
 		if err != nil {
@@ -163,10 +152,17 @@ func resolveObjectiveID(ctx context.Context, service *app.Service, requested str
 		if err != nil {
 			continue
 		}
-		n := len(gates)
-		if n > bestGates || (n == bestGates && obj.UpdatedAt.After(best.UpdatedAt)) {
-			bestGates = n
-			best = obj
+		// Most blocking gates wins, then the objective that actually holds work,
+		// then most recently updated. Without the middle term an objective that
+		// was just created and has nothing in it wins every all-zero contest,
+		// because it is trivially the most recently updated one — so opening the
+		// dashboard right after creating an objective showed an empty board.
+		n, count := len(gates), itemCounts[obj.ID]
+		better := n > bestGates ||
+			(n == bestGates && count > bestItems) ||
+			(n == bestGates && count == bestItems && obj.UpdatedAt.After(best.UpdatedAt))
+		if better {
+			bestGates, bestItems, best = n, count, obj
 		}
 	}
 	return best.ID, nil
@@ -177,7 +173,13 @@ func buildObjectivesResponse(ctx context.Context, service *app.Service, workspac
 	if err != nil {
 		return ObjectivesResponse{}, err
 	}
-	objectives := objectivesFromItems(items)
+	// Read the objectives rather than deriving them from the items: an objective
+	// with none is exactly the one a person has just created and wants to switch
+	// to, and deriving hid it until its first item existed.
+	objectives, err := service.ListObjectives(ctx)
+	if err != nil {
+		return ObjectivesResponse{}, err
+	}
 	al := &actorLiveness{lastCallAt: map[string]time.Time{}, now: now}
 	resp := ObjectivesResponse{WorkspacePath: workspaceID, ActorID: actorID}
 	for _, obj := range objectives {
