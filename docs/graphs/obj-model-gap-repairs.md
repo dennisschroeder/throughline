@@ -92,6 +92,97 @@ graph above.
   targets, unchanged existing parent modes, process-lock preservation and serialized file
   preparation all pass.
 
+### REP-02 EFFECTS
+
+- Commits: `c6e32e2` (`feat: return versioned collateral effects from every mutation`),
+  `4242ea0` (`test: gate the effects contract instead of asserting it in prose`),
+  `f08ba39` (`refactor: make a tool response impossible to build without validating it`),
+  `89292b6` (`test: pin the collected tables and refuse a response built outside the validator`).
+- Claims: `01a08522-cf3c-79cf-b22f-ecb6140ae622`, then `01a08629-db44-703e-bdb9-72a4bb3cecb2`
+  after the first lapsed during an interruption. Both had to be re-established by returning the
+  item to `ready` first: an expired but unreleased claim on an `in_progress` item is not directly
+  reclaimable.
+- Inheritance: the node was executed by `gpt-5.6-luna` into an unowned working copy outside the
+  worktree, with no git metadata and nothing committed. That copy was audited file by file rather
+  than applied. 31 files were taken; `rep02_refactor_calls.go`, a scratch code generator, was
+  rejected; 16 collateral activity records it added were dropped as REP-07 scope. Seven defects in
+  it were fixed before any review ran.
+- Final gate: all six repository commands exited zero on 2026-09-09 at `f08ba39`, plus
+  `go test ./... -race -shuffle=on` and three consecutive clean full-suite runs.
+
+#### Review
+
+Five passes, **all recorded as degraded**: cross-provider review was unavailable, so every reviewer
+was Claude, the same family as the author of the fixes. Pass 1 fanned out into three independent
+audits on disjoint questions (collection mechanics, contract coverage across all 39 mutating tools,
+the idempotency replay contract); passes 2-5 were single readers on a narrowing scope.
+
+Passes 1 and 2 found ten defects in behaviour. Passes 3, 4 and 5 found **none** — every later
+finding was a guarantee that nothing checked. Each regression test written in response was run
+against the code with the thing it gates removed, and observed to fail. The loop ended because the
+budget was spent, not because a pass came back empty; passes 3 to 5 were each still productive.
+
+| Pass | Behavioural defects | Ungated guarantees | Rejected / deferred |
+|---|---|---|---|
+| 1 | 6 | 1 | 2 out of scope, 1 latent |
+| 2 | 4 | 2 | 1 filed, 1 accepted as a decision |
+| 3 | 0 | 3 | 1 recorded as a finding |
+| 4 | 0 | 3 | — |
+| 5 | 0 | 2 | 2 cosmetic, 1 latent |
+
+The defects worth naming, because each was silent: read-only tools emitted a null `effects` member
+the schema forbids; `get_item` reported `expected_output.version` 0; revoking an approval never
+touched the action; the legacy replay whitelist named operations that write a second row, and one
+whose version field is itself new in this change, so an upgraded replay would have reported version
+0 rather than refusing; `ReplaceWorkItemCapabilities` deleted in Go map order, so the same removal
+returned its effects in a different order on every call.
+
+Two of those were self-inflicted by an earlier fix in the same node: expiring the action
+unconditionally on revocation broke revocation for an action already executing, and the first
+attempt at the legacy guard was too narrow. Both were caught, one by the author before the reviewer
+reached it.
+
+The ungated guarantees mattered more than the defects, and each was found only because a pass ran
+after the behaviour was already correct:
+
+- Deleting eight entries from `effectTables` left the whole suite green — the entire
+  output-production chain could have stopped being reported with no signal at all.
+- Removing the output-validation call left the suite green, so the effect version's advertised
+  minimum was enforced by a validator nobody was obliged to call. Folding validation into the one
+  function that builds a response fixed that; pass 5 then showed the guarantee still rested on the
+  *callers* of that function, since reconstructing a response inline at either dispatch site
+  bypassed it and the suite stayed green.
+- The restart fixture stripped the stored effects before reopening, so it had never once read
+  effects back out of a stored response.
+- Twenty-three of the twenty-seven collected tables carry a bare `NEW.id`, and nothing pinned them:
+  pointing `progress_entries` at its work item id, or reporting an external-action revision's
+  revision number as its version, are both valid SQL against real columns and both silently wrong.
+  `effectTables` is now a copy of a reviewed list rather than the only statement of it.
+
+#### Dispositions carried across passes
+
+| Finding | Disposition |
+|---|---|
+| `request_attention` accepts three target kinds its dispatch does not handle | Rejected: REP-08 narrows attention target kinds |
+| No MCP tool assigns an actor capability, so `actor_capabilities` is unreachable | Rejected: REP-11 carries capability assignment |
+| `capabilities` rows stay partially populated across two insert paths | Filed; pre-existing, made visible by this node |
+| Expiry is terminal, and one revocation expires the action for every principal | Accepted, recorded as decision `01a08635-6d18-73a5-bb25-ab2149a30217` |
+| FK cascade and set-null fire the collector triggers | Latent: nothing deletes plans or work items today |
+| The effect `kind` vocabulary is a public contract `get_semantic_model` does not describe | Recorded as finding `01a0864a-c57d-7631-9cbe-d088f935aa1e` |
+| `Effect` has no create/update/delete member, so a delete is indistinguishable from a write | Open question `01a08629-8df4-76e9-bb3f-7348ae75ec36` to the owner; this node ships the three-field shape the criteria name |
+
+#### Evidence
+
+- Bulk plan approval and profile supersession, deletes, all three approval kinds, restart replay of
+  a multi-entity mutation, the legacy upgrade and the legacy refusal, and a database upgraded with
+  data already in it, are covered in `internal/sqlite/effects_integration_test.go` and
+  `internal/sqlite/effects_upgrade_test.go`.
+- The MCP contract is gated at the wire in `internal/mcp/rep02_contract_test.go`, which derives the
+  39 mutating and 11 read-only tools from a live server rather than from a duplicated constant.
+- Two SQLite properties the design rests on were measured rather than assumed:
+  `ALTER TABLE ADD COLUMN ... CHECK (version > 0)` is enforced by `modernc.org/sqlite`, and TEMP
+  tables are transactional, so a rolled-back transaction leaves no stale effect rows.
+
 ## Feedback
 
 - REP-01 was estimated small but consumed the full five-pass review budget because file permissions
@@ -100,3 +191,45 @@ graph above.
 - The implementation agent could write only to `/tmp`, and a later replacement agent could not
   start a shell because the configured workspace root was absent. The parent applied reviewed
   patches in the actual worktree and independently reran every gate.
+
+### REP-02
+
+- **The graph budgeted one implementation node and got a handover instead.** REP-02 was executed by
+  another model into a directory with no git metadata that was never committed, and the parent
+  inherited it as an artefact to audit rather than a result to accept. That is the second node in a
+  row where the implementation agent could not write where the work belonged. The graph's node type
+  assumes the implementer and the gate see the same tree; twice now they have not. Either the graph
+  should name the worktree as part of a node's contract, or it should carry an explicit
+  inherit-and-audit node so the audit is budgeted rather than absorbed silently.
+- **The five-pass review budget was spent, and the last three passes justified themselves for a
+  reason the graph does not model.** Passes 3, 4 and 5 found no wrong behaviour. Under a rule that
+  stops at zero findings they would not have run, and the three largest holes in the work would
+  have shipped: `effectTables` could lose eight entries silently, output validation could be deleted
+  silently, and the restart fixture never tested the branch it was written for. The distinction that
+  earned those passes is between *the code is wrong* and *nothing would notice if it were*. The
+  graph's edge condition is "gate green", which cannot see the second kind. A node whose deliverable
+  is a contract should carry an explicit mutation check — remove the mechanism, expect red — as part
+  of its gate rather than as a reviewer's initiative.
+- **Two defects were introduced by fixes to earlier findings in the same node.** Expiring the
+  external action unconditionally on revocation, and the first version of the legacy replay guard.
+  Both were caught, one before a reviewer reached it, but the budget counted them as new findings
+  rather than as rework. A fix is a change and deserves the same suspicion as the code it replaces;
+  the loop budget should probably distinguish findings against original work from findings against
+  repairs, because the second kind is a signal that the node is churning.
+- **The estimate held.** REP-02 was estimated large and was large. Unlike REP-01, the review budget
+  was spent on real defects rather than on one intricate interaction: seven behavioural defects
+  across two passes, spread over the adapter, the application layer, the store and the domain, which
+  is what a change touching every mutation looks like.
+- **Delegating the mechanical audit paid, and delegating judgment to the same model family did
+  not fully.** The exhaustive tool-to-table trace across all 39 mutating tools was cheap, complete,
+  and found nothing wrong — exactly the shape of work worth handing to a cheaper reader behind a
+  gate. Every review pass was same-family and is recorded as degraded; the parent independently
+  re-measured the two SQLite properties the design rests on rather than accept them as reported,
+  and that habit is what the degraded label should mean in practice.
+- **Three interface gaps surfaced while operating the tracker, not while building.** An expired but
+  unreleased claim on an `in_progress` item cannot be reclaimed without first transitioning back to
+  `ready`; `ask_question` bound to a work item blocks it, with no way to record a non-blocking
+  question against an item; and `claim_item` does not transition to `in_progress` by default though
+  the handoff says it does. All three were hit by the agent doing the work, which is the only way
+  they surface. Worth a standing habit: record what the tracker made awkward, not only what the
+  code needed.
