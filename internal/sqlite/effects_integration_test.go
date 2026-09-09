@@ -838,3 +838,160 @@ func TestLegacyReplayRefusesWhenTheVersionFieldItselfIsNewer(t *testing.T) {
 		t.Fatalf("refused replay wrote actors: %d -> %d", actors, actorsAfter)
 	}
 }
+
+// TestEveryEntityTableIsCollected gates the first acceptance criterion against
+// the schema itself. effectTables is hand-maintained, so without this a merge
+// that drops an entry, or a migration that adds a table nobody lists, silently
+// stops reporting those entities and no other check notices: the generated
+// model's digest does not move for a migration, and every existing test asserts
+// only the effects it happens to expect.
+func TestEveryEntityTableIsCollected(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "collected.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := database.db.QueryContext(ctx, `
+SELECT name FROM main.sqlite_master
+WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	// Deliberately uncollected. Activity and idempotency rows are internal
+	// records of a mutation, not entities it changed; schema_migrations is the
+	// migration ledger.
+	uncollected := map[string]string{
+		"activity":            "internal record of a mutation, never an effect",
+		"idempotency_records": "internal record of a mutation, never an effect",
+		"schema_migrations":   "migration ledger, not workspace state",
+	}
+	collected := make(map[string]bool, len(effectTables))
+	for _, table := range effectTables {
+		if collected[table.table] {
+			t.Fatalf("effectTables lists %q twice", table.table)
+		}
+		collected[table.table] = true
+	}
+
+	var missing []string
+	present := make(map[string]bool)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		present[name] = true
+		if collected[name] || uncollected[name] != "" {
+			continue
+		}
+		missing = append(missing, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) > 0 {
+		t.Fatalf("tables in the schema that no mutation would report as an effect: %v\n"+
+			"add each to effectTables, or to this test's uncollected map with the reason it is not an entity", missing)
+	}
+	for _, table := range effectTables {
+		if !present[table.table] {
+			t.Errorf("effectTables lists %q, which the schema does not define", table.table)
+		}
+	}
+}
+
+// TestMultiEntityEffectsSurviveARestartUnchanged gates the persisted-effects
+// branch of the third criterion. The other restart test strips the effects
+// member first and therefore exercises the legacy reconstruction path; this one
+// leaves the stored response alone, so the replay must come back through the
+// effects the first call actually committed — several entities, in order,
+// byte-identical, with no second write.
+func TestMultiEntityEffectsSurviveARestartUnchanged(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "restart-multi.db")
+	database, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	service := app.NewService(database.Store(), &testIDs{}, testClock{})
+	if _, err := app.UnwrapMutation(service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: "human:owner", Kind: work.ActorTypeHuman, DisplayName: "Owner"}, IdempotencyKey: "restart-owner"})); err != nil {
+		t.Fatal(err)
+	}
+	objective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{ActorID: "human:owner", IdempotencyKey: "restart-objective", Key: "OBJ-RESTART", Title: "Survive a restart", DesiredOutcome: "Stored effects replay unchanged.", Phase: work.ObjectivePlanning}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := app.CreateWorkItemCommand{
+		ActorID: "human:owner", IdempotencyKey: "restart-item", Key: "TH-RESTART", ObjectiveID: objective.ID,
+		Title: "Several entities in one write", Kind: "research", CommitmentState: work.ItemProposed,
+		ExecutionStatus: work.StatusBacklog, Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
+		ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny, AttentionState: work.AttentionNone,
+		RequiredCapabilities: []string{"alpha_capability", "beta_capability"},
+		AcceptanceCriteria: []app.ProposedAcceptanceCriterion{
+			{Text: "First criterion.", Required: true, Ordinal: 1},
+			{Text: "Second criterion.", Required: true, Ordinal: 2},
+		},
+	}
+	created, err := service.CreateWorkItem(ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(created.Effects) < 5 {
+		t.Fatalf("create effects = %#v, want the item with its criteria and capabilities", created.Effects)
+	}
+	counts := func() (items, criteria, capabilities int) {
+		t.Helper()
+		if err := database.db.QueryRowContext(ctx, "SELECT count(*) FROM work_items").Scan(&items); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.db.QueryRowContext(ctx, "SELECT count(*) FROM acceptance_criteria").Scan(&criteria); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.db.QueryRowContext(ctx, "SELECT count(*) FROM work_item_capabilities").Scan(&capabilities); err != nil {
+			t.Fatal(err)
+		}
+		return items, criteria, capabilities
+	}
+	itemsBefore, criteriaBefore, capabilitiesBefore := counts()
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := reopened.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	database = reopened
+	// A failing id generator proves the replay allocated nothing, so it cannot
+	// have re-executed the mutation.
+	replayService := app.NewService(reopened.Store(), &testIDs{fail: true}, testClock{})
+	replayed, err := replayService.CreateWorkItem(ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.Result.ID != created.Result.ID {
+		t.Fatalf("replayed item = %q, want %q", replayed.Result.ID, created.Result.ID)
+	}
+	if !slices.Equal(replayed.Effects, created.Effects) {
+		t.Fatalf("effects changed across restart:\nbefore: %#v\nafter:  %#v", created.Effects, replayed.Effects)
+	}
+	itemsAfter, criteriaAfter, capabilitiesAfter := counts()
+	if itemsAfter != itemsBefore || criteriaAfter != criteriaBefore || capabilitiesAfter != capabilitiesBefore {
+		t.Fatalf("replay wrote a second time: items %d->%d, criteria %d->%d, capabilities %d->%d",
+			itemsBefore, itemsAfter, criteriaBefore, criteriaAfter, capabilitiesBefore, capabilitiesAfter)
+	}
+}

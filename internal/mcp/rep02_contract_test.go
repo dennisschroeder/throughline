@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	protocol "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/dennisschroeder/throughline/internal/app"
 )
 
 // rep02ToolInventory reads the advertised tool surface from a live server rather
@@ -272,5 +274,29 @@ func TestREP02MutatingResponsesCarryCommittedEffects(t *testing.T) {
 		if !kinds[kind] {
 			t.Fatalf("create_item effects %#v omit %s", itemEffects, kind)
 		}
+	}
+}
+
+// TestREP02OutputValidationRejectsAZeroEffectVersion gates the enforcement, not
+// the advertisement. The effect schema promises "minimum": 1; asserting only
+// that the promise appears in the schema leaves the validator free to ignore it,
+// which is how the bound became decoration once already. The values go through
+// snakeCaseValue exactly as the handler builds them, so the test cannot drift
+// from what is really validated.
+func TestREP02OutputValidationRejectsAZeroEffectVersion(t *testing.T) {
+	schema := outputSchema("create_objective", false)
+	effectsSchema := rep02SchemaMap(t, rep02SchemaMap(t, schema, "properties"), "effects")
+	encoded := func(version int) any {
+		return snakeCaseValue([]app.Effect{{Kind: "objective", ID: "OBJ-1", Version: version}})
+	}
+	if err := validateJSONSchema(encoded(1), effectsSchema, schema, "output.effects"); err != nil {
+		t.Fatalf("valid effect rejected: %v", err)
+	}
+	for name, version := range map[string]int{"zero": 0, "negative": -1} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateJSONSchema(encoded(version), effectsSchema, schema, "output.effects"); err == nil {
+				t.Fatalf("effect version %d passed output validation", version)
+			}
+		})
 	}
 }
