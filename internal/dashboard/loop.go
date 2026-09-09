@@ -34,7 +34,18 @@ func (h *Handlers) ObjectivesHandler() http.Handler {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+		// The current marker is addressed the same way the loop payload is, so a
+		// key in the URL marks the same row the snapshot describes.
 		current := strings.TrimSpace(r.URL.Query().Get("objective_id"))
+		if current != "" {
+			objective, resolveErr := service.ResolveObjective(r.Context(), current)
+			if resolveErr != nil {
+				h.logError("resolve current objective", resolveErr)
+				http.Error(w, "no objective found", http.StatusNotFound)
+				return
+			}
+			current = objective.ID
+		}
 		resp, err := buildObjectivesResponse(r.Context(), service, session.WorkspaceID, session.ActorID, current, h.now())
 		if err != nil {
 			h.logError("build objectives response", err)
@@ -120,7 +131,16 @@ func (h *Handlers) ChangesHandler() http.Handler {
 
 func resolveObjectiveID(ctx context.Context, service *app.Service, requested string, now time.Time) (string, error) {
 	if requested != "" {
-		return requested, nil
+		// A requested objective is an address, not a promise that it exists, and
+		// list_objectives now prints keys prominently enough that pasting one
+		// into the URL is the obvious move. Resolving here turns an unknown or
+		// mistyped reference into the 404 this handler already has a branch for,
+		// instead of letting it reach the snapshot builder and surface as 500.
+		objective, err := service.ResolveObjective(ctx, requested)
+		if err != nil {
+			return "", err
+		}
+		return objective.ID, nil
 	}
 	objectives, err := service.ListObjectives(ctx)
 	if err != nil {
@@ -141,8 +161,10 @@ func resolveObjectiveID(ctx context.Context, service *app.Service, requested str
 		itemCounts[item.Objective.ID]++
 	}
 	al := &actorLiveness{lastCallAt: map[string]time.Time{}, now: now}
-	best := objectives[0]
-	bestGates, bestItems := -1, itemCounts[objectives[0].ID]
+	// bestGates below every possible len(gates), so the first objective that
+	// builds successfully seats itself and the seed values never survive.
+	var best work.Objective
+	bestGates, bestItems := -1, -1
 	for _, obj := range objectives {
 		objCtx, err := service.GetObjectiveContext(ctx, obj.ID)
 		if err != nil {
@@ -182,13 +204,12 @@ func buildObjectivesResponse(ctx context.Context, service *app.Service, workspac
 	}
 	al := &actorLiveness{lastCallAt: map[string]time.Time{}, now: now}
 	resp := ObjectivesResponse{WorkspacePath: workspaceID, ActorID: actorID}
+	itemCounts := map[string]int{}
+	for _, item := range items {
+		itemCounts[item.Objective.ID]++
+	}
 	for _, obj := range objectives {
-		itemCount := 0
-		for _, item := range items {
-			if item.Objective.ID == obj.ID {
-				itemCount++
-			}
-		}
+		itemCount := itemCounts[obj.ID]
 		objCtx, err := service.GetObjectiveContext(ctx, obj.ID)
 		if err != nil {
 			return ObjectivesResponse{}, err

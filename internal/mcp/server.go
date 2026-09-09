@@ -102,20 +102,20 @@ type adapter struct {
 
 func (a *adapter) addTools(server *mcp.Server) {
 	a.add(server, "board_overview", "Compact orientation summary. objective_id accepts an objective's key.", true, schemaFor[boardOverviewInput](), a.boardOverview)
-	a.add(server, "list_items", "List structured work-item summaries.", true, schemaFor[listItemsInput](), a.listItems)
+	a.add(server, "list_items", "List structured work-item summaries. objective_id accepts an objective's key.", true, schemaFor[listItemsInput](), a.listItems)
 	a.add(server, "list_ready_items", "List executable candidate work without claiming it.", true, schemaFor[listReadyInput]("actor_id"), a.listReady)
 	a.add(server, "get_item", "Retrieve structured work-item context.", true, schemaFor[getItemInput]("id"), a.getItem)
 	a.add(server, "list_objectives", "List every objective, including ones with no work items yet.", true, schemaFor[workspaceInput](), a.listObjectives)
 	a.add(server, "get_objective_context", "Retrieve deterministic, bounded objective continuation context. objective_id accepts an objective's key.", true, schemaFor[objectiveContextInput]("objective_id"), a.getObjectiveContext)
-	a.add(server, "get_changes", "Read cursor-based activity deltas.", true, schemaFor[changesInput](), a.getChanges)
+	a.add(server, "get_changes", "Read cursor-based activity deltas. objective_id accepts an objective's key.", true, schemaFor[changesInput](), a.getChanges)
 	a.addWorkspaceless(server, "get_semantic_model", "Read the embedded Throughline semantic model. Domain-neutral; not workspace-scoped.", true, semanticModelSchema(), a.getSemanticModel)
 	a.add(server, "list_output_profiles", "List governed persisted output profiles.", true, schemaFor[workspaceInput](), a.listProfiles)
 	a.add(server, "get_output_profile", "Read one exact governed output profile version.", true, schemaFor[outputProfileInput]("profile_name", "profile_version"), a.getProfile)
-	a.add(server, "list_outputs", "Discover accepted reusable outputs.", true, schemaFor[outputsInput](), a.listOutputs)
+	a.add(server, "list_outputs", "Discover accepted reusable outputs. objective_id accepts an objective's key.", true, schemaFor[outputsInput](), a.listOutputs)
 	a.add(server, "register_actor", "Register a trusted-local actor.", false, schemaFor[registerActorInput]("actor_id", "kind", "display_name", "idempotency_key"), a.registerActor)
 	a.add(server, "create_objective", "Create durable intent.", false, schemaFor[createObjectiveInput]("actor_id", "idempotency_key", "key", "title", "desired_outcome", "phase"), a.createObjective)
-	a.add(server, "patch_objective", "Update safe objective details with optimistic concurrency.", false, schemaFor[patchObjectiveInput]("objective_id", "actor_id", "idempotency_key", "expected_version"), a.patchObjective)
-	a.add(server, "create_item", "Create one proposed domain-neutral work item.", false, schemaFor[createItemInput]("actor_id", "idempotency_key", "key", "objective_id", "title", "kind"), a.createItem)
+	a.add(server, "patch_objective", "Update safe objective details with optimistic concurrency. objective_id accepts an objective's key.", false, schemaFor[patchObjectiveInput]("objective_id", "actor_id", "idempotency_key", "expected_version"), a.patchObjective)
+	a.add(server, "create_item", "Create one proposed domain-neutral work item. objective_id accepts an objective's key.", false, schemaFor[createItemInput]("actor_id", "idempotency_key", "key", "objective_id", "title", "kind"), a.createItem)
 	a.add(server, "patch_item", "Update safe work-item details with optimistic concurrency.", false, patchItemSchema(), a.patchItem)
 	a.add(server, "request_attention", "Request an orthogonal human attention state for a governed target.", false, requestAttentionSchema(), a.requestAttention)
 	a.add(server, "request_approval", "Request an approval for a governed target.", false, requestApprovalSchema(), a.requestApproval)
@@ -123,13 +123,13 @@ func (a *adapter) addTools(server *mcp.Server) {
 	a.add(server, "approve_work_item_execution", "Grant a specific actor approval to claim and execute a work item under an approval-required execution policy.", false, schemaFor[approveWorkItemExecutionInput]("work_item_id", "actor_id", "approved_for_actor_id", "expected_version", "idempotency_key", "request", "rationale"), a.approveWorkItemExecution)
 	a.add(server, "block_item", "Create a persisted manual blocker.", false, schemaFor[blockItemInput]("work_item_id", "actor_id", "idempotency_key", "expected_version", "reason"), a.blockItem)
 	a.add(server, "unblock_item", "Resolve a persisted manual blocker.", false, schemaFor[unblockItemInput]("blocker_id", "actor_id", "idempotency_key", "expected_version", "resolution"), a.unblockItem)
-	a.add(server, "transition_objective", "Move an objective through its governed phase lifecycle.", false, schemaFor[transitionObjectiveInput]("objective_id", "actor_id", "target_phase", "expected_version", "idempotency_key"), a.transitionObjective)
-	a.add(server, "propose_plan", "Create a proposed plan with domain-neutral work.", false, schemaFor[planInput]("objective_id", "actor_id", "idempotency_key", "title", "items"), a.proposePlan)
+	a.add(server, "transition_objective", "Move an objective through its governed phase lifecycle. objective_id accepts an objective's key.", false, schemaFor[transitionObjectiveInput]("objective_id", "actor_id", "target_phase", "expected_version", "idempotency_key"), a.transitionObjective)
+	a.add(server, "propose_plan", "Create a proposed plan with domain-neutral work. objective_id accepts an objective's key.", false, schemaFor[planInput]("objective_id", "actor_id", "idempotency_key", "title", "items"), a.proposePlan)
 	a.add(server, "review_plan", "Approve or reject a proposed plan.", false, schemaFor[reviewPlanInput]("plan_id", "actor_id", "idempotency_key", "decision", "reason", "expected_version"), a.reviewPlan)
-	a.add(server, "record_context", "Record typed objective or work-item context.", false, schemaFor[recordContextInput]("objective_id", "actor_id", "idempotency_key", "kind", "title", "status"), a.recordContext)
+	a.add(server, "record_context", "Record typed objective or work-item context. objective_id accepts an objective's key.", false, schemaFor[recordContextInput]("objective_id", "actor_id", "idempotency_key", "kind", "title", "status"), a.recordContext)
 	a.add(server, "transition_context", "Transition a context record through its governed kind-specific lifecycle.", false, schemaFor[transitionContextInput]("context_record_id", "actor_id", "target_status", "expected_version", "idempotency_key"), a.transitionContext)
-	a.add(server, "record_decision", "Record a durable accepted decision.", false, schemaFor[recordDecisionInput]("objective_id", "actor_id", "idempotency_key", "title", "decision"), a.recordDecision)
-	a.add(server, "ask_question", "Record a durable open question.", false, schemaFor[askQuestionInput]("objective_id", "actor_id", "idempotency_key", "question"), a.askQuestion)
+	a.add(server, "record_decision", "Record a durable accepted decision. objective_id accepts an objective's key.", false, schemaFor[recordDecisionInput]("objective_id", "actor_id", "idempotency_key", "title", "decision"), a.recordDecision)
+	a.add(server, "ask_question", "Record a durable open question. objective_id accepts an objective's key.", false, schemaFor[askQuestionInput]("objective_id", "actor_id", "idempotency_key", "question"), a.askQuestion)
 	a.add(server, "answer_question", "Answer or waive an open question.", false, schemaFor[answerQuestionInput]("question_id", "actor_id", "idempotency_key", "expected_version"), a.answerQuestion)
 	a.add(server, "propose_output_profile", "Propose a governed immutable output profile version.", false, schemaFor[proposeOutputProfileInput]("actor_id", "idempotency_key", "name", "version", "structure", "semantics", "validation"), a.proposeOutputProfile)
 	a.add(server, "review_output_profile", "Activate or reject a proposed output profile.", false, schemaFor[reviewOutputProfileInput]("profile_id", "actor_id", "idempotency_key", "expected_version", "decision", "reason"), a.reviewOutputProfile)
@@ -1200,6 +1200,15 @@ func (a *adapter) buildErrorPayload(ctx context.Context, service *app.Service, e
 			for _, field := range []string{"id", "work_item_id", "objective_id", "plan_id", "profile_id", "action_id", "output_revision_id", "execution_id", "approval_id"} {
 				var id string
 				if json.Unmarshal(input[field], &id) == nil && id != "" {
+					// objective_id may be the readable key, and every lookup below
+					// is by identifier. Without this the caller who addressed the
+					// objective by key gets a version_conflict with no current
+					// block, which is the one thing that conflict exists to carry.
+					if field == "objective_id" {
+						if resolved, resolveErr := resolveObjectiveReference(ctx, service, id); resolveErr == nil && resolved != "" {
+							id = resolved
+						}
+					}
 					if current, getErr := service.GetWorkItem(ctx, id); getErr == nil {
 						payload["current"] = map[string]any{"id": current.WorkItem.ID, "key": current.WorkItem.Key, "version": current.WorkItem.Version, "status": current.WorkItem.ExecutionStatus}
 						return payload
@@ -1322,7 +1331,6 @@ type objectiveSummary struct {
 	Title          string              `json:"title"`
 	Phase          work.ObjectivePhase `json:"phase"`
 	DesiredOutcome string              `json:"desired_outcome"`
-	Version        int                 `json:"version"`
 	ItemCounts     map[string]int      `json:"item_counts"`
 }
 
@@ -1352,7 +1360,7 @@ func (a *adapter) listObjectives(ctx context.Context, service *app.Service, raw 
 		}
 		summaries = append(summaries, objectiveSummary{
 			ID: objective.ID, Key: objective.Key, Title: objective.Title, Phase: objective.Phase,
-			DesiredOutcome: objective.DesiredOutcome, Version: objective.Version, ItemCounts: byStatus,
+			DesiredOutcome: objective.DesiredOutcome, ItemCounts: byStatus,
 		})
 	}
 	return summaries, nil
@@ -1720,12 +1728,9 @@ func (a *adapter) getObjectiveContext(ctx context.Context, service *app.Service,
 	return service.SelectObjectiveContext(ctx, app.ObjectiveContextQuery{ObjectiveID: objective.ID, ActorID: in.ActorID, Include: in.Include, MaxItemsPerSection: in.MaxItems})
 }
 
-// resolveObjectiveReference turns an objective_id input into an objective's
-// identifier, accepting the readable key too. Every tool that takes
-// objective_id goes through it, because a field that resolves a key on some
-// tools and silently matches nothing on others is worse than one that never
-// accepted keys: a filter that finds no objective answers "no work here"
-// instead of "no such objective".
+// resolveObjectiveIn is resolveObjectiveReference against a slice the caller
+// already holds. board_overview reads every objective anyway, and resolving
+// through the service there would read the table a second time.
 func resolveObjectiveIn(objectives []work.Objective, reference string) (string, error) {
 	reference = strings.TrimSpace(reference)
 	if reference == "" {
@@ -1746,6 +1751,12 @@ func resolveObjectiveIn(objectives []work.Objective, reference string) (string, 
 	return "", fmt.Errorf("resolve objective %q: %w", reference, ports.ErrNotFound)
 }
 
+// resolveObjectiveReference turns an objective_id input into an objective's
+// identifier, accepting the readable key too. Every tool that takes
+// objective_id goes through it, because a field that resolves a key on some
+// tools and silently matches nothing on others is worse than one that never
+// accepted keys: a filter that finds no objective answers "no work here"
+// instead of "no such objective".
 func resolveObjectiveReference(ctx context.Context, service *app.Service, reference string) (string, error) {
 	if strings.TrimSpace(reference) == "" {
 		return "", nil

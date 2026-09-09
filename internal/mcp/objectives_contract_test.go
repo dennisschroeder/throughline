@@ -109,17 +109,53 @@ func TestOrientationSeesAnObjectiveWithNoWorkItems(t *testing.T) {
 		}
 	}
 
-	// A filter that resolves nothing must say so rather than answer "no work".
-	for _, name := range []string{"list_items", "get_changes", "list_outputs"} {
-		arguments := map[string]any{"workspace_id": testWorkspaceID, "objective_id": "OBJ-BUSY"}
-		if name == "get_changes" {
-			arguments["since"] = "0"
-		}
-		scoped := call(name, arguments)
-		if scoped["error"] != nil {
-			t.Fatalf("%s by key = %#v", name, scoped["error"])
-		}
+	// A key must actually select. Asserting only that the call succeeds is what
+	// let the original defect through: these tools answered "no work here" for a
+	// key rather than failing, so a call that returns nothing looks healthy.
+	byKeyItems := call("list_items", map[string]any{"objective_id": "OBJ-BUSY"})
+	items, ok := byKeyItems["result"].(map[string]any)["items"].([]any)
+	if !ok || len(items) != 3 {
+		t.Fatalf("list_items by key = %#v, want the three items of OBJ-BUSY", byKeyItems["result"])
 	}
+	byIDItems := call("list_items", map[string]any{"objective_id": busyID})
+	if len(byIDItems["result"].(map[string]any)["items"].([]any)) != 3 {
+		t.Fatalf("list_items by id = %#v, want the same three items", byIDItems["result"])
+	}
+	emptyItems := call("list_items", map[string]any{"objective_id": "OBJ-ORIENT"})
+	if got := emptyItems["result"].(map[string]any)["items"]; got != nil && len(got.([]any)) != 0 {
+		t.Fatalf("list_items for the empty objective = %#v, want none", got)
+	}
+
+	byKeyChanges := call("get_changes", map[string]any{"objective_id": "OBJ-BUSY", "since": "0"})
+	changes, _ := byKeyChanges["result"].(map[string]any)["changes"].([]any)
+	if len(changes) == 0 {
+		t.Fatalf("get_changes by key = %#v, want the activity of OBJ-BUSY", byKeyChanges["result"])
+	}
+	if len(call("get_changes", map[string]any{"objective_id": busyID, "since": "0"})["result"].(map[string]any)["changes"].([]any)) != len(changes) {
+		t.Fatal("get_changes by key and by id disagree")
+	}
+	if listed := call("list_outputs", map[string]any{"objective_id": "OBJ-BUSY"}); listed["error"] != nil {
+		t.Fatalf("list_outputs by key = %#v", listed["error"])
+	}
+
+	// A mutating tool addressed by key must reach the same objective.
+	call("create_item", map[string]any{
+		"actor_id": "agent:orient", "idempotency_key": "orient-by-key", "key": "TH-BY-KEY",
+		"objective_id": "OBJ-BUSY", "title": "Created by key", "kind": "research",
+	})
+	afterKeyed := call("list_items", map[string]any{"objective_id": busyID})
+	if len(afterKeyed["result"].(map[string]any)["items"].([]any)) != 4 {
+		t.Fatalf("create_item addressed by key did not land on OBJ-BUSY: %#v", afterKeyed["result"])
+	}
+	asked := call("ask_question", map[string]any{
+		"actor_id": "agent:orient", "idempotency_key": "orient-question-by-key",
+		"objective_id": "OBJ-BUSY", "question": "Does a question addressed by key land here?",
+	})
+	if asked["result"].(map[string]any)["objective_id"] != busyID {
+		t.Fatalf("ask_question addressed by key = %#v", asked["result"])
+	}
+
+	// A filter that resolves nothing must say so rather than answer "no work".
 	unknown, err := session.CallTool(ctx, &protocol.CallToolParams{
 		Name: "list_items", Arguments: map[string]any{"workspace_id": testWorkspaceID, "objective_id": "OBJ-NO-SUCH-THING"},
 	})
