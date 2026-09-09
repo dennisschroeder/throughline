@@ -1081,63 +1081,59 @@ func TestEffectTableExpressionsNameRealColumns(t *testing.T) {
 	}
 }
 
-// TestEffectKindsAreTheDocumentedVocabulary pins the kind strings. They are part
-// of every mutating tool's response, so a rename is a change to a public
-// contract and has to be a deliberate, visible edit rather than a side effect of
-// a refactor.
-func TestEffectKindsAreTheDocumentedVocabulary(t *testing.T) {
-	want := []string{
-		"acceptance_criterion", "action_approval", "actor", "actor_capability", "approval",
-		"artifact", "authority_grant", "capability", "claim", "context_record", "decision",
-		"dependency", "execution_approval", "expected_output", "external_action",
-		"external_action_execution", "external_action_revision", "manual_blocker", "objective",
-		"output_profile", "output_requirement", "output_revision", "output_revision_artifact",
-		"plan", "progress_entry", "question", "validation_record", "work_item",
-		"work_item_capability",
+// TestEffectTableDefinitionsAreTheReviewedList pins every collected table as a
+// whole tuple. The structural check above proves an expression names a real
+// column of its own table; it cannot prove it names the right one, and most
+// rows are a bare NEW.id that nothing else would notice changing. Swapping
+// external_action_revisions' version for its revision number, or collapsing
+// progress entries onto their work item id, are both valid SQL against real
+// columns and both silently wrong.
+//
+// The kind strings are part of every mutating tool's response and the composite
+// identifiers are named in the contract, so this list is the reviewed statement
+// of both and effectTables is a copy of it. Changing either half is then a
+// visible, deliberate edit in two places rather than a refactor nobody reads.
+func TestEffectTableDefinitionsAreTheReviewedList(t *testing.T) {
+	const approvalKinds = "CASE WHEN NEW.external_action_id IS NOT NULL THEN 'action_approval' " +
+		"WHEN NEW.work_item_id IS NOT NULL AND NEW.approved_for_actor_id IS NOT NULL THEN 'execution_approval' " +
+		"ELSE 'approval' END"
+	want := []effectTable{
+		{table: "objectives", kind: "objective", id: "NEW.id", version: "NEW.version"},
+		{table: "plans", kind: "plan", id: "NEW.id", version: "NEW.version"},
+		{table: "work_items", kind: "work_item", id: "NEW.id", version: "NEW.version"},
+		{table: "output_profiles", kind: "output_profile", id: "NEW.id", version: "NEW.state_version"},
+		{table: "expected_outputs", kind: "expected_output", id: "NEW.id", version: "NEW.version"},
+		{table: "context_records", kind: "context_record", id: "NEW.id", version: "NEW.version"},
+		{table: "questions", kind: "question", id: "NEW.id", version: "NEW.version"},
+		{table: "decisions", kind: "decision", id: "NEW.id", version: "NEW.version"},
+		{table: "approvals", id: "NEW.id", version: "NEW.version", kindExpr: approvalKinds},
+		{table: "capabilities", kind: "capability", id: "NEW.slug", version: "NEW.version"},
+		{table: "work_item_capabilities", kind: "work_item_capability", id: "NEW.work_item_id || ':' || NEW.capability_slug", version: "NEW.version"},
+		{table: "acceptance_criteria", kind: "acceptance_criterion", id: "NEW.id", version: "NEW.version"},
+		{table: "dependencies", kind: "dependency", id: "NEW.id", version: "NEW.version"},
+		{table: "artifacts", kind: "artifact", id: "NEW.id", version: "NEW.version"},
+		{table: "output_revisions", kind: "output_revision", id: "NEW.id", version: "NEW.state_version"},
+		{table: "output_revision_artifacts", kind: "output_revision_artifact", id: "NEW.output_revision_id || ':' || NEW.artifact_id", version: "NEW.version"},
+		{table: "output_requirements", kind: "output_requirement", id: "NEW.id", version: "NEW.version"},
+		{table: "output_validations", kind: "validation_record", id: "NEW.id", version: "NEW.version"},
+		{table: "actors", kind: "actor", id: "NEW.id", version: "NEW.version"},
+		{table: "actor_capabilities", kind: "actor_capability", id: "NEW.actor_id || ':' || NEW.capability_slug", version: "NEW.version"},
+		{table: "claims", kind: "claim", id: "NEW.id", version: "NEW.version"},
+		{table: "progress_entries", kind: "progress_entry", id: "NEW.id", version: "NEW.version"},
+		{table: "manual_blockers", kind: "manual_blocker", id: "NEW.id", version: "NEW.version"},
+		{table: "external_actions", kind: "external_action", id: "NEW.id", version: "NEW.version"},
+		{table: "external_action_revisions", kind: "external_action_revision", id: "NEW.external_action_id || ':' || NEW.revision", version: "NEW.version"},
+		{table: "authority_grants", kind: "authority_grant", id: "NEW.id", version: "NEW.version"},
+		{table: "external_action_executions", kind: "external_action_execution", id: "NEW.id", version: "NEW.version"},
 	}
-	got := make(map[string]bool)
-	for _, table := range effectTables {
-		if table.kind != "" {
-			got[table.kind] = true
-			continue
+	if len(effectTables) != len(want) {
+		t.Fatalf("effectTables has %d entries, the reviewed list has %d", len(effectTables), len(want))
+	}
+	for index, expected := range want {
+		got := effectTables[index]
+		if got != expected {
+			t.Errorf("entry %d (%s) differs from the reviewed list:\n got:  %+v\n want: %+v", index, expected.table, got, expected)
 		}
-		// The approvals table carries three distinguishable kinds.
-		for _, kind := range []string{"approval", "action_approval", "execution_approval"} {
-			if !strings.Contains(table.kindExpr, "'"+kind+"'") {
-				t.Errorf("approval kind expression does not produce %q: %s", kind, table.kindExpr)
-			}
-			got[kind] = true
-		}
-	}
-	if !slices.Equal(slices.Sorted(maps.Keys(got)), want) {
-		t.Fatalf("effect kind vocabulary changed:\ngot:  %v\nwant: %v", slices.Sorted(maps.Keys(got)), want)
-	}
-}
-
-// TestVersionedLinkIdentifiersAreTheDocumentedFormats pins the four composite
-// identifiers the contract names. Each is a real column reference, so the
-// structural check above passes even when one half is dropped — and dropping a
-// half silently collapses two distinct entities into one effect.
-func TestVersionedLinkIdentifiersAreTheDocumentedFormats(t *testing.T) {
-	want := map[string]string{
-		"work_item_capabilities":    "NEW.work_item_id || ':' || NEW.capability_slug",
-		"actor_capabilities":        "NEW.actor_id || ':' || NEW.capability_slug",
-		"output_revision_artifacts": "NEW.output_revision_id || ':' || NEW.artifact_id",
-		"external_action_revisions": "NEW.external_action_id || ':' || NEW.revision",
-	}
-	found := 0
-	for _, table := range effectTables {
-		expected, documented := want[table.table]
-		if !documented {
-			continue
-		}
-		found++
-		if table.id != expected {
-			t.Errorf("%s effect id = %q, want the documented %q", table.table, table.id, expected)
-		}
-	}
-	if found != len(want) {
-		t.Fatalf("effectTables covers %d of the %d documented versioned links", found, len(want))
 	}
 }
 

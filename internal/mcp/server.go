@@ -222,6 +222,13 @@ func (a *adapter) add(server *mcp.Server, name, description string, readOnly boo
 // addWorkspaceless registers a domain-neutral tool that touches no workspace persistence
 // (only get_semantic_model qualifies) and therefore never resolves a Service.
 func (a *adapter) addWorkspaceless(server *mcp.Server, name, description string, readOnly bool, inputSchema map[string]any, handler func(context.Context, *app.Service, json.RawMessage) (any, error)) {
+	// A workspaceless tool builds no effects, and outputSchema requires an
+	// effects member for anything that is not read-only, so a mutating tool
+	// registered here would advertise a correct schema and then fail every call
+	// at runtime. Refusing at registration turns that into a startup error.
+	if !readOnly {
+		panic("addWorkspaceless cannot register a mutating tool: " + name + " would advertise effects it never builds")
+	}
 	server.AddTool(&mcp.Tool{Name: name, Description: description, InputSchema: inputSchema, OutputSchema: outputSchema(name, readOnly), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly}}, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		if err := validateToolInput(request.Params.Arguments, inputSchema); err != nil {
 			return toolErrorResult(a.errorPayload(ctx, nil, err, request.Params.Arguments)), nil
@@ -991,9 +998,6 @@ func requiredFields(fields []string) []any {
 	return result
 }
 
-// toolResultPayload returns exactly the payload that was validated against the
-// tool's output schema. Building a second map here is how a read-only tool once
-// gained a null "effects" member the schema forbids.
 // validatedToolResult is the only way a tool answers successfully. Validating and
 // encoding are one step so they cannot drift: building the response separately is
 // how a read-only tool once gained a null effects member the schema forbids, and

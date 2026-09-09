@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -308,5 +310,66 @@ func TestREP02OutputValidationRejectsAZeroEffectVersion(t *testing.T) {
 				t.Fatalf("unexpected error for version %d: %s", version, result.Content[0].(*protocol.TextContent).Text)
 			}
 		})
+	}
+}
+
+// TestEveryToolResponseIsBuiltByTheValidatingHelper gates the guarantee, not the
+// helper. Validation lives inside validatedToolResult, so gutting that function
+// fails the test above — but reconstructing a response inline at a call site
+// bypasses it entirely and nothing notices. That is not hypothetical: the whole
+// workspace-scoped path, 49 of the 50 tools, can be made to skip validation by
+// replacing one line, and the effect version's advertised minimum, the required
+// effects member and additionalProperties all become decoration again.
+//
+// A structural check is the honest gate here: a tool response is a CallToolResult
+// literal, and there are exactly two of them, one for success and one for errors,
+// both inside named helpers.
+func TestEveryToolResponseIsBuiltByTheValidatingHelper(t *testing.T) {
+	sources, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := map[string]string{
+		"validatedToolResult": "the one success path, which validates before it encodes",
+		"toolErrorResult":     "the one error path, which carries no result to validate",
+	}
+	found := make(map[string]int, len(allowed))
+	for _, source := range sources {
+		if strings.HasSuffix(source, "_test.go") {
+			continue
+		}
+		content, err := os.ReadFile(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		enclosing := ""
+		for number, line := range strings.Split(string(content), "\n") {
+			if strings.HasPrefix(line, "func ") {
+				enclosing = strings.TrimPrefix(line, "func ")
+				if index := strings.IndexAny(enclosing, "("); index >= 0 && strings.HasPrefix(enclosing, "(") {
+					if close := strings.Index(enclosing, ") "); close >= 0 {
+						enclosing = enclosing[close+2:]
+					}
+				}
+				if index := strings.Index(enclosing, "("); index >= 0 {
+					enclosing = enclosing[:index]
+				}
+			}
+			if !strings.Contains(line, "mcp.CallToolResult{") {
+				continue
+			}
+			if _, ok := allowed[enclosing]; !ok {
+				t.Errorf("%s:%d builds a tool response inside %q, which bypasses output validation;\n"+
+					"build it with validatedToolResult, or extend this test's allowed set with the reason it is safe",
+					source, number+1, enclosing)
+				continue
+			}
+			found[enclosing]++
+		}
+	}
+	for name, reason := range allowed {
+		if found[name] != 1 {
+			t.Errorf("%s builds %d tool responses, want exactly 1 (%s)", name, found[name], reason)
+		}
 	}
 }
