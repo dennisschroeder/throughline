@@ -1976,6 +1976,20 @@ func (a *adapter) registerActor(ctx context.Context, service *app.Service, raw j
 	return service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: in.ActorID, Kind: in.Kind, DisplayName: in.DisplayName}, IdempotencyKey: in.IdempotencyKey})
 }
 
+// measureInput is the wire form of work.Measure: the domain type carries no
+// json tags of its own (every other domain struct flows through the generic
+// snake-case response converter instead), but decode requires an exact tag
+// match on input, so a request-side type is needed here regardless.
+type measureInput struct {
+	Value float64           `json:"value"`
+	Unit  string            `json:"unit"`
+	Basis work.MeasureBasis `json:"basis"`
+}
+
+func (m measureInput) toMeasure() work.Measure {
+	return work.Measure{Value: m.Value, Unit: m.Unit, Basis: m.Basis}
+}
+
 type createObjectiveInput struct {
 	workspaceInput
 	ActorID        string              `json:"actor_id"`
@@ -1985,6 +1999,8 @@ type createObjectiveInput struct {
 	Description    string              `json:"description"`
 	DesiredOutcome string              `json:"desired_outcome"`
 	Phase          work.ObjectivePhase `json:"phase"`
+	Priority       work.Priority       `json:"priority"`
+	Appetite       measureInput        `json:"appetite"`
 }
 
 func (a *adapter) createObjective(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
@@ -1992,18 +2008,21 @@ func (a *adapter) createObjective(ctx context.Context, service *app.Service, raw
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return service.CreateObjective(ctx, app.CreateObjectiveCommand{ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome, Phase: in.Phase})
+	command := app.CreateObjectiveCommand{ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome, Phase: in.Phase, Priority: in.Priority}
+	return service.CreateObjective(ctx, command)
 }
 
 type patchObjectiveInput struct {
 	workspaceInput
-	ObjectiveID     string  `json:"objective_id"`
-	ActorID         string  `json:"actor_id"`
-	IdempotencyKey  string  `json:"idempotency_key"`
-	ExpectedVersion int     `json:"expected_version"`
-	Title           *string `json:"title"`
-	Description     *string `json:"description"`
-	DesiredOutcome  *string `json:"desired_outcome"`
+	ObjectiveID     string         `json:"objective_id"`
+	ActorID         string         `json:"actor_id"`
+	IdempotencyKey  string         `json:"idempotency_key"`
+	ExpectedVersion int            `json:"expected_version"`
+	Title           *string        `json:"title"`
+	Description     *string        `json:"description"`
+	DesiredOutcome  *string        `json:"desired_outcome"`
+	Priority        *work.Priority `json:"priority"`
+	Appetite        *measureInput  `json:"appetite"`
 }
 
 func (a *adapter) patchObjective(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
@@ -2015,7 +2034,12 @@ func (a *adapter) patchObjective(ctx context.Context, service *app.Service, raw 
 	if err != nil {
 		return nil, err
 	}
-	return service.PatchObjective(ctx, app.PatchObjectiveCommand{ObjectiveID: objectiveID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome})
+	command := app.PatchObjectiveCommand{ObjectiveID: objectiveID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome, Priority: in.Priority}
+	if in.Appetite != nil {
+		appetite := in.Appetite.toMeasure()
+		command.Appetite = &appetite
+	}
+	return service.PatchObjective(ctx, command)
 }
 
 type createItemInput struct {
@@ -2033,6 +2057,7 @@ type createItemInput struct {
 	ExecutionStatus      work.ExecutionStatus           `json:"execution_status"`
 	Priority             work.Priority                  `json:"priority"`
 	EstimatedScope       work.EstimatedScope            `json:"estimated_scope"`
+	Measure              measureInput                   `json:"measure"`
 	ExecutionPolicy      work.ExecutionPolicy           `json:"execution_policy"`
 	RequiredActorKind    work.ActorKind                 `json:"required_actor_kind"`
 	RequiredCapabilities []string                       `json:"required_capabilities,omitempty"`
@@ -2061,7 +2086,7 @@ func (a *adapter) createItem(ctx context.Context, service *app.Service, raw json
 	command := app.CreateWorkItemCommand{
 		ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, ObjectiveID: objectiveID, PlanID: in.PlanID, ParentID: in.ParentID,
 		Title: in.Title, Description: in.Description, Kind: in.Kind, CommitmentState: in.CommitmentState, ExecutionStatus: in.ExecutionStatus,
-		Priority: in.Priority, EstimatedScope: in.EstimatedScope, ExecutionPolicy: in.ExecutionPolicy, RequiredActorKind: in.RequiredActorKind,
+		Priority: in.Priority, EstimatedScope: in.EstimatedScope, Measure: in.Measure.toMeasure(), ExecutionPolicy: in.ExecutionPolicy, RequiredActorKind: in.RequiredActorKind,
 		AttentionState: work.AttentionNone, RequiredCapabilities: in.RequiredCapabilities,
 	}
 	if command.CommitmentState == "" {
@@ -2103,6 +2128,7 @@ type patchItemInput struct {
 	ParentID                       *string                          `json:"parent_id"`
 	Priority                       *work.Priority                   `json:"priority"`
 	EstimatedScope                 *work.EstimatedScope             `json:"estimated_scope"`
+	Measure                        *measureInput                    `json:"measure"`
 	ExecutionPolicy                *work.ExecutionPolicy            `json:"execution_policy"`
 	AttentionState                 *work.AttentionState             `json:"attention_state"`
 	RequiredCapabilities           *[]string                        `json:"required_capabilities"`
@@ -2166,6 +2192,10 @@ func (a *adapter) patchItem(ctx context.Context, service *app.Service, raw json.
 		return nil, err
 	}
 	command := app.PatchWorkItemCommand{WorkItemID: in.ID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, Title: in.Title, Description: in.Description, ParentID: in.ParentID, Priority: in.Priority, EstimatedScope: in.EstimatedScope, ExecutionPolicy: in.ExecutionPolicy, AttentionState: in.AttentionState, RequiredCapabilities: in.RequiredCapabilities}
+	if in.Measure != nil {
+		measure := in.Measure.toMeasure()
+		command.Measure = &measure
+	}
 	for _, resolution := range in.AcceptanceCriterionResolutions {
 		command.AcceptanceCriterionResolutions = append(command.AcceptanceCriterionResolutions, app.PatchAcceptanceCriterionResolution{CriterionID: resolution.CriterionID, Status: resolution.Status, Rationale: resolution.Rationale})
 	}

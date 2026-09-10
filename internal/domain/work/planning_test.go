@@ -92,7 +92,7 @@ func TestReviewPlanCommitsOnlyProposedPlan(t *testing.T) {
 
 func TestObjectivePhaseTransitionPausesAndResumesPriorPhase(t *testing.T) {
 	now := time.Date(2026, 8, 21, 14, 0, 0, 0, time.UTC)
-	objective, err := NewObjective("objective-1", "OBJ-1", "Design a skill", "", "Reviewed skill package", ObjectivePlanning, now)
+	objective, err := NewObjective("objective-1", "OBJ-1", "Design a skill", "", "Reviewed skill package", ObjectivePlanning, PriorityMedium, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,5 +206,39 @@ func TestContextRequirementUnchanged(t *testing.T) {
 	}
 	if waived.Status != ContextWaived {
 		t.Fatalf("requirement should still support proposed->accepted->waived lifecycle, got %s", waived.Status)
+	}
+}
+
+// TestContextNonGoalAndAffectedFollowTheProposalLifecycle is REP-06's second
+// criterion at the domain layer: both new kinds share the exact
+// proposed -> accepted -> waived lifecycle requirement, constraint and risk
+// already use, not a parallel one that could drift from it.
+func TestContextNonGoalAndAffectedFollowTheProposalLifecycle(t *testing.T) {
+	now := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	for _, kind := range []ContextKind{ContextNonGoal, ContextAffected} {
+		record, err := NewContextRecord(ContextRecord{
+			ID: "context-" + string(kind), ObjectiveID: "objective-1", Kind: kind,
+			Title: "Scoped explicitly", Status: ContextProposed, CreatedBy: "agent:planner",
+		}, now)
+		if err != nil {
+			t.Fatalf("%s: %v", kind, err)
+		}
+		accepted, err := TransitionContextRecord(record, ContextAccepted, "agent:reviewer", now.Add(time.Hour))
+		if err != nil {
+			t.Fatalf("%s: proposed->accepted: %v", kind, err)
+		}
+		waived, err := TransitionContextRecord(accepted, ContextWaived, "agent:reviewer", now.Add(2*time.Hour))
+		if err != nil {
+			t.Fatalf("%s: accepted->waived: %v", kind, err)
+		}
+		if waived.Status != ContextWaived {
+			t.Fatalf("%s: status = %q, want waived", kind, waived.Status)
+		}
+		// Neither kind may skip straight to accepted or waived without having
+		// been proposed and then accepted first, the same guard every kind on
+		// this lifecycle enforces.
+		if _, err := TransitionContextRecord(record, ContextWaived, "agent:reviewer", now.Add(time.Hour)); err == nil {
+			t.Fatalf("%s: proposed->waived succeeded, want the accepted step required", kind)
+		}
 	}
 }

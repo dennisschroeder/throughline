@@ -291,14 +291,19 @@ type transactionRepository struct {
 func (r *transactionRepository) CreateObjective(ctx context.Context, objective work.Objective) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO objectives
-  (id, key, title, description, desired_outcome, phase, version, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  (id, key, title, description, desired_outcome, phase, priority, appetite_value, appetite_unit,
+   appetite_basis, version, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		objective.ID,
 		objective.Key,
 		objective.Title,
 		objective.Description,
 		objective.DesiredOutcome,
 		objective.Phase,
+		objective.Priority,
+		objective.Appetite.Value,
+		objective.Appetite.Unit,
+		objective.Appetite.Basis,
 		objective.Version,
 		formatTime(objective.CreatedAt),
 		formatTime(objective.UpdatedAt),
@@ -350,9 +355,9 @@ func (r *transactionRepository) CreateWorkItem(ctx context.Context, item work.Wo
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO work_items
   (id, key, objective_id, plan_id, parent_id, title, description, kind, commitment_state,
-   execution_status, priority, estimated_scope, execution_policy, required_actor_kind,
-   attention_state, version, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+   execution_status, priority, estimated_scope, measure_value, measure_unit, measure_basis,
+   execution_policy, required_actor_kind, attention_state, version, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ID,
 		item.Key,
 		item.ObjectiveID,
@@ -365,6 +370,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ExecutionStatus,
 		item.Priority,
 		item.EstimatedScope,
+		item.Measure.Value,
+		item.Measure.Unit,
+		item.Measure.Basis,
 		item.ExecutionPolicy,
 		item.RequiredActorKind,
 		item.AttentionState,
@@ -410,8 +418,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 }
 
 const objectiveSelect = `
-SELECT id, key, title, description, desired_outcome, phase, prior_phase, updated_by,
-       version, created_at, updated_at
+SELECT id, key, title, description, desired_outcome, phase, prior_phase, priority,
+       appetite_value, appetite_unit, appetite_basis, updated_by, version, created_at, updated_at
 FROM objectives`
 
 const planSelect = `
@@ -422,8 +430,8 @@ FROM plans`
 
 const workItemSelect = `
 SELECT id, key, objective_id, plan_id, parent_id, title, description, kind, commitment_state,
-       execution_status, priority, estimated_scope, execution_policy, required_actor_kind,
-       attention_state, version, created_at, updated_at
+       execution_status, priority, estimated_scope, measure_value, measure_unit, measure_basis,
+       execution_policy, required_actor_kind, attention_state, version, created_at, updated_at
 FROM work_items`
 
 const profileSelect = `
@@ -440,6 +448,7 @@ func scanObjective(row scanner) (work.Objective, error) {
 	var objective work.Objective
 	var createdAt, updatedAt string
 	var priorPhase, updatedBy sql.NullString
+	var appetiteBasis string
 	if err := row.Scan(
 		&objective.ID,
 		&objective.Key,
@@ -448,6 +457,10 @@ func scanObjective(row scanner) (work.Objective, error) {
 		&objective.DesiredOutcome,
 		&objective.Phase,
 		&priorPhase,
+		&objective.Priority,
+		&objective.Appetite.Value,
+		&objective.Appetite.Unit,
+		&appetiteBasis,
 		&updatedBy,
 		&objective.Version,
 		&createdAt,
@@ -455,6 +468,7 @@ func scanObjective(row scanner) (work.Objective, error) {
 	); err != nil {
 		return work.Objective{}, err
 	}
+	objective.Appetite.Basis = work.MeasureBasis(appetiteBasis)
 	objective.PriorPhase = work.ObjectivePhase(priorPhase.String)
 	objective.UpdatedBy = updatedBy.String
 	var err error
@@ -515,6 +529,7 @@ func scanWorkItem(row scanner) (work.WorkItem, error) {
 	var item work.WorkItem
 	var planID, parentID sql.NullString
 	var createdAt, updatedAt string
+	var measureBasis string
 	if err := row.Scan(
 		&item.ID,
 		&item.Key,
@@ -528,6 +543,9 @@ func scanWorkItem(row scanner) (work.WorkItem, error) {
 		&item.ExecutionStatus,
 		&item.Priority,
 		&item.EstimatedScope,
+		&item.Measure.Value,
+		&item.Measure.Unit,
+		&measureBasis,
 		&item.ExecutionPolicy,
 		&item.RequiredActorKind,
 		&item.AttentionState,
@@ -537,6 +555,7 @@ func scanWorkItem(row scanner) (work.WorkItem, error) {
 	); err != nil {
 		return work.WorkItem{}, err
 	}
+	item.Measure.Basis = work.MeasureBasis(measureBasis)
 	item.PlanID = planID.String
 	item.ParentID = parentID.String
 	var err error

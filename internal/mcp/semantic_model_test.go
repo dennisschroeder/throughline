@@ -88,3 +88,60 @@ func TestSemanticInstructionsRejectOversizeComposition(t *testing.T) {
 		t.Fatalf("oversize instruction error = %v", err)
 	}
 }
+
+// TestSemanticModelIdentifiesTheNewContextKindLifecycles is REP-06's second
+// criterion, the "semantic model identifies it" half: non_goal and affected
+// must appear in get_semantic_model's lifecycles section, on the same
+// proposed -> accepted -> waived shape requirement, constraint and risk
+// already share, not silently absent from the one place a session is meant
+// to discover it.
+func TestSemanticModelIdentifiesTheNewContextKindLifecycles(t *testing.T) {
+	ctx, session := newSession(t)
+	result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: "get_semantic_model", Arguments: map[string]any{"section": "lifecycles"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("lifecycles section failed: %s", result.Content[0].(*protocol.TextContent).Text)
+	}
+	var payload struct {
+		Result struct {
+			Data []struct {
+				ID          string     `json:"id"`
+				Entity      string     `json:"entity"`
+				Kinds       []string   `json:"kinds"`
+				States      []string   `json:"states"`
+				Transitions [][]string `json:"transitions"`
+			} `json:"data"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(result.Content[0].(*protocol.TextContent).Text), &payload); err != nil {
+		t.Fatal(err)
+	}
+	var proposalLifecycle *struct {
+		ID          string     `json:"id"`
+		Entity      string     `json:"entity"`
+		Kinds       []string   `json:"kinds"`
+		States      []string   `json:"states"`
+		Transitions [][]string `json:"transitions"`
+	}
+	for index := range payload.Result.Data {
+		if payload.Result.Data[index].Entity == "context_record" && contains(payload.Result.Data[index].Kinds, "non_goal") {
+			proposalLifecycle = &payload.Result.Data[index]
+		}
+	}
+	if proposalLifecycle == nil {
+		t.Fatalf("no context_record lifecycle names non_goal: %#v", payload.Result.Data)
+	}
+	if !contains(proposalLifecycle.Kinds, "affected") {
+		t.Fatalf("non_goal's lifecycle kinds = %v, want affected on the same shape", proposalLifecycle.Kinds)
+	}
+	if !contains(proposalLifecycle.Kinds, "requirement") {
+		t.Fatalf("non_goal's lifecycle kinds = %v, want requirement on the same shape it shares", proposalLifecycle.Kinds)
+	}
+	for _, state := range []string{"proposed", "accepted", "waived"} {
+		if !contains(proposalLifecycle.States, state) {
+			t.Fatalf("lifecycle states = %v, missing %q", proposalLifecycle.States, state)
+		}
+	}
+}

@@ -16,8 +16,10 @@ import (
 func (r *transactionRepository) UpdateWorkItem(ctx context.Context, item work.WorkItem, expectedVersion int) error {
 	result, err := r.transaction.ExecContext(ctx, `
 UPDATE work_items SET title = ?, description = ?, parent_id = ?, priority = ?, estimated_scope = ?,
+    measure_value = ?, measure_unit = ?, measure_basis = ?,
     execution_policy = ?, required_actor_kind = ?, attention_state = ?, execution_status = ?, version = ?, updated_at = ?
 WHERE id = ? AND version = ?`, item.Title, item.Description, nullableString(item.ParentID), item.Priority, item.EstimatedScope,
+		item.Measure.Value, item.Measure.Unit, item.Measure.Basis,
 		item.ExecutionPolicy, item.RequiredActorKind, item.AttentionState, item.ExecutionStatus, item.Version, formatTime(item.UpdatedAt), item.ID, expectedVersion)
 	if err != nil {
 		return fmt.Errorf("update work item: %w", err)

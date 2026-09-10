@@ -16,6 +16,13 @@ const (
 	ContextFinding       ContextKind = "finding"
 	ContextRisk          ContextKind = "risk"
 	ContextSuccessMetric ContextKind = "success_metric"
+	// ContextNonGoal records something the work deliberately excludes: a
+	// constraint restricts how the work is done, a non-goal says what it is
+	// not. ContextAffected records who or what surface the work lands on —
+	// deliberately one kind for both audience and blast radius, since the
+	// boundary between a party and a surface cannot be applied reliably.
+	ContextNonGoal  ContextKind = "non_goal"
+	ContextAffected ContextKind = "affected"
 )
 
 type ContextStatus string
@@ -87,7 +94,7 @@ func validContextTransition(kind ContextKind, current, target ContextStatus) boo
 			(current == ContextValidating && (target == ContextValidated || target == ContextInvalidated)) ||
 			(current == ContextUntested && target == ContextWaived) ||
 			(current == ContextValidating && target == ContextWaived)
-	case ContextRequirement, ContextConstraint, ContextRisk:
+	case ContextRequirement, ContextConstraint, ContextRisk, ContextNonGoal, ContextAffected:
 		return (current == ContextProposed && target == ContextAccepted) ||
 			(current == ContextAccepted && target == ContextWaived)
 	default:
@@ -125,7 +132,7 @@ func validContextStatus(kind ContextKind, status ContextStatus) bool {
 		return status == ContextRecorded || status == ContextSuperseded
 	case ContextSuccessMetric:
 		return status == ContextUntested || status == ContextValidating || status == ContextValidated || status == ContextInvalidated || status == ContextSuperseded || status == ContextWaived
-	case ContextRequirement, ContextConstraint, ContextRisk:
+	case ContextRequirement, ContextConstraint, ContextRisk, ContextNonGoal, ContextAffected:
 		return status == ContextProposed || status == ContextAccepted || status == ContextSuperseded || status == ContextWaived
 	default:
 		return false

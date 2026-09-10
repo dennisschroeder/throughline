@@ -34,9 +34,18 @@ type CreateObjectiveCommand struct {
 	Description    string
 	DesiredOutcome string
 	Phase          work.ObjectivePhase
+	Priority       work.Priority
 }
 
 func (s *Service) createObjectiveMutation(ctx context.Context, command CreateObjectiveCommand) (work.Objective, error) {
+	// Defaulting happens before the request is hashed anywhere, not after: a
+	// default applied only between the replay lookup and the executed write
+	// would hash the same logical request two different ways, and a retry
+	// with the very key+fields that succeeded the first time would come back
+	// idempotency_key_reused_with_different_request.
+	if command.Priority == "" {
+		command.Priority = work.PriorityMedium
+	}
 	if replay, found, err := replayIdempotently[work.Objective](ctx, s, command.ActorID, command.IdempotencyKey, "create_objective", command); err != nil {
 		return work.Objective{}, err
 	} else if found {
@@ -52,7 +61,7 @@ func (s *Service) createObjectiveMutation(ctx context.Context, command CreateObj
 	if err != nil {
 		return work.Objective{}, fmt.Errorf("generate objective id: %w", err)
 	}
-	objective, err := work.NewObjective(id, command.Key, command.Title, command.Description, command.DesiredOutcome, command.Phase, s.clock.Now())
+	objective, err := work.NewObjective(id, command.Key, command.Title, command.Description, command.DesiredOutcome, command.Phase, command.Priority, s.clock.Now())
 	if err != nil {
 		return work.Objective{}, err
 	}
@@ -93,6 +102,8 @@ type PatchObjectiveCommand struct {
 	Title           *string
 	Description     *string
 	DesiredOutcome  *string
+	Priority        *work.Priority
+	Appetite        *work.Measure
 }
 
 func (s *Service) patchObjectiveMutation(ctx context.Context, command PatchObjectiveCommand) (work.Objective, error) {
@@ -114,6 +125,12 @@ func (s *Service) patchObjectiveMutation(ctx context.Context, command PatchObjec
 			}
 			if command.DesiredOutcome != nil {
 				objective.DesiredOutcome = strings.TrimSpace(*command.DesiredOutcome)
+			}
+			if command.Priority != nil {
+				objective.Priority = *command.Priority
+			}
+			if command.Appetite != nil {
+				objective.Appetite = *command.Appetite
 			}
 			if err := objective.Validate(); err != nil {
 				return work.Objective{}, err
@@ -148,6 +165,7 @@ type PatchWorkItemCommand struct {
 	ParentID                       *string
 	Priority                       *work.Priority
 	EstimatedScope                 *work.EstimatedScope
+	Measure                        *work.Measure
 	ExecutionPolicy                *work.ExecutionPolicy
 	AttentionState                 *work.AttentionState
 	RequiredCapabilities           *[]string
@@ -232,6 +250,10 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 			if command.EstimatedScope != nil {
 				item.EstimatedScope = *command.EstimatedScope
 				changes = append(changes, "estimated scope")
+			}
+			if command.Measure != nil {
+				item.Measure = *command.Measure
+				changes = append(changes, "measure")
 			}
 			if command.ExecutionPolicy != nil {
 				item.ExecutionPolicy = *command.ExecutionPolicy
@@ -415,7 +437,7 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 }
 
 func patchWorkItemHasChanges(command PatchWorkItemCommand) bool {
-	return command.Title != nil || command.Description != nil || command.ParentID != nil || command.Priority != nil || command.EstimatedScope != nil || command.ExecutionPolicy != nil || command.AttentionState != nil || command.RequiredCapabilities != nil || len(command.AcceptanceCriterionResolutions) > 0 || len(command.AcceptanceCriteriaToAdd) > 0 || len(command.ExpectedOutputsToAdd) > 0
+	return command.Title != nil || command.Description != nil || command.ParentID != nil || command.Priority != nil || command.EstimatedScope != nil || command.Measure != nil || command.ExecutionPolicy != nil || command.AttentionState != nil || command.RequiredCapabilities != nil || len(command.AcceptanceCriterionResolutions) > 0 || len(command.AcceptanceCriteriaToAdd) > 0 || len(command.ExpectedOutputsToAdd) > 0
 }
 
 func normalizedCapabilities(capabilities []string) ([]string, error) {
@@ -615,6 +637,7 @@ type CreateWorkItemCommand struct {
 	ExecutionStatus      work.ExecutionStatus
 	Priority             work.Priority
 	EstimatedScope       work.EstimatedScope
+	Measure              work.Measure
 	ExecutionPolicy      work.ExecutionPolicy
 	RequiredActorKind    work.ActorKind
 	AttentionState       work.AttentionState
@@ -679,6 +702,7 @@ func (s *Service) createWorkItemMutation(ctx context.Context, command CreateWork
 		ExecutionStatus:   command.ExecutionStatus,
 		Priority:          command.Priority,
 		EstimatedScope:    command.EstimatedScope,
+		Measure:           command.Measure,
 		ExecutionPolicy:   command.ExecutionPolicy,
 		RequiredActorKind: command.RequiredActorKind,
 		AttentionState:    command.AttentionState,

@@ -633,6 +633,10 @@ CREATE TABLE objectives (
   desired_outcome TEXT,
   phase TEXT NOT NULL CHECK (phase IN ('idea', 'discovery', 'planning', 'execution', 'evaluation', 'completed', 'paused', 'cancelled')),
   prior_phase TEXT,
+  priority TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
+  appetite_value REAL NOT NULL DEFAULT 0,
+  appetite_unit TEXT NOT NULL DEFAULT '',
+  appetite_basis TEXT NOT NULL DEFAULT '' CHECK (appetite_basis IN ('', 'estimated', 'measured')),
   version INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -671,6 +675,9 @@ CREATE TABLE work_items (
   execution_status TEXT NOT NULL CHECK (execution_status IN ('backlog', 'ready', 'in_progress', 'review', 'done', 'cancelled')),
   priority TEXT NOT NULL CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
   estimated_scope TEXT NOT NULL DEFAULT 'unknown' CHECK (estimated_scope IN ('xs', 'small', 'medium', 'large', 'unknown')),
+  measure_value REAL NOT NULL DEFAULT 0,
+  measure_unit TEXT NOT NULL DEFAULT '',
+  measure_basis TEXT NOT NULL DEFAULT '' CHECK (measure_basis IN ('', 'estimated', 'measured')),
   execution_policy TEXT NOT NULL DEFAULT 'approval_required' CHECK (execution_policy IN ('human_only', 'agent_may_propose', 'approval_required', 'autonomous_with_report')),
   required_actor_kind TEXT NOT NULL DEFAULT 'any' CHECK (required_actor_kind IN ('any', 'human', 'agent')),
   attention_state TEXT NOT NULL DEFAULT 'none' CHECK (attention_state IN ('none', 'needs_human_decision', 'needs_human_review', 'needs_clarification', 'intervention_required')),
@@ -686,7 +693,7 @@ CREATE TABLE context_records (
   id TEXT PRIMARY KEY,
   objective_id TEXT NOT NULL REFERENCES objectives(id) ON DELETE CASCADE,
   work_item_id TEXT REFERENCES work_items(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (kind IN ('requirement', 'constraint', 'assumption', 'finding', 'risk', 'success_metric')),
+  kind TEXT NOT NULL CHECK (kind IN ('requirement', 'constraint', 'assumption', 'finding', 'risk', 'success_metric', 'non_goal', 'affected')),
   title TEXT NOT NULL,
   body TEXT,
   status TEXT NOT NULL,
@@ -1206,6 +1213,8 @@ since the version it names is the whole point of that error.
 
 Create and evolve durable intent. An objective includes title, desired outcome, initial phase, requirements/constraints/success metrics, and audit fields. `transition_objective` validates phase gates; entering execution requires an approved plan or a recorded authorized exception.
 
+An objective also carries `priority` (the same `low`/`medium`/`high`/`urgent` vocabulary a work item uses, defaulting to `medium`) and `appetite`, an optional `Measure` — a `value`, an opaque `unit` never interpreted or compared across units, and a `basis` of `estimated` or `measured` — stating what the work is worth spending, set before it starts. Priority orders parked ideas; it is not a lifecycle phase, since nothing gates an objective's entry into discovery the way a dependency or approval gates a work item's readiness.
+
 #### `propose_plan`, `review_plan`
 
 `propose_plan` atomically creates a versioned plan plus proposed work items, hierarchy, dependencies, profile-backed ExpectedOutputs, OutputRequirements, capability requirements, and anticipated ExternalActions. It does not make items claimable or actions authorized. `review_plan` approves, rejects, or requests revision; approval accepts included items and records the approver/rationale in the same transaction but creates no wildcard AuthorityGrant.
@@ -1257,7 +1266,7 @@ Create and evolve durable intent. An objective includes title, desired outcome, 
 
 #### `record_context`
 
-Creates or supersedes one `requirement`, `constraint`, `assumption`, `finding`, `risk`, or `success_metric`. Assumptions include confidence and validation state; findings may include source/evidence references. It never accepts raw chain-of-thought.
+Creates or supersedes one `requirement`, `constraint`, `assumption`, `finding`, `risk`, `success_metric`, `non_goal`, or `affected`. Assumptions include confidence and validation state; findings may include source/evidence references. `non_goal` records something the work deliberately excludes — a constraint restricts how the work is done, a non-goal says what it is not. `affected` records who or what surface the work lands on, covering both audience and blast radius under one domain-neutral kind rather than software-specific "affected users and systems." Both follow the same proposed -> accepted -> waived lifecycle as `requirement`/`constraint`/`risk`. It never accepts raw chain-of-thought.
 
 #### `record_decision`, `ask_question`, `answer_question`
 
@@ -1514,6 +1523,8 @@ Use an opaque monotonic activity sequence as the initial cursor. Define retentio
 #### `create_item`
 
 Creates one work item under a required objective, with optional plan/parent, structured criteria, profile-backed ExpectedOutputs, OutputRequirements, capabilities, anticipated ExternalActions, and initial dependencies. Creating an already accepted/ready item requires an approved-plan context or an explicitly authorized direct-work exception; otherwise default to `proposed` + `backlog`. Validate all references, active profile versions, output constraints, and dependency cycles in a transaction. Return the full compact item and `version: 1`.
+
+A work item may also carry `measure`, an optional `Measure` (`value`, opaque `unit`, `basis` of `estimated` or `measured`) beside the existing coarse `estimated_scope` hint. The two answer different questions and neither replaces the other: `estimated_scope` sorts unlike work against a small fixed vocabulary; `measure` states an actual quantity in whatever unit the domain uses, and is never interpreted, compared across units, or gated on. `patch_item` accepts the same field to set or correct it after creation.
 
 ```json
 {

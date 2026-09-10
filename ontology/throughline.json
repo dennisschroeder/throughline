@@ -6,7 +6,7 @@
     {"id":"objective","name":"Objective","definition":"A durable goal that groups work items."},
     {"id":"plan","name":"Plan","definition":"A versioned proposal for achieving an objective; approval commits work without executing it."},
     {"id":"work_item","name":"WorkItem","definition":"A proposed, executable, reviewable, or trackable unit of domain-neutral work."},
-    {"id":"context_record","name":"ContextRecord","definition":"Typed authoritative context such as a requirement, constraint, assumption, finding, risk, or success metric."},
+    {"id":"context_record","name":"ContextRecord","definition":"Typed authoritative context such as a requirement, constraint, assumption, finding, risk, success metric, non-goal, or affected party/surface."},
     {"id":"acceptance_criterion","name":"AcceptanceCriterion","definition":"An individually stateful condition used to judge completion."},
     {"id":"output_profile","name":"OutputProfile","definition":"An immutable, versioned, governed definition of an output class."},
     {"id":"expected_output","name":"ExpectedOutput","definition":"A work-item-specific contract bound to one exact output profile version."},
@@ -58,7 +58,11 @@
     {"id":"work_item_execution","entity":"work_item","states":["backlog","ready","in_progress","review","done","cancelled"],"transitions":[["backlog","ready"],["ready","in_progress"],["in_progress","ready"],["in_progress","review"],["review","in_progress"],["review","done"],["backlog","cancelled"],["ready","cancelled"],["in_progress","cancelled"],["review","cancelled"]]},
     {"id":"output_profile_lifecycle","entity":"output_profile","states":["draft","proposed","active","rejected","superseded"],"transitions":[["draft","proposed"],["proposed","active"],["proposed","rejected"],["active","superseded"]]},
     {"id":"external_action_lifecycle","entity":"external_action","states":["proposed","authorized","executing","succeeded","failed","rejected","cancelled","expired"],"transitions":[["proposed","authorized"],["authorized","executing"],["executing","succeeded"],["executing","failed"],["proposed","rejected"],["proposed","cancelled"],["authorized","expired"]]},
-    {"id":"manual_blocker_lifecycle","entity":"blocker","states":["active","resolved"],"transitions":[["active","resolved"]]}
+    {"id":"manual_blocker_lifecycle","entity":"blocker","states":["active","resolved"],"transitions":[["active","resolved"]]},
+    {"id":"context_record_assumption_lifecycle","entity":"context_record","kinds":["assumption"],"states":["untested","validating","validated","invalidated","superseded"],"transitions":[["untested","validating"],["validating","validated"],["validating","invalidated"],["untested","superseded"],["validating","superseded"],["validated","superseded"],["invalidated","superseded"]]},
+    {"id":"context_record_success_metric_lifecycle","entity":"context_record","kinds":["success_metric"],"states":["untested","validating","validated","invalidated","waived","superseded"],"transitions":[["untested","validating"],["validating","validated"],["validating","invalidated"],["untested","waived"],["validating","waived"],["untested","superseded"],["validating","superseded"],["validated","superseded"],["invalidated","superseded"],["waived","superseded"]]},
+    {"id":"context_record_proposal_lifecycle","entity":"context_record","kinds":["requirement","constraint","risk","non_goal","affected"],"states":["proposed","accepted","waived","superseded"],"transitions":[["proposed","accepted"],["accepted","waived"],["proposed","superseded"],["accepted","superseded"],["waived","superseded"]]},
+    {"id":"context_record_finding_lifecycle","entity":"context_record","kinds":["finding"],"states":["recorded","superseded"],"transitions":[["recorded","superseded"]]}
   ],
   "invariants": [
     {"id":"no_self_dependency","statement":"A work item cannot depend on itself; hard prerequisite cycles are rejected."},

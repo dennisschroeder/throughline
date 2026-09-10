@@ -26,9 +26,11 @@ SELECT EXISTS(
 func (r *transactionRepository) UpdateObjective(ctx context.Context, objective work.Objective, expectedVersion int) error {
 	result, err := r.transaction.ExecContext(ctx, `
 UPDATE objectives
-SET title = ?, description = ?, desired_outcome = ?, phase = ?, prior_phase = ?, updated_by = ?, version = ?, updated_at = ?
+SET title = ?, description = ?, desired_outcome = ?, phase = ?, prior_phase = ?, priority = ?,
+    appetite_value = ?, appetite_unit = ?, appetite_basis = ?, updated_by = ?, version = ?, updated_at = ?
 WHERE id = ? AND version = ?`,
-		objective.Title, objective.Description, objective.DesiredOutcome, objective.Phase, nullableString(string(objective.PriorPhase)), nullableString(objective.UpdatedBy),
+		objective.Title, objective.Description, objective.DesiredOutcome, objective.Phase, nullableString(string(objective.PriorPhase)),
+		objective.Priority, objective.Appetite.Value, objective.Appetite.Unit, objective.Appetite.Basis, nullableString(objective.UpdatedBy),
 		objective.Version, formatTime(objective.UpdatedAt), objective.ID, expectedVersion,
 	)
 	if err != nil {
