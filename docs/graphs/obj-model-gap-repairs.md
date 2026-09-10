@@ -183,6 +183,67 @@ after the behaviour was already correct:
   `ALTER TABLE ADD COLUMN ... CHECK (version > 0)` is enforced by `modernc.org/sqlite`, and TEMP
   tables are transactional, so a rolled-back transaction leaves no stale effect rows.
 
+### REP-03 ORIENT
+
+- Commits: `939bf0e` (the read path and the dashboard), then `886f1bd`, `994ec41`, `8471726` and
+  `958345c`, each a response to a review pass.
+- Claims: `01a0878a-f7e3-7311-9874-dca398cfdd74`, then `01a0888d-3a94-7e82-8c30-e40584d40c6b` after
+  the first lapsed. As in REP-02, both had to be re-established by returning the item to `ready`
+  first. That is now four occurrences across two nodes.
+- Final gate: all six repository commands exited zero on 2026-09-10 at `958345c`, plus
+  `go test ./... -race -shuffle=on`.
+
+The defect was one shape everywhere: every path that needed a list of objectives derived one from
+the work items. `board_overview` counted work items per objective phase rather than counting
+objectives, and omitted any objective with none — in the one call an agent is told to orient with.
+The dashboard switcher and its auto-resolve could neither list nor select an objective without work,
+which is exactly the objective someone has just created. No layer had an objective listing or a key
+lookup at all. The dead helper removed by the first commit documented the defect in its own comment.
+
+#### Review
+
+Five passes, all recorded as **degraded** for the same reason as REP-02: cross-provider review was
+unavailable, so every reviewer was Claude.
+
+| Pass | Findings | Of which behaviour | Notes |
+|---|---|---|---|
+| 1 | 12 | 6 | Most were regressions the repair itself introduced |
+| 2 | 13 | 3 | Ten mutants reverting pass 1's fixes survived the suite |
+| 3 | 9 | 1 | The one defect was introduced by pass 2's own tidying |
+| 4 | 9 | 0 | Judged functionally correct; two key decisions ungated |
+| 5 | 3 | 0 | All three in tests; two passing on fixture order |
+
+The defects worth naming, because each was silent. Key acceptance reached only two of twelve tools,
+so `list_items`, `get_changes` and `list_outputs` answered a key-addressed call as though the
+objective held no work — a confidently wrong answer rather than an error. `version_conflict` lost its
+`current` block when the objective was addressed by key, so the caller who has only the key written
+down got the one error that carries the version it needs, without the version. The dashboard
+defaulted to a brand-new empty objective, because it is trivially the most recently updated. Two
+resolvers existed with nothing pinning them together; a case-folding drift in either would have
+answered the same field two different ways on two tools.
+
+Three findings were defects introduced by the previous pass's repair. Pass 2's replacement of an
+auto-resolve seed with a zero value made the function return an empty id with a nil error, which the
+caller's 404 branch cannot see.
+
+#### Dispositions
+
+| Finding | Disposition |
+|---|---|
+| `buildObjectivesResponse` costs O(objectives) heavy reads per refresh, amplified by the new per-tick switcher refresh | Filed. `buildGates` re-runs `ListActivity` and `ListOutputProfiles` per objective though both are objective-independent; the fix is in `gates.go`, outside this node |
+| `create_item` cannot be retried with the same idempotency key, even byte-identically | Recorded as finding `01a08857-7c9b-79e3-a32d-46397c888fca`. Predates REP-02 and REP-03 and breaks the handoff's sixth invariant |
+| A workspace-wide proposed output profile is stamped onto every objective's gate count | Latent, pre-existing; newly visible because empty objectives now appear in the switcher |
+| `internal/dashboard/static/index.html` has no test infrastructure, so four of one commit's claims are unverifiable | Accepted: `static.go` declares the frontend disposable. Those regions were read manually instead |
+
+#### Evidence
+
+- Every one of the twelve tools taking `objective_id` was mutated to drop its resolver, one at a
+  time, and each mutation fails the suite. Before the coverage work, six survived.
+- The reference rules and the objective choice are pure functions with tables of the rules they
+  implement, each rule verified by inverting it.
+- Both criteria are pinned against the old derivation: reverting `ListObjectives` to the
+  items-derived form fails the store, contract and dashboard tests.
+
 ## Feedback
 
 - REP-01 was estimated small but consumed the full five-pass review budget because file permissions
@@ -233,3 +294,32 @@ after the behaviour was already correct:
   the handoff says it does. All three were hit by the agent doing the work, which is the only way
   they surface. Worth a standing habit: record what the tracker made awkward, not only what the
   code needed.
+
+### REP-03
+
+- **The estimate was medium and the implementation was medium; the review was not.** The change
+  itself took one pass to write and four to make safe. What consumed the budget was not difficulty
+  but blast radius: a field that twelve tools accept cannot be half-changed, and the first version
+  changed it on two of them. A node whose deliverable is "X is now addressable" should carry, in its
+  own criteria, the requirement that every existing surface taking X agrees — otherwise the repair
+  ships a new inconsistency in place of the old uniform defect.
+- **Three of five passes found defects introduced by the previous pass's repair.** This is the second
+  node in a row where that happened, and it is the clearest signal available that the loop budget
+  measures the wrong thing. Counting findings, the passes went 12, 13, 9, 9, 3 and never looked like
+  converging. Counting *behavioural* findings they went 6, 3, 1, 0, 0, which is exactly the shape a
+  budget should stop on. The graph should distinguish findings against original work from findings
+  against repairs, and should read convergence from severity rather than count.
+- **Reviewers were most valuable where they mutated rather than read.** Every pass that ran mutations
+  found something a reading pass had missed: ten surviving mutants in pass 2, six in pass 3, two
+  fixture-order tests in pass 5 that had been written *by* the previous fix and looked correct. A
+  review instruction that says "mutate the code to contradict each claim and report what survives"
+  produced more than any amount of "look for problems".
+- **The tests written to gate a fix are the least reviewed code in the node.** Twice a test was
+  written, run against the pre-fix code, seen to fail, and was still wrong — it failed for a reason
+  adjacent to the one it claimed. Watching a test go red proves it is sensitive to *something*, not
+  that it is sensitive to the rule in its name.
+- **Interface friction, recorded because it is only visible from inside the work.** An expired but
+  unreleased claim on an `in_progress` item cannot be reclaimed without transitioning the item back
+  to `ready`: four occurrences across two nodes now. `ask_question` bound to a work item blocks it,
+  with no way to record a non-blocking question against one. `claim_item` does not transition to
+  `in_progress` by default though the handoff says it does.
