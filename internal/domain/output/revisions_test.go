@@ -58,6 +58,28 @@ func TestNewArtifactAcceptsAWorkspaceRelativeReference(t *testing.T) {
 	}
 }
 
+// TestNewArtifactRejectsAWorkspaceReferenceCarryingLostComponents guards against
+// silent information loss: a host, userinfo, query, or fragment on a
+// workspace: URI would otherwise vanish from the reconstructed workspace:<path>
+// form, letting two references the caller meant as distinct collide under the
+// dedup lookup as though they were spellings of the same thing.
+func TestNewArtifactRejectsAWorkspaceReferenceCarryingLostComponents(t *testing.T) {
+	now := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	for _, uri := range []string{
+		"workspace:docs/report.md?v=2",
+		"workspace:docs/report.md#section",
+		"workspace://host/docs/report.md",
+		"workspace://user:pass@host/docs/report.md",
+	} {
+		_, err := NewArtifact(Artifact{
+			ID: "artifact-1", WorkItemID: "item-1", Kind: "document", URI: uri, AttachedBy: "agent:writer",
+		}, now)
+		if err == nil {
+			t.Fatalf("%s: accepted, want rejection of the component that would be silently dropped", uri)
+		}
+	}
+}
+
 // TestNewArtifactRejectsAWorkspaceReferenceThatEscapesTheRoot is REP-05's second
 // artifact criterion, the containment half: no cleaning of a workspace-relative
 // path may climb above canonical_root, and this must hold lexically since the

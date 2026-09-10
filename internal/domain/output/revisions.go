@@ -73,6 +73,17 @@ func normalizeArtifactURI(raw string) (string, error) {
 		return "", errors.New("artifact URI must be an absolute URI")
 	}
 	if parsed.Scheme == workspaceURIScheme {
+		// A host, userinfo, query, or fragment would silently vanish from the
+		// reconstructed workspace:<path> form below, since nothing in this
+		// branch carries them through — two references differing only in a
+		// query string would then normalize to the same string and collide
+		// under the dedup lookup despite naming distinct things the caller
+		// wrote down on purpose. Rejecting them is the same "fail loudly
+		// rather than silently reinterpret" rule the scheme itself exists
+		// to enforce, not merely an omission to patch over.
+		if parsed.Host != "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return "", errors.New("workspace-relative artifact URI must be a bare path: no host, userinfo, query, or fragment")
+		}
 		relative := parsed.Opaque
 		if relative == "" {
 			relative = strings.TrimPrefix(parsed.Path, "/")
