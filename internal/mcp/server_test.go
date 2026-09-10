@@ -711,6 +711,15 @@ func (r *testRegistry) Lookup(_ context.Context, workspaceID string) (registry.W
 	return target, nil
 }
 
+func (r *testRegistry) LookupByCanonicalRoot(_ context.Context, canonicalRoot string) (registry.WorkspaceTarget, error) {
+	for _, target := range r.targets {
+		if target.CanonicalRoot == canonicalRoot {
+			return target, nil
+		}
+	}
+	return registry.WorkspaceTarget{}, registry.ErrWorkspaceNotFound
+}
+
 func TestOmittedMutationsReplayAndRejectChangedRequests(t *testing.T) {
 	ctx, session := newSession(t)
 	call := func(name string, arguments map[string]any) map[string]any {

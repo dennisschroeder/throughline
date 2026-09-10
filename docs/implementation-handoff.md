@@ -1061,6 +1061,12 @@ one configured workspace may supply that workspace as the default. Responses alw
 resolved workspace. Arbitrary filesystem/database paths and mutable session-level workspace
 selection are forbidden; see ADR 0009.
 
+`resolve_workspace` (below) does not relax this: it takes a client-supplied path and answers only
+`workspace_id`, never a database or provider path, and never establishes a session-level default. A
+call still names its `workspace_id` explicitly, the same as before this tool existed; resolving one
+from a path is a separate, single-purpose lookup a client makes once and then addresses by identifier
+like any other caller.
+
 State changing calls carry:
 
 ```json
@@ -1320,6 +1326,24 @@ Supported V1 validator kinds are `structure`, `schema`, `evaluation`, `provenanc
 #### `list_outputs`
 
 Discover bounded accepted outputs for reuse by `profile_name`, version constraint, objective, producer, or recency. It is a structured query over authoritative rows, not semantic search or a package registry. `propose_plan` and `create_item` may declare `requires_outputs` by exact revision or profile/version constraint.
+
+#### `resolve_workspace`
+
+**Purpose:** learn a `workspace_id` from a filesystem path, for a client that knows its own working
+directory but cannot read `.throughline/config.toml` itself.
+
+Domain-neutral, not workspace-scoped, and the one tool besides `get_semantic_model` that takes no
+`workspace_id`. Input is `{ "path": "/abs/or/relative/path" }`; output is `{ "workspace_id": "..." }`.
+Resolution walks upward from `path` to the nearest ancestor directory whose canonical root is a
+registered workspace and returns that workspace's identifier — never a list of what else is
+registered, and never enumerating the registry to find it. A path with no registered ancestor at all
+returns `workspace_not_found`; a path whose nearest ancestor is registered but has not finished
+initialization returns `workspace_pending` (retryable, since finishing `init` resolves it).
+
+The daemon has no notion of a client's current directory on its own — routing already runs solely
+through an explicit `workspace_id` (see ADR 0016/0017) — so this is the inversion: the one side that
+does know its own path passes it, and the daemon does the one comparison it alone is positioned to
+make, against `canonical_root`.
 
 ### External actions and delegated authority
 
@@ -1592,6 +1616,17 @@ Deletes a specific typed edge, requires expected version of the dependent item, 
 #### `attach_artifact`
 
 Adds a typed external reference to an item. Input includes `kind`, `uri`, optional `title`/small metadata, actor, idempotency key, expected version. Duplicates must be idempotent for the same URI/kind.
+
+`uri` is normally an absolute URI (`https://`, `file://`, or any other scheme). A `workspace:`-scheme
+URI is the one exception: it names a path relative to the workspace's canonical root, e.g.
+`workspace:docs/report.md`, and is the form that survives a worktree being deleted, a branch merging,
+or the workspace being cloned or relocated elsewhere — an absolute path or URL into any of those does
+not. Throughline validates that the path stays inside the root (no `..` segment may climb above it)
+and normalizes it, but never resolves it to a real file itself; a consumer that needs the absolute
+path joins the relative form onto whatever root it independently knows. The path component of every
+URI, relative or absolute, is normalized before comparison, so two differently-spelled references to
+the same resource (`file:///a/./b.md` and `file:///a/b.md`) are recognized as the same artifact by the
+idempotent-duplicate rule above rather than creating a second row.
 
 ### Deliberately later tools
 

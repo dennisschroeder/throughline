@@ -109,6 +109,7 @@ func (a *adapter) addTools(server *mcp.Server) {
 	a.add(server, "get_objective_context", "Retrieve deterministic, bounded objective continuation context. objective_id accepts an objective's key.", true, schemaFor[objectiveContextInput]("objective_id"), a.getObjectiveContext)
 	a.add(server, "get_changes", "Read cursor-based activity deltas. objective_id accepts an objective's key.", true, schemaFor[changesInput](), a.getChanges)
 	a.addWorkspaceless(server, "get_semantic_model", "Read the embedded Throughline semantic model. Domain-neutral; not workspace-scoped.", true, semanticModelSchema(), a.getSemanticModel)
+	a.addWorkspaceless(server, "resolve_workspace", "Resolve the workspace_id of the nearest registered ancestor of a client-supplied path. Domain-neutral; not workspace-scoped.", true, resolveWorkspaceSchema(), a.resolveWorkspace)
 	a.add(server, "list_output_profiles", "List governed persisted output profiles.", true, schemaFor[workspaceInput](), a.listProfiles)
 	a.add(server, "get_output_profile", "Read one exact governed output profile version.", true, schemaFor[outputProfileInput]("profile_name", "profile_version"), a.getProfile)
 	a.add(server, "list_outputs", "Discover accepted reusable outputs. objective_id accepts an objective's key.", true, schemaFor[outputsInput](), a.listOutputs)
@@ -236,6 +237,17 @@ func (a *adapter) addWorkspaceless(server *mcp.Server, name, description string,
 		}
 		result, err := handler(ctx, nil, request.Params.Arguments)
 		if err != nil {
+			// A workspaceless tool's own handler can still fail with a routing-shaped
+			// error — resolve_workspace's whole job is resolution, so unlike every
+			// a.add-registered tool it can produce one of these itself, after the
+			// handler already ran rather than before. Map it the same way a.add does
+			// so the stable code and retryable flag from routableCodes survive
+			// instead of falling through to buildErrorPayload's generic default.
+			for _, candidate := range routableCodes {
+				if errors.Is(err, candidate.err) {
+					return toolErrorResult(routingErrorPayload(ctx, err)), nil
+				}
+			}
 			return toolErrorResult(a.errorPayload(ctx, nil, err, request.Params.Arguments)), nil
 		}
 		normalized := snakeCaseValue(result)
@@ -279,6 +291,7 @@ var routableCodes = []struct {
 }{
 	{throughlinerouter.ErrWorkspaceRequired, "workspace_required", false},
 	{throughlinerouter.ErrWorkspaceInvalid, "workspace_invalid", false},
+	{throughlinerouter.ErrWorkspacePathInvalid, "workspace_path_invalid", false},
 	{registry.ErrWorkspaceNotFound, "workspace_not_found", false},
 	{registry.ErrWorkspacePending, "workspace_pending", true},
 	{registry.ErrWorkspaceUnavailable, "workspace_unavailable", true},
@@ -639,6 +652,8 @@ func resultSchema(name string) map[string]any {
 		return schemaForResult[changesResult]()
 	case "get_semantic_model":
 		return semanticModelResultSchema()
+	case "resolve_workspace":
+		return resolveWorkspaceResultSchema()
 	case "list_objectives":
 		return schemaForResult[[]objectiveSummary]()
 	case "list_output_profiles":
@@ -1837,6 +1852,41 @@ func (a *adapter) getSemanticModel(_ context.Context, _ *app.Service, raw json.R
 		section = "manifest"
 	}
 	return map[string]any{"section": section, "model_version": model.ModelVersion, "content_digest": model.ContentDigest, "data": data, "not_found_ids": missing}, nil
+}
+
+// resolveWorkspaceSchema is bespoke rather than schemaFor because this tool has no
+// workspace_id at all — resolving one is the point of calling it — and schemaFor always
+// prepends workspace_id to Required.
+func resolveWorkspaceSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"path": map[string]any{"type": "string"},
+	}, "required": []string{"path"}, "additionalProperties": false}
+}
+
+func resolveWorkspaceResultSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"workspace_id": map[string]any{"type": "string"},
+	}, "required": []string{"workspace_id"}, "additionalProperties": false}
+}
+
+type resolveWorkspaceInput struct {
+	Path string `json:"path"`
+}
+
+type resolveWorkspaceResult struct {
+	WorkspaceID string `json:"workspace_id"`
+}
+
+func (a *adapter) resolveWorkspace(ctx context.Context, _ *app.Service, raw json.RawMessage) (any, error) {
+	var input resolveWorkspaceInput
+	if err := decode(raw, &input); err != nil {
+		return nil, err
+	}
+	workspaceID, err := a.router.ResolveWorkspaceIDForPath(ctx, input.Path)
+	if err != nil {
+		return nil, err
+	}
+	return resolveWorkspaceResult{WorkspaceID: workspaceID}, nil
 }
 
 type changesResult struct {

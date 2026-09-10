@@ -26,4 +26,8 @@ var (
 	// ErrWorkspaceBusy means a resolution attempt was abandoned because a concurrent one
 	// for the same workspace_id is still in flight and the caller asked not to wait.
 	ErrWorkspaceBusy = errors.New("workspace_busy")
+
+	// ErrWorkspacePathInvalid means a client-supplied path for ResolveWorkspaceIDForPath
+	// could not be canonicalized (empty, or naming a location that does not exist).
+	ErrWorkspacePathInvalid = errors.New("workspace_path_invalid")
 )

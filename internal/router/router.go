@@ -3,7 +3,9 @@ package router
 import (
 	"container/list"
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"unicode"
@@ -28,6 +30,7 @@ const (
 // a fake without a real SQLite file.
 type Registry interface {
 	Lookup(ctx context.Context, workspaceID string) (registry.WorkspaceTarget, error)
+	LookupByCanonicalRoot(ctx context.Context, canonicalRoot string) (registry.WorkspaceTarget, error)
 }
 
 // Router is the single deep WorkspaceRouter the MCP adapter depends on: resolve a
@@ -117,6 +120,41 @@ func (r *Router) Service(ctx context.Context, workspaceID string) (*app.Service,
 		return nil, err
 	}
 	return result.(*runtimeEntry).service, nil
+}
+
+// ResolveWorkspaceIDForPath returns the workspace_id of the nearest registered ancestor of
+// path: the entry whose canonical_root equals path itself or one of path's ancestor
+// directories, closest first. The daemon has no notion of a client's working directory on
+// its own — the client is the one side that knows it — so this is the inversion of the
+// obvious "list what's registered" approach: it never enumerates the registry, issuing
+// instead one canonical_root point query per ancestor directory, walking upward from path
+// until a match is found or the filesystem root is reached. An ancestor whose entry is
+// still pending stops the walk and reports ErrWorkspacePending rather than continuing past
+// it to some more distant active workspace, since silently skipping it would resolve to
+// the wrong workspace instead of surfacing the interrupted init that needs attention.
+func (r *Router) ResolveWorkspaceIDForPath(ctx context.Context, path string) (string, error) {
+	canonical, err := registry.CanonicalizeRoot(path)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", ErrWorkspacePathInvalid, err.Error())
+	}
+	current := canonical
+	for {
+		target, err := r.registry.LookupByCanonicalRoot(ctx, current)
+		if err == nil {
+			if target.LifecycleState == registry.LifecyclePending {
+				return "", registry.ErrWorkspacePending
+			}
+			return target.WorkspaceID, nil
+		}
+		if !errors.Is(err, registry.ErrWorkspaceNotFound) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", registry.ErrWorkspaceNotFound
+		}
+		current = parent
+	}
 }
 
 func (r *Router) lookupCached(workspaceID string, generation int64) (*runtimeEntry, bool) {

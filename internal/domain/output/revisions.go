@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -33,13 +34,11 @@ func NewArtifact(artifact Artifact, now time.Time) (Artifact, error) {
 	if artifact.ID == "" || artifact.WorkItemID == "" || artifact.Kind == "" || artifact.URI == "" || artifact.AttachedBy == "" {
 		return Artifact{}, errors.New("artifact requires id, work item id, kind, URI, and attaching actor")
 	}
-	if strings.ContainsAny(artifact.URI, " \t\r\n") {
-		return Artifact{}, errors.New("artifact URI must be an absolute URI")
+	normalizedURI, err := normalizeArtifactURI(artifact.URI)
+	if err != nil {
+		return Artifact{}, err
 	}
-	parsed, err := url.Parse(artifact.URI)
-	if err != nil || !parsed.IsAbs() {
-		return Artifact{}, errors.New("artifact URI must be an absolute URI")
-	}
+	artifact.URI = normalizedURI
 	if len(artifact.Metadata) == 0 {
 		artifact.Metadata = json.RawMessage(`{}`)
 	}
@@ -50,6 +49,47 @@ func NewArtifact(artifact Artifact, now time.Time) (Artifact, error) {
 	artifact.CreatedAt = now.UTC()
 	artifact.Version = 1
 	return artifact, nil
+}
+
+// workspaceURIScheme marks a reference as relative to the workspace's canonical root
+// explicitly, rather than inferring it from a URI that happens to lack a scheme — a
+// malformed or typo'd absolute URI must fail loudly, not silently become a path.
+const workspaceURIScheme = "workspace"
+
+// normalizeArtifactURI validates and canonicalizes an artifact reference. A workspace:
+// URI names a path relative to canonical_root, cleaned and checked to stay inside it;
+// Throughline never resolves canonical_root itself, since that fact lives in the
+// registry, a layer internal/domain cannot import. Every other scheme must remain an
+// absolute URI, as before, with its path component cleaned the same way. Cleaning both
+// forms here — the one place every artifact URI passes through before being stored or
+// compared — is what lets the existing exact-match ArtifactByURI lookup recognize two
+// differently-spelled references to the same file as the same reference.
+func normalizeArtifactURI(raw string) (string, error) {
+	if strings.ContainsAny(raw, " \t\r\n") {
+		return "", errors.New("artifact URI must be an absolute URI")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", errors.New("artifact URI must be an absolute URI")
+	}
+	if parsed.Scheme == workspaceURIScheme {
+		relative := parsed.Opaque
+		if relative == "" {
+			relative = strings.TrimPrefix(parsed.Path, "/")
+		}
+		cleaned := path.Clean(relative)
+		if cleaned == "" || cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+			return "", errors.New("workspace-relative artifact URI must name a path inside the workspace")
+		}
+		return workspaceURIScheme + ":" + cleaned, nil
+	}
+	if !parsed.IsAbs() {
+		return "", errors.New("artifact URI must be an absolute URI")
+	}
+	if parsed.Path != "" {
+		parsed.Path = path.Clean(parsed.Path)
+	}
+	return parsed.String(), nil
 }
 
 type RevisionAcceptanceState string

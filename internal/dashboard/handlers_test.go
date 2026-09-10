@@ -171,6 +171,15 @@ func (r *fakeRegistry) Lookup(_ context.Context, workspaceID string) (registry.W
 	return target, nil
 }
 
+func (r *fakeRegistry) LookupByCanonicalRoot(_ context.Context, canonicalRoot string) (registry.WorkspaceTarget, error) {
+	for _, target := range r.targets {
+		if target.CanonicalRoot == canonicalRoot {
+			return target, nil
+		}
+	}
+	return registry.WorkspaceTarget{}, registry.ErrWorkspaceNotFound
+}
+
 func TestMintTokenRejectsUnroutableWorkspace(t *testing.T) {
 	h := newTestHarness(t)
 	body, _ := json.Marshal(mintRequest{WorkspaceID: "does-not-exist", ActorID: "agent:x"})

@@ -31,6 +31,70 @@ func TestNewArtifactValidatesExternalURI(t *testing.T) {
 	}
 }
 
+// TestNewArtifactAcceptsAWorkspaceRelativeReference is REP-05's first artifact
+// criterion: a relative reference is a distinct, explicitly marked form, not
+// inferred from a URI that happens to lack a scheme.
+func TestNewArtifactAcceptsAWorkspaceRelativeReference(t *testing.T) {
+	now := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	for _, spelling := range []string{"workspace:docs/report.md", "workspace:/docs/report.md", "workspace:///docs/report.md"} {
+		artifact, err := NewArtifact(Artifact{
+			ID: "artifact-1", WorkItemID: "item-1", Kind: "document", URI: spelling, AttachedBy: "agent:writer",
+		}, now)
+		if err != nil {
+			t.Fatalf("%s: %v", spelling, err)
+		}
+		if artifact.URI != "workspace:docs/report.md" {
+			t.Fatalf("%s normalized to %q, want the canonical spelling", spelling, artifact.URI)
+		}
+	}
+}
+
+// TestNewArtifactRejectsAWorkspaceReferenceThatEscapesTheRoot is REP-05's second
+// artifact criterion, the containment half: no cleaning of a workspace-relative
+// path may climb above canonical_root, and this must hold lexically since the
+// domain layer never sees canonical_root itself.
+func TestNewArtifactRejectsAWorkspaceReferenceThatEscapesTheRoot(t *testing.T) {
+	now := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	for _, escaping := range []string{
+		"workspace:../escape.md",
+		"workspace:./a/../../escape.md",
+		"workspace:..",
+		"workspace:",
+	} {
+		_, err := NewArtifact(Artifact{
+			ID: "artifact-1", WorkItemID: "item-1", Kind: "document", URI: escaping, AttachedBy: "agent:writer",
+		}, now)
+		if err == nil {
+			t.Fatalf("%s: escaping reference accepted", escaping)
+		}
+	}
+}
+
+// TestNewArtifactNormalizesEquivalentAbsoluteURIsIdentically is REP-05's second
+// artifact criterion, the dedup half: two differently-spelled references to the
+// same resource must compare equal, since that equality is what the existing
+// ArtifactByURI lookup in attachArtifactMutation relies on to deduplicate.
+func TestNewArtifactNormalizesEquivalentAbsoluteURIsIdentically(t *testing.T) {
+	now := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	for _, pair := range [][2]string{
+		{"file:///a/./b.md", "file:///a/b.md"},
+		{"file:///a/x/../b.md", "file:///a/b.md"},
+		{"https://example.com/docs//report.md", "https://example.com/docs/report.md"},
+	} {
+		first, err := NewArtifact(Artifact{ID: "artifact-1", WorkItemID: "item-1", Kind: "document", URI: pair[0], AttachedBy: "agent:writer"}, now)
+		if err != nil {
+			t.Fatalf("%s: %v", pair[0], err)
+		}
+		second, err := NewArtifact(Artifact{ID: "artifact-2", WorkItemID: "item-1", Kind: "document", URI: pair[1], AttachedBy: "agent:writer"}, now)
+		if err != nil {
+			t.Fatalf("%s: %v", pair[1], err)
+		}
+		if first.URI != second.URI {
+			t.Fatalf("%q and %q normalized to %q and %q, want the same string", pair[0], pair[1], first.URI, second.URI)
+		}
+	}
+}
+
 func TestHumanReviewRequiresNamedVerifierAndRationale(t *testing.T) {
 	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.UTC)
 	revision := OutputRevision{ID: "revision-1"}
