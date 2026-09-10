@@ -244,6 +244,81 @@ caller's 404 branch cannot see.
 - Both criteria are pinned against the old derivation: reverting `ListObjectives` to the
   items-derived form fails the store, contract and dashboard tests.
 
+### REP-04 CRITERIA
+
+- Commits: `f9c546a` (`feat: supersede an acceptance criterion instead of rewriting or excusing
+  it`), then `fa15c8d`, `84d30ba` and `1d5da5e`, each a response to a review pass. Budget reduced
+  to 3 passes for this node and every one after it (decision `01a088ef-4338-7c02-8732-e694b5c7b114`).
+- Claims: `01a088ef-997f-72f5-81ce-3b65992ff3ee`.
+- Final gate: all six repository commands exited zero on 2026-09-10 at `1d5da5e`, plus
+  `go test ./... -race -shuffle=on`.
+
+A wrong acceptance criterion could previously only be waived, which records that the condition was
+excused rather than that it was mistaken, or resolved anyway, which falsifies what the gate actually
+checked. `AcceptanceCriterion` gains a `superseded` status plus `supersedes_id` and
+`supersession_reason`; the predecessor's text, ordinal, required flag and resolution evidence are
+never rewritten, only its status and version change. Migration `0012` rebuilds
+`acceptance_criteria` to add the columns, a partial unique index enforcing at most one active
+criterion per ordinal, and a partial unique index enforcing at most one replacement per predecessor.
+`patch_item` carries `acceptance_criteria_to_add[].supersedes_id`.
+
+#### Review
+
+Three passes, the reduced budget, all recorded as **degraded** for the same reason as REP-02 and
+REP-03: cross-provider review was unavailable, so every reviewer was Claude.
+
+| Pass | Mutants | Survived | Findings fixed |
+|---|---|---|---|
+| 1 | 40 | 25 | 10 |
+| 2 | 27 | 5 | 5 |
+| 3 | 4 | 3 | 3 (closed with pinning tests; none were live defects) |
+
+The defects worth naming, because each was silent. The board card counted superseded criteria in
+its progress fraction, so correcting a condition moved the card *away* from done and a criterion
+satisfied before being superseded stopped counting as satisfied. The table rebuild in migration
+`0012` dropped `acceptance_criteria_by_item`, the index both hot queries need, turning
+`ListAcceptanceCriteria` and the completion gate into full table scans. An ordinal collision leaked
+the driver's raw `UNIQUE constraint failed ... (2067)` rather than a domain message — first for a
+plain addition (pass 1), then for a replacement pointed at a *different* active criterion's ordinal,
+which the first fix's guard did not cover because it was skipped for every superseding addition
+regardless of which ordinal it named (pass 2). Superseded criteria rendered identically to pending
+ones on the dashboard, with neither the replacement link nor the reason reaching the drawer. A
+required criterion added to a `done` item left an unmet gate unnoticed.
+
+Pass 3 found no further defects: its three survivors were all cases where the shipped code was
+already correct and simply unpinned — the `patch_item` supersession-field mapping, the dashboard
+drawer's mapping (the same class of gap pass 2 found at the MCP layer, this time at the rendering
+layer), a superseding replacement reopening a `done` item's gate, and two plain additions in one
+batch claiming the same ordinal. Each was closed with a test verified to kill the mutant that found
+it, not filed as residual risk, because the fix was cheap and directly bears on AC1's "visible" or
+the driver-error class the rest of the node treats as a defect wherever it can reach a caller.
+
+Two items were considered and deliberately left as-is: the app-layer cross-work-item guard in
+`service.go`, which duplicates a domain-layer guard one line later and only changes the error
+message if removed; and the `acceptance_criteria_one_replacement` partial unique index, which no
+current code path can reach past the domain's already-superseded guard and the store's version CAS
+— kept as schema-level defense in depth rather than as a tested guarantee.
+
+#### Dispositions
+
+| Finding | Disposition |
+|---|---|
+| The ontology has no `acceptance_criterion` lifecycle | Filed (F10, pass 1); same class as REP-02's effect-kind vocabulary gap |
+| `acceptance_criteria_one_replacement` index has no code path that reaches it | Accepted as schema-level defense in depth, not a tested guarantee |
+
+#### Evidence
+
+- `TestSupersedingACriterionKeepsItsPredecessorIntact` supersedes a criterion, reopens the database,
+  and confirms the predecessor's text/ordinal/required and the replacement's link/reason both
+  survive.
+- `TestOnlyActiveCriteriaBlockCompletion` and `TestCardProgressCountsOnlyActiveCriteria` pin AC2 at
+  the completion gate and at the board card independently.
+- Six mutants surviving pass 1 and five surviving pass 2 were re-run after their fixes and confirmed
+  to fail the suite; the three surviving pass 3 were each verified the same way before being closed.
+- `TestEffectsWorkOnADatabaseUpgradedWithDataPresent` extended to assert migration `0012`'s table
+  rebuild preserves a pre-existing row's `required`, `text`, `ordinal` and `status`, not merely its
+  count; verified to fail against a hardcoded-`required`-to-`0` rebuild.
+
 ## Feedback
 
 - REP-01 was estimated small but consumed the full five-pass review budget because file permissions
@@ -323,3 +398,32 @@ caller's 404 branch cannot see.
   to `ready`: four occurrences across two nodes now. `ask_question` bound to a work item blocks it,
   with no way to record a non-blocking question against one. `claim_item` does not transition to
   `in_progress` by default though the handoff says it does.
+
+### REP-04
+
+- **Counting mutants converged where counting findings had not.** 40, 27, 4 across the three
+  passes, and every pass's survivors fell within what the next pass's fixes explained: 25 to 5 to 3.
+  This is the first node in the objective where the raw mutant count itself reads as a convergence
+  signal, not just the behavioural-finding count REP-02 and REP-03 needed to see it. Reducing the
+  budget to 3 passes after REP-03 did not cost real findings here — pass 3 found nothing that was
+  actually wrong, only three more things nobody had pinned yet.
+- **The same class of gap recurred at three different layers of the same feature, each invisible to
+  the others.** The `patch_item` request mapping (pass 2), the dashboard drawer's rendering mapping
+  (pass 3), and the ordinal-collision guard's blind spot for an unrelated criterion's ordinal
+  (pass 2) versus its blind spot for two *new* criteria sharing an ordinal within one batch
+  (pass 3) are the same underlying shape twice each: one guard written for the case the author had
+  in mind, silent on the adjacent case a caller could still reach. A criterion worth adding to this
+  kind of node: state the surface *and* the input shape a guard is meant to cover, not only the
+  surface.
+- **A finding that isn't a defect is still worth a test, when it's cheap and sits on a stated
+  criterion.** All three of pass 3's survivors were code already behaving correctly; none were
+  filed as residual risk. AC1 says "visible" — the two rendering mappings (MCP and dashboard) are
+  exactly what makes that true or false for a person, so leaving either unpinned would have left
+  the criterion resting on manual reading rather than on the gate. The two structural gaps (index
+  and app-layer redundant guard) that *were* left as accepted residual risk were both cases where no
+  reachable code path exercises them at all, which is a different judgment from "correct but
+  untested."
+- **The claim held for the whole node this time.** Unlike REP-02 and REP-03, REP-04's single claim
+  (`01a088ef-997f-72f5-81ce-3b65992ff3ee`) covered all three implementation commits and all three
+  review passes without lapsing. Worth noting precisely because the four prior lapses across two
+  nodes made it look like a certainty rather than a function of how long a node runs unattended.
