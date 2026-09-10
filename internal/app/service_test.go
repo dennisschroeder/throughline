@@ -630,6 +630,10 @@ func (s *memoryStore) UpdateAcceptanceCriterion(context.Context, work.Acceptance
 	return nil
 }
 
+func (s *memoryStore) SupersedeAcceptanceCriterion(context.Context, work.AcceptanceCriterion) error {
+	return nil
+}
+
 func (s *memoryStore) AcceptanceCriteriaSatisfied(context.Context, string) (bool, error) {
 	return true, nil
 }

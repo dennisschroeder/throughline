@@ -181,7 +181,7 @@ Use these names consistently in code, tool contracts, UI, and documentation.
 | **Plan** | A versioned proposal for achieving an objective. A plan can be draft, proposed, approved, rejected, or superseded; approval commits its accepted work items without executing them. |
 | **WorkItem** | The primary unit of proposed, executable, reviewable, or trackable work. It may describe research, writing, design, installation, configuration, integration, evaluation, approval, human action, or agent action—not only code. A task is a UI synonym only; do not conflate it with an MCP long-running tool task. |
 | **ContextRecord** | A typed authoritative context node: requirement, constraint, assumption, finding/evidence, risk, or success metric. Each kind has its own small lifecycle where needed. |
-| **AcceptanceCriterion** | A structured, individually stateful condition used to judge whether a work item is complete. |
+| **AcceptanceCriterion** | A structured, individually stateful condition used to judge whether a work item is complete. A criterion that turns out to be the wrong condition is superseded by a replacement rather than waived or edited: waiving records the condition as excused, editing destroys what was agreed, and superseding keeps both. |
 | **OutputProfile** | An immutable, versioned, governed definition of an output class. It specifies required structure, semantic meaning, validation expectations, and deterministic acceptance conditions. Built-ins are seeded data, not hardcoded domain branches. |
 | **ExpectedOutput** | A work-item-specific contract instance referencing an exact active OutputProfile version plus any narrower constraints. It describes what must be produced before work begins. |
 | **OutputRevision** | An immutable produced candidate binding one or more Artifacts to one ExpectedOutput and exact OutputProfile version. Material changes create a new revision; prior validation never carries forward implicitly. |
@@ -586,6 +586,7 @@ proposed ──► authorized ──► executing ──► succeeded
 #### Context-record lifecycles
 
 ```text
+AcceptanceCriterion: pending ──► satisfied | waived; any ──► superseded
 Question:   open ──► answered | waived
 Decision:   proposed ──► accepted ──► superseded
 Assumption: untested ──► validating ──► validated | invalidated ──► superseded
@@ -1874,7 +1875,9 @@ Rules:
 - Plan draft/proposal/approval/rejection/supersession and atomic commitment of included work.
 - Context-record lifecycles, especially assumption invalidation, decision supersession, approval revocation, and their downstream blockers/attention.
 - Every status transition, including all invalid paths and gate messages.
-- Acceptance criterion completion/waiver rules.
+- Acceptance criterion completion/waiver rules, and supersession: the predecessor keeps its text and
+  any verdict already recorded against it, the replacement carries the link and the reason, and only
+  criteria that are still active block completion or count towards progress.
 - OutputProfile proposal/activation/rejection/supersession and immutability of active versions.
 - ExpectedOutput narrowing rules; an instance cannot weaken its profile.
 - OutputRevision immutability, revision isolation, validation/waiver rules, deterministic acceptance, and reuse/version compatibility.

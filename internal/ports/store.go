@@ -54,6 +54,7 @@ type Repository interface {
 	CreateAcceptanceCriterion(context.Context, work.AcceptanceCriterion) error
 	AcceptanceCriterion(ctx context.Context, id string) (work.AcceptanceCriterion, error)
 	UpdateAcceptanceCriterion(context.Context, work.AcceptanceCriterion) error
+	SupersedeAcceptanceCriterion(context.Context, work.AcceptanceCriterion) error
 	AcceptanceCriteriaSatisfied(ctx context.Context, workItemID string) (bool, error)
 	CreateDependency(context.Context, work.Dependency) error
 	DeleteDependency(ctx context.Context, workItemID, dependsOnItemID string, kind work.DependencyKind) error

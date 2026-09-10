@@ -217,6 +217,11 @@ func attentionGateSections(items []ports.WorkItemContext, gate Gate, activity []
 	var criteria []CriterionRow
 	if item != nil {
 		for _, ac := range item.AcceptanceCriteria {
+			// A superseded criterion is history. Listing it here would count a
+			// condition nobody stands behind towards this item's progress.
+			if !ac.Status.Active() {
+				continue
+			}
 			criteria = append(criteria, CriterionRow{Text: ac.Text, Passed: ac.Status == work.AcceptanceSatisfied, Status: string(ac.Status)})
 		}
 	}

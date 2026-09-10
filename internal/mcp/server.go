@@ -2057,7 +2057,16 @@ type patchItemInput struct {
 	AttentionState                 *work.AttentionState             `json:"attention_state"`
 	RequiredCapabilities           *[]string                        `json:"required_capabilities"`
 	AcceptanceCriterionResolutions []patchAcceptanceResolutionInput `json:"acceptance_criterion_resolutions"`
+	AcceptanceCriteriaToAdd        []patchAcceptanceAdditionInput   `json:"acceptance_criteria_to_add"`
 	ExpectedOutputsToAdd           []planExpectedOutputInput        `json:"expected_outputs_to_add"`
+}
+
+type patchAcceptanceAdditionInput struct {
+	Text               string `json:"text"`
+	Required           bool   `json:"required"`
+	Ordinal            int    `json:"ordinal"`
+	SupersedesID       string `json:"supersedes_id"`
+	SupersessionReason string `json:"supersession_reason"`
 }
 
 type patchAcceptanceResolutionInput struct {
@@ -2077,6 +2086,15 @@ func patchItemSchema() map[string]any {
 			"status":       map[string]any{"enum": []string{"satisfied", "waived"}},
 			"rationale":    map[string]any{"type": "string"},
 		}, "required": []string{"criterion_id", "status", "rationale"}, "additionalProperties": false,
+	}}
+	properties["acceptance_criteria_to_add"] = map[string]any{"type": "array", "items": map[string]any{
+		"type": "object", "properties": map[string]any{
+			"text":                map[string]any{"type": "string"},
+			"required":            map[string]any{"type": "boolean"},
+			"ordinal":             map[string]any{"type": "integer", "minimum": 1},
+			"supersedes_id":       map[string]any{"type": "string"},
+			"supersession_reason": map[string]any{"type": "string"},
+		}, "required": []string{"text", "ordinal"}, "additionalProperties": false,
 	}}
 	properties["expected_outputs_to_add"] = map[string]any{"type": "array", "items": map[string]any{
 		"type": "object", "properties": map[string]any{
@@ -2100,6 +2118,12 @@ func (a *adapter) patchItem(ctx context.Context, service *app.Service, raw json.
 	command := app.PatchWorkItemCommand{WorkItemID: in.ID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, Title: in.Title, Description: in.Description, ParentID: in.ParentID, Priority: in.Priority, EstimatedScope: in.EstimatedScope, ExecutionPolicy: in.ExecutionPolicy, AttentionState: in.AttentionState, RequiredCapabilities: in.RequiredCapabilities}
 	for _, resolution := range in.AcceptanceCriterionResolutions {
 		command.AcceptanceCriterionResolutions = append(command.AcceptanceCriterionResolutions, app.PatchAcceptanceCriterionResolution{CriterionID: resolution.CriterionID, Status: resolution.Status, Rationale: resolution.Rationale})
+	}
+	for _, addition := range in.AcceptanceCriteriaToAdd {
+		command.AcceptanceCriteriaToAdd = append(command.AcceptanceCriteriaToAdd, app.PatchAcceptanceCriterionAddition{
+			Text: addition.Text, Required: addition.Required, Ordinal: addition.Ordinal,
+			SupersedesID: addition.SupersedesID, SupersessionReason: addition.SupersessionReason,
+		})
 	}
 	for _, expected := range in.ExpectedOutputsToAdd {
 		command.ExpectedOutputsToAdd = append(command.ExpectedOutputsToAdd, app.ProposedExpectedOutput{Name: expected.Name, ProfileName: expected.ProfileName, ProfileVersion: expected.ProfileVersion, Contract: expected.Contract, DestinationHint: expected.DestinationHint, Required: expected.Required, Ordinal: expected.Ordinal})

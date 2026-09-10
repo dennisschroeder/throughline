@@ -15,7 +15,15 @@ const (
 	AcceptancePending   AcceptanceCriterionStatus = "pending"
 	AcceptanceSatisfied AcceptanceCriterionStatus = "satisfied"
 	AcceptanceWaived    AcceptanceCriterionStatus = "waived"
+	// AcceptanceSuperseded marks a criterion a later one replaced. It keeps the
+	// text and any resolution it had, and stops counting towards completion.
+	AcceptanceSuperseded AcceptanceCriterionStatus = "superseded"
 )
+
+// Active reports whether this criterion still says anything about whether the
+// work is done. A superseded one is history: it is readable, and it neither
+// blocks completion nor counts towards progress.
+func (s AcceptanceCriterionStatus) Active() bool { return s != AcceptanceSuperseded }
 
 type AcceptanceCriterion struct {
 	ID                  string
@@ -28,6 +36,12 @@ type AcceptanceCriterion struct {
 	ResolvedBy          string
 	ResolvedAt          time.Time
 	ResolutionRationale string
+	// SupersedesID names the criterion this one replaces, if any, and
+	// SupersessionReason says why. Both live on the replacement: the link runs
+	// backwards so that superseding a criterion changes nothing about it except
+	// that it stops counting.
+	SupersedesID       string
+	SupersessionReason string
 }
 
 func NewAcceptanceCriterion(criterion AcceptanceCriterion) (AcceptanceCriterion, error) {
@@ -66,6 +80,35 @@ func ResolveAcceptanceCriterion(criterion AcceptanceCriterion, target Acceptance
 	criterion.ResolutionRationale = rationale
 	criterion.Version++
 	return criterion, nil
+}
+
+// SupersedeAcceptanceCriterion replaces one criterion with another. The
+// predecessor is not edited beyond being marked superseded and carrying the
+// reason: what it said, and any verdict already recorded against it, stay
+// exactly as they were. Waiving a wrong criterion would have been the only
+// alternative, and that records the condition as excused rather than as
+// mistaken.
+func SupersedeAcceptanceCriterion(predecessor, replacement AcceptanceCriterion, actor, rationale string) (AcceptanceCriterion, AcceptanceCriterion, error) {
+	actor = strings.TrimSpace(actor)
+	rationale = strings.TrimSpace(rationale)
+	if actor == "" || rationale == "" {
+		return AcceptanceCriterion{}, AcceptanceCriterion{}, errors.New("acceptance criterion supersession requires actor and rationale")
+	}
+	if predecessor.Status == AcceptanceSuperseded {
+		return AcceptanceCriterion{}, AcceptanceCriterion{}, errors.New("acceptance criterion is already superseded")
+	}
+	if predecessor.WorkItemID != replacement.WorkItemID {
+		return AcceptanceCriterion{}, AcceptanceCriterion{}, errors.New("an acceptance criterion can only be superseded within its own work item")
+	}
+	if predecessor.ID == replacement.ID {
+		return AcceptanceCriterion{}, AcceptanceCriterion{}, errors.New("an acceptance criterion cannot supersede itself")
+	}
+	superseded := predecessor
+	superseded.Status = AcceptanceSuperseded
+	superseded.Version++
+	replacement.SupersedesID = predecessor.ID
+	replacement.SupersessionReason = rationale
+	return superseded, replacement, nil
 }
 
 type DependencyKind string

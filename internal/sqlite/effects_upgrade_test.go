@@ -25,8 +25,17 @@ func TestEffectsWorkOnADatabaseUpgradedWithDataPresent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if last := migrations[len(migrations)-1].version; last != 11 {
-		t.Fatalf("latest migration = %d, want the relation-version migration to be last", last)
+	// The fixture has to stop short of the migration that adds the version
+	// columns, whatever else has been added since, because rows written before
+	// those columns existed are the whole point of it.
+	relationVersions := -1
+	for index, migration := range migrations {
+		if migration.version == 11 {
+			relationVersions = index
+		}
+	}
+	if relationVersions < 0 {
+		t.Fatal("the relation-version migration is missing")
 	}
 	database, err := Open(ctx, filepath.Join(t.TempDir(), "upgraded.db"))
 	if err != nil {
@@ -36,7 +45,7 @@ func TestEffectsWorkOnADatabaseUpgradedWithDataPresent(t *testing.T) {
 	if err := database.ensureMigrationTable(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, migration := range migrations[:len(migrations)-1] {
+	for _, migration := range migrations[:relationVersions] {
 		if err := database.applyMigration(ctx, migration); err != nil {
 			t.Fatal(err)
 		}

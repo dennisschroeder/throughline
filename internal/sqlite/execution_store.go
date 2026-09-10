@@ -99,9 +99,10 @@ WHERE work_item_id = ? AND capability_slug = ? AND version = ?`, workItemID, cap
 func (r *transactionRepository) CreateAcceptanceCriterion(ctx context.Context, criterion work.AcceptanceCriterion) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO acceptance_criteria
-  (id, work_item_id, ordinal, text, required, status, resolved_at, resolved_by, resolution_rationale, version)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, criterion.ID, criterion.WorkItemID, criterion.Ordinal, criterion.Text,
-		boolInt(criterion.Required), criterion.Status, nullableTime(criterion.ResolvedAt), nullableString(criterion.ResolvedBy), criterion.ResolutionRationale, criterion.Version)
+  (id, work_item_id, ordinal, text, required, status, resolved_at, resolved_by, resolution_rationale, version, supersedes_id, supersession_reason)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, criterion.ID, criterion.WorkItemID, criterion.Ordinal, criterion.Text,
+		boolInt(criterion.Required), criterion.Status, nullableTime(criterion.ResolvedAt), nullableString(criterion.ResolvedBy), criterion.ResolutionRationale, criterion.Version,
+		nullableString(criterion.SupersedesID), criterion.SupersessionReason)
 	if err != nil {
 		return fmt.Errorf("insert acceptance criterion: %w", err)
 	}
@@ -121,6 +122,23 @@ WHERE id = ? AND status = ? AND version = ?`, criterion.Status, formatTime(crite
 		criterion.ResolutionRationale, criterion.Version, criterion.ID, work.AcceptancePending, criterion.Version-1)
 	if err != nil {
 		return fmt.Errorf("resolve acceptance criterion: %w", err)
+	}
+	return requireChanged(result)
+}
+
+// SupersedeAcceptanceCriterion marks a criterion replaced. It writes only the
+// status and the version: the text and any verdict already recorded against it
+// are history and must read back exactly as they were. Any status but
+// superseded is a valid starting point, since a criterion can turn out to be
+// the wrong condition whether or not someone has already judged it.
+func (r *transactionRepository) SupersedeAcceptanceCriterion(ctx context.Context, criterion work.AcceptanceCriterion) error {
+	result, err := r.transaction.ExecContext(ctx, `
+UPDATE acceptance_criteria
+SET status = ?, version = ?
+WHERE id = ? AND status <> ? AND version = ?`, work.AcceptanceSuperseded, criterion.Version,
+		criterion.ID, work.AcceptanceSuperseded, criterion.Version-1)
+	if err != nil {
+		return fmt.Errorf("supersede acceptance criterion: %w", err)
 	}
 	return requireChanged(result)
 }
@@ -641,7 +659,8 @@ WHERE expected.work_item_id = ? ORDER BY expected.ordinal, output_revisions.revi
 }
 
 const acceptanceCriterionSelect = `
-SELECT id, work_item_id, ordinal, text, required, status, resolved_at, resolved_by, resolution_rationale, version
+SELECT id, work_item_id, ordinal, text, required, status, resolved_at, resolved_by, resolution_rationale, version,
+       COALESCE(supersedes_id, ''), supersession_reason
 FROM acceptance_criteria`
 
 const dependencySelect = `
@@ -701,7 +720,8 @@ func scanAcceptanceCriterion(row scanner) (work.AcceptanceCriterion, error) {
 	var required int
 	var resolvedAt, resolvedBy sql.NullString
 	if err := row.Scan(&criterion.ID, &criterion.WorkItemID, &criterion.Ordinal, &criterion.Text, &required,
-		&criterion.Status, &resolvedAt, &resolvedBy, &criterion.ResolutionRationale, &criterion.Version); err != nil {
+		&criterion.Status, &resolvedAt, &resolvedBy, &criterion.ResolutionRationale, &criterion.Version,
+		&criterion.SupersedesID, &criterion.SupersessionReason); err != nil {
 		return work.AcceptanceCriterion{}, err
 	}
 	criterion.Required = required == 1

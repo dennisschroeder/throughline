@@ -152,7 +152,24 @@ type PatchWorkItemCommand struct {
 	AttentionState                 *work.AttentionState
 	RequiredCapabilities           *[]string
 	AcceptanceCriterionResolutions []PatchAcceptanceCriterionResolution
-	ExpectedOutputsToAdd           []ProposedExpectedOutput
+	// AcceptanceCriteriaToAdd appends conditions to an item that already exists.
+	// A criterion that names SupersedesID replaces one instead, which is the only
+	// way to correct a wrong condition: waiving it would record the condition as
+	// excused rather than as mistaken, and leaving it would block completion for
+	// a reason nobody stands behind.
+	AcceptanceCriteriaToAdd []PatchAcceptanceCriterionAddition
+	ExpectedOutputsToAdd    []ProposedExpectedOutput
+}
+
+type PatchAcceptanceCriterionAddition struct {
+	Text     string
+	Required bool
+	Ordinal  int
+	// SupersedesID, when set, names the criterion this one replaces, and
+	// SupersessionReason says why. A replacement may reuse its predecessor's
+	// ordinal: only criteria that still count are unique on it.
+	SupersedesID       string
+	SupersessionReason string
 }
 
 type PatchAcceptanceCriterionResolution struct {
@@ -261,7 +278,43 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 				}
 				waivedRequired = waivedRequired || (resolved.Status == work.AcceptanceWaived && resolved.Required)
 			}
-			if len(command.AcceptanceCriterionResolutions) > 0 {
+			for _, addition := range command.AcceptanceCriteriaToAdd {
+				id, err := s.ids.New()
+				if err != nil {
+					return work.WorkItem{}, fmt.Errorf("generate acceptance criterion id: %w", err)
+				}
+				replacement, err := work.NewAcceptanceCriterion(work.AcceptanceCriterion{
+					ID: id, WorkItemID: item.ID, Text: addition.Text, Required: addition.Required, Ordinal: addition.Ordinal,
+				})
+				if err != nil {
+					return work.WorkItem{}, err
+				}
+				if predecessorID := strings.TrimSpace(addition.SupersedesID); predecessorID != "" {
+					predecessor, err := repository.AcceptanceCriterion(ctx, predecessorID)
+					if err != nil {
+						return work.WorkItem{}, err
+					}
+					if predecessor.WorkItemID != item.ID {
+						return work.WorkItem{}, errors.New("acceptance criterion belongs to another work item")
+					}
+					if seenCriteria[predecessorID] {
+						return work.WorkItem{}, fmt.Errorf("acceptance criterion %q is both resolved and superseded in one patch", predecessorID)
+					}
+					seenCriteria[predecessorID] = true
+					superseded, updated, err := work.SupersedeAcceptanceCriterion(predecessor, replacement, command.ActorID, addition.SupersessionReason)
+					if err != nil {
+						return work.WorkItem{}, err
+					}
+					if err := repository.SupersedeAcceptanceCriterion(ctx, superseded); err != nil {
+						return work.WorkItem{}, err
+					}
+					replacement = updated
+				}
+				if err := repository.CreateAcceptanceCriterion(ctx, replacement); err != nil {
+					return work.WorkItem{}, err
+				}
+			}
+			if len(command.AcceptanceCriterionResolutions) > 0 || len(command.AcceptanceCriteriaToAdd) > 0 {
 				changes = append(changes, "acceptance criteria")
 			}
 			if waivedRequired && command.AttentionState == nil && item.AttentionState == work.AttentionNone {
@@ -311,7 +364,7 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 }
 
 func patchWorkItemHasChanges(command PatchWorkItemCommand) bool {
-	return command.Title != nil || command.Description != nil || command.ParentID != nil || command.Priority != nil || command.EstimatedScope != nil || command.ExecutionPolicy != nil || command.AttentionState != nil || command.RequiredCapabilities != nil || len(command.AcceptanceCriterionResolutions) > 0 || len(command.ExpectedOutputsToAdd) > 0
+	return command.Title != nil || command.Description != nil || command.ParentID != nil || command.Priority != nil || command.EstimatedScope != nil || command.ExecutionPolicy != nil || command.AttentionState != nil || command.RequiredCapabilities != nil || len(command.AcceptanceCriterionResolutions) > 0 || len(command.AcceptanceCriteriaToAdd) > 0 || len(command.ExpectedOutputsToAdd) > 0
 }
 
 func normalizedCapabilities(capabilities []string) ([]string, error) {
