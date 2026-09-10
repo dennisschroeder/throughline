@@ -12,7 +12,6 @@ import (
 // whether it succeeded. Asserting success is what let six tools quietly lose key
 // addressing while the suite stayed green.
 type addressingHarness struct {
-	t          *testing.T
 	call       func(*testing.T, string, map[string]any) map[string]any
 	raw        func(*testing.T, string, map[string]any) *protocol.CallToolResult
 	objectiveA string
@@ -60,7 +59,7 @@ func newAddressingHarness(t *testing.T) *addressingHarness {
 		"actor_id": "agent:addr", "idempotency_key": "addr-b", "key": "OBJ-ADDR-B",
 		"title": "The other objective", "desired_outcome": "Never reached by mistake", "phase": "discovery",
 	})["result"].(map[string]any)["id"].(string)
-	return &addressingHarness{t: t, call: call, raw: raw, objectiveA: a, objectiveB: b}
+	return &addressingHarness{call: call, raw: raw, objectiveA: a, objectiveB: b}
 }
 
 // TestEveryToolTakingAnObjectiveIdAcceptsAKey walks the whole surface. Six tools

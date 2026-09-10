@@ -14,11 +14,15 @@ import (
 // only stated in a comment.
 func TestResolveObjectiveInMatchesTheDocumentedRules(t *testing.T) {
 	objectives := []work.Objective{
+		// A key spelled like another objective's identifier, listed first so that
+		// slice order favours the key. Nothing in the domain forbids the
+		// collision: a key is validated only as non-empty, and ListObjectives
+		// orders by key, so the colliding objective really can come first.
+		// Without this ordering the precedence rule cannot be told apart from
+		// "whichever field matches first wins".
+		{ID: "id-gamma", Key: "id-alpha"},
 		{ID: "id-alpha", Key: "OBJ-ALPHA"},
 		{ID: "id-beta", Key: "OBJ-BETA"},
-		// A key spelled like another objective's identifier. Nothing in the
-		// domain forbids it: a key is validated only as non-empty.
-		{ID: "id-gamma", Key: "id-alpha"},
 	}
 	for _, testCase := range []struct {
 		name      string

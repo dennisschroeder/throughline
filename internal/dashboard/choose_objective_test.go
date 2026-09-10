@@ -14,12 +14,9 @@ import (
 // the handler's 404 branch only fires on an error — so the empty id travels on
 // and fails later as an internal error about an objective nobody asked for.
 func TestChooseObjectiveNamesAnObjectiveEvenWhenNoneCouldBeCounted(t *testing.T) {
-	objectives := []work.Objective{{ID: "id-first", Key: "OBJ-FIRST"}, {ID: "id-second", Key: "OBJ-SECOND"}}
-	if got := chooseObjective(objectives, nil); got.ID != "id-first" {
-		t.Fatalf("with no countable candidate the choice was %q, want the first objective", got.ID)
-	}
-	if got := chooseObjective(nil, nil); got.ID != "" {
-		t.Fatalf("with no objectives at all the choice was %q, want the zero objective", got.ID)
+	fallback := work.Objective{ID: "id-first", Key: "OBJ-FIRST"}
+	if got := chooseObjective(fallback, nil); got.ID != "id-first" {
+		t.Fatalf("with no countable candidate the choice was %q, want the fallback", got.ID)
 	}
 }
 
@@ -59,13 +56,32 @@ func TestChooseObjectivePrefersGatesThenWorkThenRecency(t *testing.T) {
 			want: "fresh",
 		},
 		{
+			// The same tie with the winner listed first. Without it, "take the
+			// last candidate" satisfies the case above and the recency term can
+			// be removed unnoticed, degrading the choice to store order.
+			name: "the most recently touched wins from either position",
+			candidates: []objectiveCandidate{
+				{objective: objective("fresh", late), gates: 2, items: 5},
+				{objective: objective("stale", early), gates: 2, items: 5},
+			},
+			want: "fresh",
+		},
+		{
+			name: "the objective holding more work wins from either position",
+			candidates: []objectiveCandidate{
+				{objective: objective("working", early), gates: 1, items: 9},
+				{objective: objective("idle", late), gates: 1, items: 0},
+			},
+			want: "working",
+		},
+		{
 			name:       "a single candidate is the choice",
 			candidates: []objectiveCandidate{{objective: objective("only", early), gates: 0, items: 0}},
 			want:       "only",
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			if got := chooseObjective(nil, testCase.candidates); got.ID != testCase.want {
+			if got := chooseObjective(work.Objective{}, testCase.candidates); got.ID != testCase.want {
 				t.Fatalf("chose %q, want %q", got.ID, testCase.want)
 			}
 		})

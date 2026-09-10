@@ -173,7 +173,7 @@ func resolveObjectiveID(ctx context.Context, service *app.Service, requested str
 		}
 		candidates = append(candidates, objectiveCandidate{objective: obj, gates: len(gates), items: itemCounts[obj.ID]})
 	}
-	return chooseObjective(objectives, candidates).ID, nil
+	return chooseObjective(objectives[0], candidates).ID, nil
 }
 
 // objectiveCandidate is one objective whose gates could actually be counted.
@@ -192,18 +192,18 @@ type objectiveCandidate struct {
 // creating an objective showed an empty board.
 //
 // Every candidate can be dropped upstream when a store read fails, so this takes
-// the full objective list too and falls back to its first entry. Returning the
-// zero objective instead would hand the caller an empty id with no error: the
-// handler's 404 branch only fires on an error, so the empty id travels on and
-// fails later as an internal error about an objective nobody asked for. Naming a
-// real objective keeps a transient read failure recoverable and any lasting one
-// legible.
-func chooseObjective(objectives []work.Objective, candidates []objectiveCandidate) work.Objective {
+// a fallback for the run where all of them are. Returning the zero objective
+// instead would hand the caller an empty id with no error: the handler's 404
+// branch only fires on an error, so the empty id travels on and fails later as
+// an internal error about an objective nobody asked for. Naming a real objective
+// makes a lasting failure legible, and leaves the reader somewhere they can
+// navigate away from while a transient one clears.
+//
+// The fallback is a single objective rather than the whole list, so a caller
+// cannot pass a candidate set and a list that disagree.
+func chooseObjective(fallback work.Objective, candidates []objectiveCandidate) work.Objective {
 	if len(candidates) == 0 {
-		if len(objectives) == 0 {
-			return work.Objective{}
-		}
-		return objectives[0]
+		return fallback
 	}
 	best := candidates[0]
 	for _, candidate := range candidates[1:] {
