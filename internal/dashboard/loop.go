@@ -429,7 +429,11 @@ func buildCard(item ports.WorkItemContext, gatedWorkItem map[string]Gate, readyI
 	required := 0
 	passed := 0
 	for _, ac := range item.AcceptanceCriteria {
-		if !ac.Required {
+		// A superseded criterion is a condition nobody stands behind any more.
+		// Counting it made superseding one move the card away from done, which
+		// is exactly backwards: describing the work more accurately does not
+		// make it less finished.
+		if !ac.Required || !ac.Status.Active() {
 			continue
 		}
 		required++

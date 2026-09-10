@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dennisschroeder/throughline/internal/app"
@@ -216,5 +217,107 @@ func TestOnlyActiveCriteriaBlockCompletion(t *testing.T) {
 	// hold the item back.
 	if !satisfied() {
 		t.Fatal("a superseded criterion still blocked completion")
+	}
+}
+
+// TestAddingACriterionReportsAnOrdinalCollisionAsADomainError covers the common
+// mistake with the new addition path: a caller adding a condition has no reason
+// to know which ordinals are taken, and used to receive the driver's unique
+// constraint error with a SQLite error number.
+func TestAddingACriterionReportsAnOrdinalCollisionAsADomainError(t *testing.T) {
+	ctx, _, _, service, item, criteria := criteriaFixture(t, "ordinals.db")
+	taken := criteria[0]
+
+	_, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{
+		WorkItemID: item.ID, ActorID: "human:owner", IdempotencyKey: "ordinal-collision", ExpectedVersion: item.Version,
+		AcceptanceCriteriaToAdd: []app.PatchAcceptanceCriterionAddition{{Text: "Collides.", Required: true, Ordinal: taken.Ordinal}},
+	})
+	if err == nil {
+		t.Fatal("adding a criterion on a taken ordinal succeeded")
+	}
+	if !strings.Contains(err.Error(), "already in use") || strings.Contains(err.Error(), "UNIQUE constraint") {
+		t.Fatalf("error = %v, want a domain message rather than the driver's", err)
+	}
+
+	// A free ordinal is accepted, and superseding is the way to reuse a taken one.
+	if _, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{
+		WorkItemID: item.ID, ActorID: "human:owner", IdempotencyKey: "ordinal-free", ExpectedVersion: item.Version,
+		AcceptanceCriteriaToAdd: []app.PatchAcceptanceCriterionAddition{{Text: "Appended.", Required: true, Ordinal: 9}},
+	}); err != nil {
+		t.Fatalf("adding a criterion on a free ordinal failed: %v", err)
+	}
+}
+
+// TestAddingARequiredCriterionToFinishedWorkAsksForReview covers the state that
+// would otherwise pass unnoticed: an item still marked done whose completion
+// gate no longer holds.
+func TestAddingARequiredCriterionToFinishedWorkAsksForReview(t *testing.T) {
+	ctx, _, database, service, item, criteria := criteriaFixture(t, "reopened.db")
+
+	// Satisfy everything and mark the item done directly, which is the state a
+	// completed item is in when someone realises a condition was missing.
+	resolutions := make([]app.PatchAcceptanceCriterionResolution, 0, len(criteria))
+	for _, criterion := range criteria {
+		resolutions = append(resolutions, app.PatchAcceptanceCriterionResolution{CriterionID: criterion.ID, Status: work.AcceptanceSatisfied, Rationale: "Met."})
+	}
+	patched, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{
+		WorkItemID: item.ID, ActorID: "human:owner", IdempotencyKey: "reopened-resolve",
+		ExpectedVersion: item.Version, AcceptanceCriterionResolutions: resolutions,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.db.ExecContext(ctx, "UPDATE work_items SET execution_status = 'done' WHERE id = ?", item.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{
+		WorkItemID: item.ID, ActorID: "human:owner", IdempotencyKey: "reopened-add",
+		ExpectedVersion: patched.Result.Version,
+		AcceptanceCriteriaToAdd: []app.PatchAcceptanceCriterionAddition{{
+			Text: "The condition nobody wrote down until afterwards.", Required: true, Ordinal: 7,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Result.AttentionState != work.AttentionNeedsHumanReview {
+		t.Fatalf("attention state = %q, want a review request: a done item now has an unmet gate", reopened.Result.AttentionState)
+	}
+}
+
+// TestSupersedingAtTheStoreRefusesAStaleOrRepeatedWrite pins the guards on the
+// update itself. The domain rejects a second supersession first, so without
+// this the store's own conditions could be removed unnoticed — and they are
+// what makes the write safe under a concurrent one.
+func TestSupersedingAtTheStoreRefusesAStaleOrRepeatedWrite(t *testing.T) {
+	ctx, _, database, _, item, criteria := criteriaFixture(t, "store-guard.db")
+	target := criteria[0]
+	_ = item
+
+	supersede := func(criterion work.AcceptanceCriterion) error {
+		return database.Store().WithinTransaction(ctx, func(repository ports.Repository) error {
+			return repository.SupersedeAcceptanceCriterion(ctx, criterion)
+		})
+	}
+
+	// A write carrying the wrong expected version must not land.
+	stale := target
+	stale.Version = target.Version + 5
+	if err := supersede(stale); err == nil {
+		t.Fatal("a supersession carrying a stale version succeeded")
+	}
+
+	first := target
+	first.Version = target.Version + 1
+	if err := supersede(first); err != nil {
+		t.Fatalf("the first supersession failed: %v", err)
+	}
+
+	// Superseding it again must not land either, whatever version it carries.
+	again := first
+	again.Version = first.Version + 1
+	if err := supersede(again); err == nil {
+		t.Fatal("a criterion was superseded twice at the store")
 	}
 }

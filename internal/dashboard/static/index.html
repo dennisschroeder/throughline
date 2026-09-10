@@ -122,6 +122,8 @@ button:focus-visible, [tabindex]:focus-visible, a:focus-visible{
 .b.g{background:#fff}
 .b.danger{border-color:var(--color-accent);color:var(--color-accent-800)}
 .b:disabled{opacity:.45;cursor:not-allowed}
+.mark.superseded{opacity:.5}
+.criteria-note{margin-top:2px}
 
 .id-copy{
   border:1px solid var(--color-neutral-400);background:#fff;color:var(--color-neutral-700);
@@ -836,7 +838,19 @@ function renderItemDrawer(detail){
   if (detail.acceptance_criteria && detail.acceptance_criteria.length) {
     html += "<div class=\"drawer-section\"><div class=\"section-lbl\">Acceptance criteria</div>";
     detail.acceptance_criteria.forEach(function(c){
-      html += "<div class=\"criteria-row\"><span class=\"mark" + (c.status === "satisfied" ? " pass" : "") + "\">" + (c.status === "satisfied" ? "✓" : "·") + "</span><span>" + esc(c.text) + "</span></div>";
+      // A superseded criterion used to render exactly like a pending one, so a
+      // replaced condition and its replacement sat side by side with nothing
+      // telling them apart. It is struck through and carries the reason.
+      var superseded = c.status === "superseded";
+      var mark = c.status === "satisfied" ? "✓" : (superseded ? "×" : (c.status === "waived" ? "~" : "·"));
+      var cls = "mark" + (c.status === "satisfied" ? " pass" : "") + (superseded ? " superseded" : "");
+      var text = superseded
+        ? "<s>" + esc(c.text) + "</s>"
+        : esc(c.text);
+      var note = "";
+      if (superseded) note = "<div class=\"m criteria-note\">replaced</div>";
+      else if (c.supersession_reason) note = "<div class=\"m criteria-note\">replaces an earlier condition · " + esc(c.supersession_reason) + "</div>";
+      html += "<div class=\"criteria-row\"><span class=\"" + cls + "\">" + mark + "</span><span>" + text + note + "</span></div>";
     });
     html += "</div>";
   }

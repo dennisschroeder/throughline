@@ -107,6 +107,8 @@ func buildItemDetail(ctx context.Context, service *app.Service, id string, now t
 			ResolvedBy:          ac.ResolvedBy,
 			ResolvedAt:          formatOptionalTime(ac.ResolvedAt),
 			ResolutionRationale: ac.ResolutionRationale,
+			SupersedesID:        ac.SupersedesID,
+			SupersessionReason:  ac.SupersessionReason,
 		})
 	}
 
@@ -285,6 +287,8 @@ type acceptanceCriterionView struct {
 	ResolvedBy          string `json:"resolved_by,omitempty"`
 	ResolvedAt          string `json:"resolved_at,omitempty"`
 	ResolutionRationale string `json:"resolution_rationale,omitempty"`
+	SupersedesID        string `json:"supersedes_id,omitempty"`
+	SupersessionReason  string `json:"supersession_reason,omitempty"`
 }
 
 type dependencyView struct {

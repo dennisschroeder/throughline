@@ -278,7 +278,27 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 				}
 				waivedRequired = waivedRequired || (resolved.Status == work.AcceptanceWaived && resolved.Required)
 			}
+			// An ordinal is free if no criterion that still counts holds it. A
+			// caller adding a condition has no reason to know which are taken, so
+			// a collision has to be a domain message rather than the driver's
+			// unique-constraint error.
+			activeOrdinals := map[int]bool{}
+			if len(command.AcceptanceCriteriaToAdd) > 0 {
+				existing, err := repository.ListAcceptanceCriteria(ctx, item.ID)
+				if err != nil {
+					return work.WorkItem{}, err
+				}
+				for _, criterion := range existing {
+					if criterion.Status.Active() {
+						activeOrdinals[criterion.Ordinal] = true
+					}
+				}
+			}
 			for _, addition := range command.AcceptanceCriteriaToAdd {
+				supersedesID := strings.TrimSpace(addition.SupersedesID)
+				if activeOrdinals[addition.Ordinal] && supersedesID == "" {
+					return work.WorkItem{}, fmt.Errorf("acceptance criterion ordinal %d is already in use; supersede that criterion or choose another ordinal", addition.Ordinal)
+				}
 				id, err := s.ids.New()
 				if err != nil {
 					return work.WorkItem{}, fmt.Errorf("generate acceptance criterion id: %w", err)
@@ -289,10 +309,10 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 				if err != nil {
 					return work.WorkItem{}, err
 				}
-				if predecessorID := strings.TrimSpace(addition.SupersedesID); predecessorID != "" {
+				if predecessorID := supersedesID; predecessorID != "" {
 					predecessor, err := repository.AcceptanceCriterion(ctx, predecessorID)
 					if err != nil {
-						return work.WorkItem{}, err
+						return work.WorkItem{}, fmt.Errorf("load superseded acceptance criterion %q: %w", predecessorID, err)
 					}
 					if predecessor.WorkItemID != item.ID {
 						return work.WorkItem{}, errors.New("acceptance criterion belongs to another work item")
@@ -308,14 +328,37 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 					if err := repository.SupersedeAcceptanceCriterion(ctx, superseded); err != nil {
 						return work.WorkItem{}, err
 					}
+					// A distinct record: the item-level patch activity says only
+					// "acceptance criteria", which reads identically whether a
+					// criterion was judged or replaced.
+					if err := s.recordActivity(ctx, repository, work.Activity{
+						EntityKind: "acceptance_criterion", EntityID: predecessor.ID, WorkItemID: item.ID, ActorID: command.ActorID,
+						EventType: "acceptance_criterion.superseded",
+						Summary:   fmt.Sprintf("Acceptance criterion %d superseded: %s", predecessor.Ordinal, addition.SupersessionReason),
+					}); err != nil {
+						return work.WorkItem{}, err
+					}
 					replacement = updated
 				}
 				if err := repository.CreateAcceptanceCriterion(ctx, replacement); err != nil {
 					return work.WorkItem{}, err
 				}
+				activeOrdinals[replacement.Ordinal] = true
 			}
 			if len(command.AcceptanceCriterionResolutions) > 0 || len(command.AcceptanceCriteriaToAdd) > 0 {
 				changes = append(changes, "acceptance criteria")
+			}
+			// Adding a required condition to work already called done says the
+			// judgement was wrong. That is allowed — it is how a criterion gets
+			// corrected after the fact — but it leaves a completed item with an
+			// unmet gate, which nobody would notice without being told.
+			addedRequired := false
+			for _, addition := range command.AcceptanceCriteriaToAdd {
+				addedRequired = addedRequired || addition.Required
+			}
+			if addedRequired && item.ExecutionStatus == work.StatusDone && command.AttentionState == nil && item.AttentionState == work.AttentionNone {
+				item.AttentionState = work.AttentionNeedsHumanReview
+				changes = append(changes, "attention state")
 			}
 			if waivedRequired && command.AttentionState == nil && item.AttentionState == work.AttentionNone {
 				item.AttentionState = work.AttentionNeedsHumanReview

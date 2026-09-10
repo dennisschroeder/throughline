@@ -91,8 +91,11 @@ func ResolveAcceptanceCriterion(criterion AcceptanceCriterion, target Acceptance
 func SupersedeAcceptanceCriterion(predecessor, replacement AcceptanceCriterion, actor, rationale string) (AcceptanceCriterion, AcceptanceCriterion, error) {
 	actor = strings.TrimSpace(actor)
 	rationale = strings.TrimSpace(rationale)
-	if actor == "" || rationale == "" {
-		return AcceptanceCriterion{}, AcceptanceCriterion{}, errors.New("acceptance criterion supersession requires actor and rationale")
+	if actor == "" {
+		return AcceptanceCriterion{}, AcceptanceCriterion{}, errors.New("acceptance criterion supersession requires an actor")
+	}
+	if rationale == "" {
+		return AcceptanceCriterion{}, AcceptanceCriterion{}, errors.New("acceptance criterion supersession requires a reason")
 	}
 	if predecessor.Status == AcceptanceSuperseded {
 		return AcceptanceCriterion{}, AcceptanceCriterion{}, errors.New("acceptance criterion is already superseded")

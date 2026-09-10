@@ -131,6 +131,13 @@ WHERE id = ? AND status = ? AND version = ?`, criterion.Status, formatTime(crite
 // are history and must read back exactly as they were. Any status but
 // superseded is a valid starting point, since a criterion can turn out to be
 // the wrong condition whether or not someone has already judged it.
+// ListAcceptanceCriteria reads an item's criteria inside the write transaction,
+// so a caller deciding whether an ordinal is free sees the same rows it is about
+// to write against.
+func (r *transactionRepository) ListAcceptanceCriteria(ctx context.Context, workItemID string) ([]work.AcceptanceCriterion, error) {
+	return listAcceptanceCriteria(ctx, r.transaction, workItemID)
+}
+
 func (r *transactionRepository) SupersedeAcceptanceCriterion(ctx context.Context, criterion work.AcceptanceCriterion) error {
 	result, err := r.transaction.ExecContext(ctx, `
 UPDATE acceptance_criteria
@@ -576,8 +583,8 @@ WHERE output_revisions.acceptance_state = 'accepted'`
 	return result, rows.Err()
 }
 
-func (s *Store) listAcceptanceCriteria(ctx context.Context, reader sqlReader, workItemID string) ([]work.AcceptanceCriterion, error) {
-	rows, err := reader.QueryContext(ctx, acceptanceCriterionSelect+" WHERE work_item_id = ? ORDER BY ordinal", workItemID)
+func listAcceptanceCriteria(ctx context.Context, reader sqlReader, workItemID string) ([]work.AcceptanceCriterion, error) {
+	rows, err := reader.QueryContext(ctx, acceptanceCriterionSelect+" WHERE work_item_id = ? ORDER BY ordinal, id", workItemID)
 	if err != nil {
 		return nil, err
 	}

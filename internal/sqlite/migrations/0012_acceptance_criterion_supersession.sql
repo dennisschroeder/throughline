@@ -29,6 +29,12 @@ FROM acceptance_criteria;
 DROP TABLE acceptance_criteria;
 ALTER TABLE acceptance_criteria_new RENAME TO acceptance_criteria;
 
+-- Recreated: DROP TABLE took it with the old table, and the two partial indexes
+-- below cannot serve the queries that actually run, because neither
+-- listAcceptanceCriteria nor the completion gate carries the status predicate
+-- they are partial on. Without this both fall back to a full table scan.
+CREATE INDEX acceptance_criteria_by_item ON acceptance_criteria(work_item_id, ordinal);
+
 -- An ordinal identifies a criterion among the ones that still count. A
 -- superseded criterion keeps the ordinal it had, so its replacement can carry
 -- the same one and the pair reads as one revised condition.

@@ -235,7 +235,7 @@ func (s *Store) getWorkItemContext(ctx context.Context, reader sqlReader, id str
 	if err != nil {
 		return ports.WorkItemContext{}, err
 	}
-	criteria, err := s.listAcceptanceCriteria(ctx, reader, item.ID)
+	criteria, err := listAcceptanceCriteria(ctx, reader, item.ID)
 	if err != nil {
 		return ports.WorkItemContext{}, err
 	}

@@ -53,6 +53,7 @@ type Repository interface {
 	WorkItemParentCreatesCycle(ctx context.Context, workItemID, parentID string) (bool, error)
 	CreateAcceptanceCriterion(context.Context, work.AcceptanceCriterion) error
 	AcceptanceCriterion(ctx context.Context, id string) (work.AcceptanceCriterion, error)
+	ListAcceptanceCriteria(ctx context.Context, workItemID string) ([]work.AcceptanceCriterion, error)
 	UpdateAcceptanceCriterion(context.Context, work.AcceptanceCriterion) error
 	SupersedeAcceptanceCriterion(context.Context, work.AcceptanceCriterion) error
 	AcceptanceCriteriaSatisfied(ctx context.Context, workItemID string) (bool, error)
