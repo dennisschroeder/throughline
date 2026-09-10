@@ -63,6 +63,22 @@ func (h *Handlers) ItemDetailHandler() http.Handler {
 // (already the loop snapshot's own read path) purely to label dependency neighbours with
 // their key/title and to compute the reverse "required_by" edge, which WorkItemContext does
 // not carry itself.
+// acceptanceCriterionDetailView is the drawer's view of one criterion. Split
+// out so the supersession link and reason it carries — AC1's "visible" — can
+// be tested without a full work item and service.
+func acceptanceCriterionDetailView(ac work.AcceptanceCriterion) acceptanceCriterionView {
+	return acceptanceCriterionView{
+		Text:                ac.Text,
+		Required:            ac.Required,
+		Status:              string(ac.Status),
+		ResolvedBy:          ac.ResolvedBy,
+		ResolvedAt:          formatOptionalTime(ac.ResolvedAt),
+		ResolutionRationale: ac.ResolutionRationale,
+		SupersedesID:        ac.SupersedesID,
+		SupersessionReason:  ac.SupersessionReason,
+	}
+}
+
 func buildItemDetail(ctx context.Context, service *app.Service, id string, now time.Time) (itemDetail, error) {
 	item, err := service.GetWorkItem(ctx, id)
 	if err != nil {
@@ -100,16 +116,7 @@ func buildItemDetail(ctx context.Context, service *app.Service, id string, now t
 	}
 
 	for _, ac := range item.AcceptanceCriteria {
-		detail.AcceptanceCriteria = append(detail.AcceptanceCriteria, acceptanceCriterionView{
-			Text:                ac.Text,
-			Required:            ac.Required,
-			Status:              string(ac.Status),
-			ResolvedBy:          ac.ResolvedBy,
-			ResolvedAt:          formatOptionalTime(ac.ResolvedAt),
-			ResolutionRationale: ac.ResolutionRationale,
-			SupersedesID:        ac.SupersedesID,
-			SupersessionReason:  ac.SupersessionReason,
-		})
+		detail.AcceptanceCriteria = append(detail.AcceptanceCriteria, acceptanceCriterionDetailView(ac))
 	}
 
 	for _, dep := range item.Dependencies {

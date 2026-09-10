@@ -474,3 +474,64 @@ func TestPatchRejectsResolvingAndSupersedingTheSameCriterion(t *testing.T) {
 		t.Fatalf("error = %v, want the both-resolved-and-superseded message", err)
 	}
 }
+
+// TestSupersedingWithARequiredReplacementOnADoneItemAsksForReview covers the
+// same review-request path as adding a fresh required criterion, but for a
+// supersession: reopening a satisfied gate by replacing it must be noticed too.
+func TestSupersedingWithARequiredReplacementOnADoneItemAsksForReview(t *testing.T) {
+	ctx, _, database, service, item, criteria := criteriaFixture(t, "supersede-reopened.db")
+
+	resolutions := make([]app.PatchAcceptanceCriterionResolution, 0, len(criteria))
+	for _, criterion := range criteria {
+		resolutions = append(resolutions, app.PatchAcceptanceCriterionResolution{CriterionID: criterion.ID, Status: work.AcceptanceSatisfied, Rationale: "Met."})
+	}
+	patched, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{
+		WorkItemID: item.ID, ActorID: "human:owner", IdempotencyKey: "supersede-reopened-resolve",
+		ExpectedVersion: item.Version, AcceptanceCriterionResolutions: resolutions,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.db.ExecContext(ctx, "UPDATE work_items SET execution_status = 'done' WHERE id = ?", item.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	wrong := criteria[0]
+	reopened, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{
+		WorkItemID: item.ID, ActorID: "human:owner", IdempotencyKey: "supersede-reopened-add",
+		ExpectedVersion: patched.Result.Version,
+		AcceptanceCriteriaToAdd: []app.PatchAcceptanceCriterionAddition{{
+			Text: "Turns out the satisfied condition was wrong.", Required: true, Ordinal: wrong.Ordinal,
+			SupersedesID: wrong.ID, SupersessionReason: "The met condition named the wrong artefact.",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Result.AttentionState != work.AttentionNeedsHumanReview {
+		t.Fatalf("attention state = %q, want a review request: superseding reopened a done item's gate", reopened.Result.AttentionState)
+	}
+}
+
+// TestTwoAdditionsInOneBatchCannotShareAnOrdinal covers the within-batch case
+// F3's fixed check leaves open: activeOrdinals only reflects criteria that
+// existed before the patch, so nothing stopped a second, later addition in the
+// same call from colliding with an ordinal the first addition just took.
+func TestTwoAdditionsInOneBatchCannotShareAnOrdinal(t *testing.T) {
+	ctx, _, _, service, item, _ := criteriaFixture(t, "batch-collision.db")
+
+	_, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{
+		WorkItemID: item.ID, ActorID: "human:owner", IdempotencyKey: "batch-collision",
+		ExpectedVersion: item.Version,
+		AcceptanceCriteriaToAdd: []app.PatchAcceptanceCriterionAddition{
+			{Text: "Takes ordinal 9.", Required: true, Ordinal: 9},
+			{Text: "Also claims ordinal 9.", Required: true, Ordinal: 9},
+		},
+	})
+	if err == nil {
+		t.Fatal("two additions in one batch sharing an ordinal succeeded")
+	}
+	if !strings.Contains(err.Error(), "already in use") || strings.Contains(err.Error(), "UNIQUE constraint") {
+		t.Fatalf("error = %v, want a domain message rather than the driver's", err)
+	}
+}

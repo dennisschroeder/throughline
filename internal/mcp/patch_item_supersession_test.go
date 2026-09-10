@@ -59,7 +59,20 @@ func TestPatchItemMapsSupersedesIDAndSupersessionReasonWithoutSwapping(t *testin
 			{"text": "The correct condition.", "required": true, "ordinal": predecessor["ordinal"], "supersedes_id": predecessorID, "supersession_reason": reason},
 		},
 	})
-	_ = patched
+
+	// A supersession is a write to two rows, the predecessor and the
+	// replacement, not one; both must be named among the reported effects.
+	effects := patched["effects"].([]any)
+	effectIDs := make(map[string]bool, len(effects))
+	for _, raw := range effects {
+		entry := raw.(map[string]any)
+		if entry["kind"] == "acceptance_criterion" {
+			effectIDs[entry["id"].(string)] = true
+		}
+	}
+	if !effectIDs[predecessorID] {
+		t.Fatalf("patch_item effects %#v omit the superseded predecessor %q", effects, predecessorID)
+	}
 
 	after := call("get_item", map[string]any{"id": itemID, "include": []string{"acceptance_criteria"}})["result"].(map[string]any)["acceptance_criteria"].([]any)
 	var replacement map[string]any
@@ -71,6 +84,9 @@ func TestPatchItemMapsSupersedesIDAndSupersessionReasonWithoutSwapping(t *testin
 	}
 	if replacement == nil {
 		t.Fatalf("no replacement criterion found among %#v", after)
+	}
+	if !effectIDs[replacement["id"].(string)] {
+		t.Fatalf("patch_item effects %#v omit the replacement criterion %q", effects, replacement["id"])
 	}
 	// A swapped mapping would put the reason where the ID belongs and vice
 	// versa; this is only distinguishable because the two fields hold
