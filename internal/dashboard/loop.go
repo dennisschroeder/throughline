@@ -161,13 +161,7 @@ func resolveObjectiveID(ctx context.Context, service *app.Service, requested str
 		itemCounts[item.Objective.ID]++
 	}
 	al := &actorLiveness{lastCallAt: map[string]time.Time{}, now: now}
-	// Seeded from the first objective rather than the zero value: every candidate
-	// below can be skipped on a store error, and a run where all of them are
-	// skipped must still name an objective. Returning the zero value would hand
-	// the caller an empty id with a nil error, which its 404 branch cannot see
-	// and its snapshot builder turns into an internal error.
-	best := objectives[0]
-	bestGates, bestItems := -1, -1
+	candidates := make([]objectiveCandidate, 0, len(objectives))
 	for _, obj := range objectives {
 		objCtx, err := service.GetObjectiveContext(ctx, obj.ID)
 		if err != nil {
@@ -177,20 +171,51 @@ func resolveObjectiveID(ctx context.Context, service *app.Service, requested str
 		if err != nil {
 			continue
 		}
-		// Most blocking gates wins, then the objective that actually holds work,
-		// then most recently updated. Without the middle term an objective that
-		// was just created and has nothing in it wins every all-zero contest,
-		// because it is trivially the most recently updated one — so opening the
-		// dashboard right after creating an objective showed an empty board.
-		n, count := len(gates), itemCounts[obj.ID]
-		better := n > bestGates ||
-			(n == bestGates && count > bestItems) ||
-			(n == bestGates && count == bestItems && obj.UpdatedAt.After(best.UpdatedAt))
+		candidates = append(candidates, objectiveCandidate{objective: obj, gates: len(gates), items: itemCounts[obj.ID]})
+	}
+	return chooseObjective(objectives, candidates).ID, nil
+}
+
+// objectiveCandidate is one objective whose gates could actually be counted.
+type objectiveCandidate struct {
+	objective work.Objective
+	gates     int
+	items     int
+}
+
+// chooseObjective picks the objective to open when the caller named none.
+//
+// Most blocking gates wins, then the objective that actually holds work, then
+// most recently updated. Without the middle term an objective that was just
+// created and has nothing in it wins every all-zero contest, because it is
+// trivially the most recently updated one — so opening the dashboard right after
+// creating an objective showed an empty board.
+//
+// Every candidate can be dropped upstream when a store read fails, so this takes
+// the full objective list too and falls back to its first entry. Returning the
+// zero objective instead would hand the caller an empty id with no error: the
+// handler's 404 branch only fires on an error, so the empty id travels on and
+// fails later as an internal error about an objective nobody asked for. Naming a
+// real objective keeps a transient read failure recoverable and any lasting one
+// legible.
+func chooseObjective(objectives []work.Objective, candidates []objectiveCandidate) work.Objective {
+	if len(candidates) == 0 {
+		if len(objectives) == 0 {
+			return work.Objective{}
+		}
+		return objectives[0]
+	}
+	best := candidates[0]
+	for _, candidate := range candidates[1:] {
+		better := candidate.gates > best.gates ||
+			(candidate.gates == best.gates && candidate.items > best.items) ||
+			(candidate.gates == best.gates && candidate.items == best.items &&
+				candidate.objective.UpdatedAt.After(best.objective.UpdatedAt))
 		if better {
-			bestGates, bestItems, best = n, count, obj
+			best = candidate
 		}
 	}
-	return best.ID, nil
+	return best.objective
 }
 
 func buildObjectivesResponse(ctx context.Context, service *app.Service, workspaceID, actorID, currentID string, now time.Time) (ObjectivesResponse, error) {

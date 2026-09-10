@@ -1180,6 +1180,19 @@ record_external_action_execution
 
 This is more than the initial 14 tools, but not breadth for its own sake: without these additions, objectives, decisions, questions, approvals, assumptions, plan proposals, governed outputs, validation, and delegated authority exist in the schema yet cannot be managed cleanly through MCP. Where tool-count testing shows model confusion, combine mechanically similar context mutations behind strict operation enums; do not collapse distinct domain concepts. MCP is one adapter over these use cases, not the place where profiles or authority “live”; CLI and UI must call the same application services.
 
+### Addressing an objective
+
+`objective_id` accepts either an objective's identifier or the readable key it is known by, on every
+tool that takes the field, so a caller resuming from notes can address an objective by the name it
+was written down under. Identifiers win over keys where a reference could be read as either; keys are
+unique per workspace and are never rewritten, so a reference that resolves once resolves the same way
+forever.
+
+A reference that resolves to no objective is `not_found`, including where the field is only a filter:
+answering "no work here" for an objective that does not exist is a wrong answer rather than an empty
+one. A `version_conflict` raised on an objective addressed by key still carries the `current` block,
+since the version it names is the whole point of that error.
+
 ### Objective, plan, and context tools
 
 #### `create_objective`, `patch_objective`, `transition_objective`
@@ -1390,19 +1403,6 @@ objective with no items reports an empty map.
 
 Deriving this list from the work items instead — which every read path used to do — cannot represent
 an objective that has none, and reports the phase of each *item* rather than of each objective.
-
-#### Addressing an objective
-
-`objective_id` accepts either an objective's identifier or the readable key it is known by, on every
-tool that takes the field, so a caller resuming from notes can address an objective by the name it
-was written down under. Identifiers win over keys where a reference could be read as either; keys are
-unique per workspace and are never rewritten, so a reference that resolves once resolves the same way
-forever.
-
-A reference that resolves to no objective is `not_found`, including where the field is only a filter:
-answering "no work here" for an objective that does not exist is a wrong answer rather than an empty
-one. A `version_conflict` raised on an objective addressed by key still carries the `current` block,
-since the version it names is the whole point of that error.
 
 #### `list_items`
 

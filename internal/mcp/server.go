@@ -1397,10 +1397,11 @@ func (a *adapter) boardOverview(ctx context.Context, service *app.Service, raw j
 	if err != nil {
 		return nil, err
 	}
-	objectiveID, err := app.ResolveObjectiveIn(objectives, in.ObjectiveID)
+	scope, err := app.ResolveObjectiveIn(objectives, in.ObjectiveID)
 	if err != nil {
 		return nil, err
 	}
+	objectiveID := scope.ID
 	result := boardOverviewResult{ChangeCursor: fmt.Sprint(cursor), Objectives: map[string]int{}, Counts: map[string]int{}}
 	for _, objective := range objectives {
 		if objectiveID != "" && objective.ID != objectiveID {

@@ -67,6 +67,14 @@ func TestOrientationSeesAnObjectiveWithNoWorkItems(t *testing.T) {
 	if objectives["planning"] != float64(1) {
 		t.Fatalf("board_overview objectives = %#v, want the three-item objective counted once, not three times", objectives)
 	}
+	// A phase no objective is in is absent, not present and zero. Emitting the
+	// whole enum with zeroes reads as "these phases exist and are empty", which
+	// is a different claim from "nothing is there".
+	for _, absent := range []string{"execution", "evaluation", "completed", "paused", "cancelled", "idea"} {
+		if _, present := objectives[absent]; present {
+			t.Fatalf("board_overview objectives = %#v, want %q absent rather than present and zero", objectives, absent)
+		}
+	}
 
 	listed := call("list_objectives", map[string]any{})
 	rows, ok := listed["result"].([]any)

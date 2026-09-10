@@ -1255,56 +1255,52 @@ func (s *Service) ListObjectives(ctx context.Context) ([]work.Objective, error) 
 
 // ResolveObjectiveIn matches a reference against objectives the caller already
 // holds. It is the single statement of what an objective_id may be, so a caller
-// that has the slice in hand does not need a second read and cannot answer the
-// same field differently from one that does.
+// with the slice in hand needs no second read and cannot answer the same field
+// differently from one that does.
 //
 // One pass, identifier first: an identifier is the canonical immutable address,
 // and keys are unique, so a key can only ever be a second-best match for the
 // same reference.
-func ResolveObjectiveIn(objectives []work.Objective, reference string) (string, error) {
+//
+// An empty reference is not an error and not a match. It returns the zero
+// objective, which every caller reads as "no filter" — an absent objective_id
+// selects the whole workspace. A caller that needs a reference to be present
+// must reject the empty one itself, as ResolveObjective does.
+func ResolveObjectiveIn(objectives []work.Objective, reference string) (work.Objective, error) {
 	reference = strings.TrimSpace(reference)
 	if reference == "" {
-		return "", nil
+		return work.Objective{}, nil
 	}
-	byKey := ""
+	var byKey work.Objective
 	for _, objective := range objectives {
 		if objective.ID == reference {
-			return objective.ID, nil
+			return objective, nil
 		}
-		if objective.Key == reference && byKey == "" {
-			byKey = objective.ID
+		if objective.Key == reference && byKey.ID == "" {
+			byKey = objective
 		}
 	}
-	if byKey != "" {
+	if byKey.ID != "" {
 		return byKey, nil
 	}
-	return "", fmt.Errorf("resolve objective %q: %w", reference, ports.ErrNotFound)
+	return work.Objective{}, fmt.Errorf("resolve objective %q: %w", reference, ports.ErrNotFound)
 }
 
 // ResolveObjective accepts either an objective's identifier or the readable key
 // it is known by, so a caller that has only the key written down can address it
 // without first listing the board. It reads the objectives table rather than
 // opening a transaction, because resolving an address is a read and a workspace
-// holds few objectives.
+// holds few objectives. Unlike ResolveObjectiveIn it requires a reference: there
+// is no objective to return for the absence of one.
 func (s *Service) ResolveObjective(ctx context.Context, reference string) (work.Objective, error) {
-	reference = strings.TrimSpace(reference)
-	if reference == "" {
+	if strings.TrimSpace(reference) == "" {
 		return work.Objective{}, fmt.Errorf("resolve objective: %w", ports.ErrNotFound)
 	}
 	objectives, err := s.ListObjectives(ctx)
 	if err != nil {
 		return work.Objective{}, err
 	}
-	id, err := ResolveObjectiveIn(objectives, reference)
-	if err != nil {
-		return work.Objective{}, err
-	}
-	for _, objective := range objectives {
-		if objective.ID == id {
-			return objective, nil
-		}
-	}
-	return work.Objective{}, fmt.Errorf("resolve objective %q: %w", reference, ports.ErrNotFound)
+	return ResolveObjectiveIn(objectives, reference)
 }
 
 func (s *Service) GetObjectiveContext(ctx context.Context, id string) (ports.ObjectiveContext, error) {
