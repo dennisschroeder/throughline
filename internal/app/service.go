@@ -296,7 +296,22 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 			}
 			for _, addition := range command.AcceptanceCriteriaToAdd {
 				supersedesID := strings.TrimSpace(addition.SupersedesID)
-				if activeOrdinals[addition.Ordinal] && supersedesID == "" {
+				var predecessor work.AcceptanceCriterion
+				if supersedesID != "" {
+					loaded, err := repository.AcceptanceCriterion(ctx, supersedesID)
+					if err != nil {
+						return work.WorkItem{}, fmt.Errorf("load superseded acceptance criterion %q: %w", supersedesID, err)
+					}
+					if loaded.WorkItemID != item.ID {
+						return work.WorkItem{}, errors.New("acceptance criterion belongs to another work item")
+					}
+					predecessor = loaded
+				}
+				// A supersession only frees the ordinal it actually replaces. A
+				// replacement pointed at a different ordinal is a fresh
+				// collision, not the predecessor's slot reopening.
+				ordinalFreedBySupersession := supersedesID != "" && addition.Ordinal == predecessor.Ordinal
+				if activeOrdinals[addition.Ordinal] && !ordinalFreedBySupersession {
 					return work.WorkItem{}, fmt.Errorf("acceptance criterion ordinal %d is already in use; supersede that criterion or choose another ordinal", addition.Ordinal)
 				}
 				id, err := s.ids.New()
@@ -310,13 +325,6 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 					return work.WorkItem{}, err
 				}
 				if predecessorID := supersedesID; predecessorID != "" {
-					predecessor, err := repository.AcceptanceCriterion(ctx, predecessorID)
-					if err != nil {
-						return work.WorkItem{}, fmt.Errorf("load superseded acceptance criterion %q: %w", predecessorID, err)
-					}
-					if predecessor.WorkItemID != item.ID {
-						return work.WorkItem{}, errors.New("acceptance criterion belongs to another work item")
-					}
 					if seenCriteria[predecessorID] {
 						return work.WorkItem{}, fmt.Errorf("acceptance criterion %q is both resolved and superseded in one patch", predecessorID)
 					}

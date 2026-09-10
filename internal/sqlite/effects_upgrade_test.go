@@ -84,6 +84,14 @@ func TestEffectsWorkOnADatabaseUpgradedWithDataPresent(t *testing.T) {
 	if len(itemContext.AcceptanceCriteria) != 1 || itemContext.AcceptanceCriteria[0].Version < 1 {
 		t.Fatalf("backfilled acceptance criterion = %#v", itemContext.AcceptanceCriteria)
 	}
+	// Migration 0012 rebuilds this table to add supersession columns. The
+	// rebuild's INSERT ... SELECT must carry every pre-existing field across
+	// unchanged, not just the row count: a hardcoded default for one of them
+	// would pass every other assertion in this fixture.
+	if criterion := itemContext.AcceptanceCriteria[0]; criterion.Text != "Recorded before the upgrade." ||
+		!criterion.Required || criterion.Ordinal != 1 || criterion.Status != work.AcceptancePending {
+		t.Fatalf("acceptance criterion fields lost in the migration 0012 rebuild: %#v", criterion)
+	}
 
 	// Touching a row that predates the version columns must report it at the
 	// version the upgrade gave it, not at zero.

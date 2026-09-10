@@ -321,3 +321,156 @@ func TestSupersedingAtTheStoreRefusesAStaleOrRepeatedWrite(t *testing.T) {
 		t.Fatal("a criterion was superseded twice at the store")
 	}
 }
+
+// TestSupersedingOntoAnUnrelatedOrdinalReportsACollision covers the gap the
+// ordinal-collision check used to have: it only compared ordinals for a plain
+// addition, so a replacement pointed at a different criterion's ordinal skipped
+// the check entirely and reached the driver's raw unique-constraint error.
+func TestSupersedingOntoAnUnrelatedOrdinalReportsACollision(t *testing.T) {
+	ctx, _, _, service, item, criteria := criteriaFixture(t, "supersede-collision.db")
+	toReplace, other := criteria[0], criteria[1]
+
+	_, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{
+		WorkItemID: item.ID, ActorID: "human:owner", IdempotencyKey: "supersede-onto-other",
+		ExpectedVersion: item.Version,
+		AcceptanceCriteriaToAdd: []app.PatchAcceptanceCriterionAddition{{
+			// Ordinal names the other, still-active criterion's slot, not the
+			// predecessor's own — this must not be treated as freed.
+			Text: "Replacement claiming the wrong slot.", Required: true, Ordinal: other.Ordinal,
+			SupersedesID: toReplace.ID, SupersessionReason: "Wrong ordinal on purpose.",
+		}},
+	})
+	if err == nil {
+		t.Fatal("superseding onto an unrelated active ordinal succeeded")
+	}
+	if !strings.Contains(err.Error(), "already in use") || strings.Contains(err.Error(), "UNIQUE constraint") {
+		t.Fatalf("error = %v, want a domain message rather than the driver's", err)
+	}
+
+	// The predecessor's own ordinal remains free to reuse.
+	if _, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{
+		WorkItemID: item.ID, ActorID: "human:owner", IdempotencyKey: "supersede-onto-own",
+		ExpectedVersion: item.Version,
+		AcceptanceCriteriaToAdd: []app.PatchAcceptanceCriterionAddition{{
+			Text: "Replacement claiming its predecessor's slot.", Required: true, Ordinal: toReplace.Ordinal,
+			SupersedesID: toReplace.ID, SupersessionReason: "Correct ordinal.",
+		}},
+	}); err != nil {
+		t.Fatalf("superseding onto the predecessor's own ordinal failed: %v", err)
+	}
+}
+
+// TestSupersedingRecordsAnActivityNamingTheReplacedCriterion pins F6: the actor
+// was validated and then discarded, leaving no record of who replaced what or
+// why. Nothing else in the suite greps for this event.
+func TestSupersedingRecordsAnActivityNamingTheReplacedCriterion(t *testing.T) {
+	ctx, _, _, service, item, criteria := criteriaFixture(t, "supersede-activity.db")
+	wrong := criteria[0]
+
+	if _, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{
+		WorkItemID: item.ID, ActorID: "human:owner", IdempotencyKey: "supersede-activity",
+		ExpectedVersion: item.Version,
+		AcceptanceCriteriaToAdd: []app.PatchAcceptanceCriterionAddition{{
+			Text: "The replacement.", Required: true, Ordinal: wrong.Ordinal,
+			SupersedesID: wrong.ID, SupersessionReason: "Named the wrong artefact.",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	activities, err := service.ListActivity(ctx, app.ActivityFilter{WorkItemID: item.ID, Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *work.Activity
+	for index := range activities {
+		if activities[index].EventType == "acceptance_criterion.superseded" {
+			found = &activities[index]
+		}
+	}
+	if found == nil {
+		t.Fatalf("activity for acceptance_criterion.superseded not recorded: %#v", activities)
+	}
+	if found.EntityID != wrong.ID {
+		t.Fatalf("activity entity id = %q, want the predecessor %q", found.EntityID, wrong.ID)
+	}
+	if found.ActorID != "human:owner" {
+		t.Fatalf("activity actor id = %q, want the patching actor", found.ActorID)
+	}
+	if !strings.Contains(found.Summary, "Named the wrong artefact.") {
+		t.Fatalf("activity summary = %q, want it to carry the supersession reason", found.Summary)
+	}
+}
+
+// TestAttentionEscalationOnlyFiresForDoneItemsAndAnyRequiredAddition covers two
+// things pass 2's mutants showed were unguarded: the escalation must not fire
+// for an item that is not done, and it must fire from any required addition in
+// a batch, not only the last one.
+func TestAttentionEscalationOnlyFiresForDoneItemsAndAnyRequiredAddition(t *testing.T) {
+	ctx, _, database, service, item, _ := criteriaFixture(t, "attention-scope.db")
+
+	// The fixture item is backlog, not done: adding a required criterion here
+	// must not escalate attention.
+	patched, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{
+		WorkItemID: item.ID, ActorID: "human:owner", IdempotencyKey: "attention-not-done",
+		ExpectedVersion:         item.Version,
+		AcceptanceCriteriaToAdd: []app.PatchAcceptanceCriterionAddition{{Text: "Not done yet.", Required: true, Ordinal: 9}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patched.Result.AttentionState != work.AttentionNone {
+		t.Fatalf("attention state = %q, want none: the item is not done", patched.Result.AttentionState)
+	}
+
+	if _, err := database.db.ExecContext(ctx, "UPDATE work_items SET execution_status = 'done' WHERE id = ?", item.ID); err != nil {
+		t.Fatal(err)
+	}
+	done, err := service.GetWorkItem(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Two additions in one patch, only the first required: the escalation must
+	// fire because at least one is, not because the last one is.
+	reopened, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{
+		WorkItemID: item.ID, ActorID: "human:owner", IdempotencyKey: "attention-mixed-batch",
+		ExpectedVersion: done.WorkItem.Version,
+		AcceptanceCriteriaToAdd: []app.PatchAcceptanceCriterionAddition{
+			{Text: "Required, added first.", Required: true, Ordinal: 10},
+			{Text: "Optional, added last.", Required: false, Ordinal: 11},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Result.AttentionState != work.AttentionNeedsHumanReview {
+		t.Fatalf("attention state = %q, want a review request: a required condition was added among the batch", reopened.Result.AttentionState)
+	}
+}
+
+// TestPatchRejectsResolvingAndSupersedingTheSameCriterion covers the guard
+// against a self-contradictory request: one patch that both records a judgement
+// on a criterion and replaces it.
+func TestPatchRejectsResolvingAndSupersedingTheSameCriterion(t *testing.T) {
+	ctx, _, _, service, item, criteria := criteriaFixture(t, "resolve-and-supersede.db")
+	target := criteria[0]
+
+	_, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{
+		WorkItemID: item.ID, ActorID: "human:owner", IdempotencyKey: "resolve-and-supersede",
+		ExpectedVersion: item.Version,
+		AcceptanceCriterionResolutions: []app.PatchAcceptanceCriterionResolution{
+			{CriterionID: target.ID, Status: work.AcceptanceSatisfied, Rationale: "Met, apparently."},
+		},
+		AcceptanceCriteriaToAdd: []app.PatchAcceptanceCriterionAddition{{
+			Text: "Replaces it in the same breath.", Required: true, Ordinal: target.Ordinal,
+			SupersedesID: target.ID, SupersessionReason: "Contradicts the resolution above.",
+		}},
+	})
+	if err == nil {
+		t.Fatal("resolving and superseding the same criterion in one patch succeeded")
+	}
+	if !strings.Contains(err.Error(), "both resolved and superseded") {
+		t.Fatalf("error = %v, want the both-resolved-and-superseded message", err)
+	}
+}
