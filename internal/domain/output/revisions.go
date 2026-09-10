@@ -84,15 +84,36 @@ func normalizeArtifactURI(raw string) (string, error) {
 		if parsed.Host != "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 			return "", errors.New("workspace-relative artifact URI must be a bare path: no host, userinfo, query, or fragment")
 		}
-		relative := parsed.Opaque
-		if relative == "" {
+		// The opaque spelling (workspace:a%3Fb.md) and the hierarchical one
+		// (workspace:///a%3Fb.md) reach here through different net/url decoding
+		// rules — Path is already percent-decoded, Opaque is taken verbatim — so
+		// both are unescaped to the same literal characters before path.Clean
+		// runs, or the two spellings of one file would clean and compare
+		// unequal.
+		var relative string
+		if parsed.Opaque != "" {
+			decoded, err := url.PathUnescape(parsed.Opaque)
+			if err != nil {
+				return "", errors.New("workspace-relative artifact URI is not validly percent-encoded")
+			}
+			relative = decoded
+		} else {
 			relative = strings.TrimPrefix(parsed.Path, "/")
 		}
 		cleaned := path.Clean(relative)
 		if cleaned == "" || cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
 			return "", errors.New("workspace-relative artifact URI must name a path inside the workspace")
 		}
-		return workspaceURIScheme + ":" + cleaned, nil
+		// Re-escaping segment by segment, rather than writing the decoded
+		// literal straight back out, is what makes the canonical form
+		// idempotent: a literal "?" or "#" in a real filename would otherwise
+		// reparse as a query or fragment the next time this same function sees
+		// its own output, tripping the rejection three lines above.
+		segments := strings.Split(cleaned, "/")
+		for index, segment := range segments {
+			segments[index] = url.PathEscape(segment)
+		}
+		return workspaceURIScheme + ":" + strings.Join(segments, "/"), nil
 	}
 	if !parsed.IsAbs() {
 		return "", errors.New("artifact URI must be an absolute URI")

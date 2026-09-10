@@ -70,6 +70,7 @@ func TestNewArtifactRejectsAWorkspaceReferenceCarryingLostComponents(t *testing.
 		"workspace:docs/report.md#section",
 		"workspace://host/docs/report.md",
 		"workspace://user:pass@host/docs/report.md",
+		"workspace://user@/docs/report.md", // userinfo without a host
 	} {
 		_, err := NewArtifact(Artifact{
 			ID: "artifact-1", WorkItemID: "item-1", Kind: "document", URI: uri, AttachedBy: "agent:writer",
@@ -77,6 +78,55 @@ func TestNewArtifactRejectsAWorkspaceReferenceCarryingLostComponents(t *testing.
 		if err == nil {
 			t.Fatalf("%s: accepted, want rejection of the component that would be silently dropped", uri)
 		}
+	}
+}
+
+// TestNewArtifactNormalizesAWorkspaceReferenceIdempotently guards against a
+// canonical form that fails its own validator on a second pass: the
+// hierarchical spelling of a workspace: URI decodes percent-encoding before
+// this function ever sees it, so a literal "?" or "#" in a filename must be
+// re-escaped on the way out, not written back raw where it would reparse as
+// a query or fragment next time.
+func TestNewArtifactNormalizesAWorkspaceReferenceIdempotently(t *testing.T) {
+	now := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	first, err := NewArtifact(Artifact{
+		ID: "artifact-1", WorkItemID: "item-1", Kind: "document", URI: "workspace:///notes%3F.md", AttachedBy: "agent:writer",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewArtifact(Artifact{
+		ID: "artifact-2", WorkItemID: "item-1", Kind: "document", URI: first.URI, AttachedBy: "agent:writer",
+	}, now)
+	if err != nil {
+		t.Fatalf("the URI this function returned was rejected by the same function: %v", err)
+	}
+	if second.URI != first.URI {
+		t.Fatalf("re-normalizing %q produced %q, want it unchanged", first.URI, second.URI)
+	}
+}
+
+// TestNewArtifactDeduplicatesWorkspaceReferencesAcrossSpellings is REP-05's
+// second criterion applied to the relative form: the opaque and hierarchical
+// spellings of a workspace: URI naming the same literal file must normalize
+// to the same string, or the two forms would silently defeat ArtifactByURI's
+// dedup lookup for exactly the filenames that need percent-encoding at all.
+func TestNewArtifactDeduplicatesWorkspaceReferencesAcrossSpellings(t *testing.T) {
+	now := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	opaque, err := NewArtifact(Artifact{
+		ID: "artifact-1", WorkItemID: "item-1", Kind: "document", URI: "workspace:notes%3F.md", AttachedBy: "agent:writer",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hierarchical, err := NewArtifact(Artifact{
+		ID: "artifact-2", WorkItemID: "item-1", Kind: "document", URI: "workspace:///notes%3F.md", AttachedBy: "agent:writer",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opaque.URI != hierarchical.URI {
+		t.Fatalf("opaque form normalized to %q, hierarchical form to %q, want the same string", opaque.URI, hierarchical.URI)
 	}
 }
 
