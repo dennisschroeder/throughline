@@ -353,3 +353,40 @@ func TestOpenSetsRestrictivePermissions(t *testing.T) {
 		t.Fatalf("registry file mode = %v, want 0600", mode)
 	}
 }
+
+// TestLookupByCanonicalRootDistinguishesPendingFromNotFound exercises the real
+// SQL LookupByCanonicalRoot runs against, not a fake reimplementing its
+// contract. It must return an active row directly, and a pending row as a
+// pending row rather than as ErrWorkspaceNotFound — unlike Lookup, it does
+// not itself translate lifecycle state, since ResolveWorkspaceIDForPath's
+// ancestor walk depends on telling "nothing registered here, keep walking"
+// apart from "found, but not yet active, stop and report it."
+func TestLookupByCanonicalRootDistinguishesPendingFromNotFound(t *testing.T) {
+	reg, ctx := openTestRegistry(t)
+	activeRoot := t.TempDir()
+	pendingRoot := t.TempDir()
+
+	active := registerAndActivate(t, reg, ctx, "ws-active", activeRoot, "fp-active")
+	found, err := reg.LookupByCanonicalRoot(ctx, activeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found.WorkspaceID != active.WorkspaceID || found.LifecycleState != LifecycleActive {
+		t.Fatalf("LookupByCanonicalRoot(active root) = %#v", found)
+	}
+
+	if _, err := reg.BeginRegistration(ctx, params("ws-pending", pendingRoot, "fp-pending")); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := reg.LookupByCanonicalRoot(ctx, pendingRoot)
+	if err != nil {
+		t.Fatalf("LookupByCanonicalRoot(pending root) returned an error instead of the pending row: %v", err)
+	}
+	if pending.WorkspaceID != "ws-pending" || pending.LifecycleState != LifecyclePending {
+		t.Fatalf("LookupByCanonicalRoot(pending root) = %#v, want the pending row itself", pending)
+	}
+
+	if _, err := reg.LookupByCanonicalRoot(ctx, t.TempDir()); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Fatalf("LookupByCanonicalRoot(unregistered root) = %v, want ErrWorkspaceNotFound", err)
+	}
+}

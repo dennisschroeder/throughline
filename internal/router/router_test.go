@@ -39,12 +39,13 @@ type fakeRegistry struct {
 	mu                 sync.Mutex
 	targets            map[string]registry.WorkspaceTarget
 	errs               map[string]error
+	canonicalRootErrs  map[string]error
 	calls              int
 	canonicalRootCalls int
 }
 
 func newFakeRegistry() *fakeRegistry {
-	return &fakeRegistry{targets: map[string]registry.WorkspaceTarget{}, errs: map[string]error{}}
+	return &fakeRegistry{targets: map[string]registry.WorkspaceTarget{}, errs: map[string]error{}, canonicalRootErrs: map[string]error{}}
 }
 
 func (r *fakeRegistry) set(target registry.WorkspaceTarget) {
@@ -57,6 +58,16 @@ func (r *fakeRegistry) fail(workspaceID string, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.errs[workspaceID] = err
+}
+
+// failCanonicalRoot injects a LookupByCanonicalRoot failure at exactly one ancestor level,
+// standing in for a genuine registry fault (a real DB error, a cancelled context) partway
+// through the walk — as opposed to registry.ErrWorkspaceNotFound, which means only "keep
+// walking."
+func (r *fakeRegistry) failCanonicalRoot(canonicalRoot string, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.canonicalRootErrs[canonicalRoot] = err
 }
 
 func (r *fakeRegistry) Lookup(_ context.Context, workspaceID string) (registry.WorkspaceTarget, error) {
@@ -81,6 +92,9 @@ func (r *fakeRegistry) LookupByCanonicalRoot(_ context.Context, canonicalRoot st
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.canonicalRootCalls++
+	if err, ok := r.canonicalRootErrs[canonicalRoot]; ok {
+		return registry.WorkspaceTarget{}, err
+	}
 	for _, target := range r.targets {
 		if target.CanonicalRoot == canonicalRoot {
 			return target, nil
@@ -506,5 +520,30 @@ func TestResolveWorkspaceIDForPathRejectsANonexistentPath(t *testing.T) {
 
 	if _, err := router.ResolveWorkspaceIDForPath(ctx, filepath.Join(t.TempDir(), "does-not-exist")); !errors.Is(err, ErrWorkspacePathInvalid) {
 		t.Fatalf("nonexistent path = %v, want ErrWorkspacePathInvalid", err)
+	}
+}
+
+// TestResolveWorkspaceIDForPathPropagatesAGenuineRegistryFault covers what the
+// walk must not do with any error besides ErrWorkspaceNotFound: swallow it
+// and keep climbing as though nothing were registered at that level. A
+// transient fault reinterpreted that way could resolve to a wrong, more
+// distant workspace instead of surfacing the fault.
+func TestResolveWorkspaceIDForPathPropagatesAGenuineRegistryFault(t *testing.T) {
+	ctx := context.Background()
+	child := t.TempDir()
+	childCanonical, err := registry.CanonicalizeRoot(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reg := newFakeRegistry()
+	fault := errors.New("registry: query workspace: disk I/O error")
+	reg.failCanonicalRoot(childCanonical, fault)
+	router := New(reg, NewProviderManager(newFakeSharedProvider(t.TempDir())), &fakeIDs{}, fakeClock{}, 0)
+	t.Cleanup(func() { _ = router.Close() })
+
+	_, err = router.ResolveWorkspaceIDForPath(ctx, child)
+	if !errors.Is(err, fault) {
+		t.Fatalf("resolving over a faulting ancestor = %v, want the fault itself surfaced, not treated as a miss", err)
 	}
 }

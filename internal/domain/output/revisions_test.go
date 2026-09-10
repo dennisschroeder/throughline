@@ -29,6 +29,15 @@ func TestNewArtifactValidatesExternalURI(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "URI") {
 		t.Fatalf("expected URI error, got %v", err)
 	}
+
+	// "not a URI" is rejected by the whitespace it contains, not because it lacks a
+	// scheme; a schemeless relative reference with no whitespace at all must still be
+	// rejected on its own, or it would be accepted with none of the workspace: scheme's
+	// containment guarantee applied to it.
+	_, err = NewArtifact(Artifact{ID: "artifact-3", WorkItemID: "item-1", Kind: "document", URI: "docs/report.md", AttachedBy: "agent:writer"}, now)
+	if err == nil || !strings.Contains(err.Error(), "URI") {
+		t.Fatalf("expected URI error for a schemeless relative reference, got %v", err)
+	}
 }
 
 // TestNewArtifactAcceptsAWorkspaceRelativeReference is REP-05's first artifact
