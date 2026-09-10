@@ -1359,7 +1359,7 @@ Record `start`, `succeed`, or `fail` for one exact action revision, principal, a
 // output
 {
   "workspace": { "id": "local", "change_cursor": "142" },
-  "objectives": { "discovery": 1, "planning": 1, "execution": 2, "evaluation": 0 },
+  "objectives": { "discovery": 1, "planning": 1, "execution": 2 },
   "plans_needing_review": 1,
   "output_profiles_needing_review": 1,
   "external_actions_needing_authority": 2,
@@ -1374,16 +1374,35 @@ Record `start`, `succeed`, or `fail` for one exact action revision, principal, a
 ```
 
 `objectives` counts objectives per phase, read from the objectives themselves, so an objective that
-has no work items yet is still counted and still visible to the one call an agent orients with.
-`counts` counts work items per execution status. `blocked` is a derived overview count, not
-necessarily a stored status.
+has no work items yet is still counted and still visible to the one call an agent orients with. A
+phase no objective is in is absent rather than present and zero. `counts` counts work items per
+execution status. `blocked` is a derived overview count, not necessarily a stored status.
+
+#### `list_objectives`
+
+**Purpose:** enumerate what the workspace is trying to achieve, before choosing any of it.
+
+Returns every objective, including one that has no work items yet — which is exactly the objective
+someone has just created and wants to reach. Each row carries both forms of address (`id` and `key`),
+`title`, `phase`, `desired_outcome`, and `item_counts`, a map from execution status to how many work
+items the objective holds. A status with no items is absent rather than present and zero, and an
+objective with no items reports an empty map.
+
+Deriving this list from the work items instead — which every read path used to do — cannot represent
+an objective that has none, and reports the phase of each *item* rather than of each objective.
+
+#### Addressing an objective
 
 `objective_id` accepts either an objective's identifier or the readable key it is known by, on every
 tool that takes the field, so a caller resuming from notes can address an objective by the name it
-was written down under. A reference that resolves to no objective is `not_found`, including where the
-field is only a filter: answering "no work here" for an objective that does not exist is a wrong
-answer rather than an empty one. `list_objectives` returns both forms of address, along with each
-objective's phase, desired outcome and per-status item counts.
+was written down under. Identifiers win over keys where a reference could be read as either; keys are
+unique per workspace and are never rewritten, so a reference that resolves once resolves the same way
+forever.
+
+A reference that resolves to no objective is `not_found`, including where the field is only a filter:
+answering "no work here" for an objective that does not exist is a wrong answer rather than an empty
+one. A `version_conflict` raised on an objective addressed by key still carries the `current` block,
+since the version it names is the whole point of that error.
 
 #### `list_items`
 

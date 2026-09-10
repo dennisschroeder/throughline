@@ -161,9 +161,12 @@ func resolveObjectiveID(ctx context.Context, service *app.Service, requested str
 		itemCounts[item.Objective.ID]++
 	}
 	al := &actorLiveness{lastCallAt: map[string]time.Time{}, now: now}
-	// bestGates below every possible len(gates), so the first objective that
-	// builds successfully seats itself and the seed values never survive.
-	var best work.Objective
+	// Seeded from the first objective rather than the zero value: every candidate
+	// below can be skipped on a store error, and a run where all of them are
+	// skipped must still name an objective. Returning the zero value would hand
+	// the caller an empty id with a nil error, which its 404 branch cannot see
+	// and its snapshot builder turns into an internal error.
+	best := objectives[0]
 	bestGates, bestItems := -1, -1
 	for _, obj := range objectives {
 		objCtx, err := service.GetObjectiveContext(ctx, obj.ID)

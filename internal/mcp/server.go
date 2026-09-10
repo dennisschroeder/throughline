@@ -1397,7 +1397,7 @@ func (a *adapter) boardOverview(ctx context.Context, service *app.Service, raw j
 	if err != nil {
 		return nil, err
 	}
-	objectiveID, err := resolveObjectiveIn(objectives, in.ObjectiveID)
+	objectiveID, err := app.ResolveObjectiveIn(objectives, in.ObjectiveID)
 	if err != nil {
 		return nil, err
 	}
@@ -1726,29 +1726,6 @@ func (a *adapter) getObjectiveContext(ctx context.Context, service *app.Service,
 		return nil, err
 	}
 	return service.SelectObjectiveContext(ctx, app.ObjectiveContextQuery{ObjectiveID: objective.ID, ActorID: in.ActorID, Include: in.Include, MaxItemsPerSection: in.MaxItems})
-}
-
-// resolveObjectiveIn is resolveObjectiveReference against a slice the caller
-// already holds. board_overview reads every objective anyway, and resolving
-// through the service there would read the table a second time.
-func resolveObjectiveIn(objectives []work.Objective, reference string) (string, error) {
-	reference = strings.TrimSpace(reference)
-	if reference == "" {
-		return "", nil
-	}
-	key := ""
-	for _, objective := range objectives {
-		if objective.ID == reference {
-			return objective.ID, nil
-		}
-		if objective.Key == reference {
-			key = objective.ID
-		}
-	}
-	if key != "" {
-		return key, nil
-	}
-	return "", fmt.Errorf("resolve objective %q: %w", reference, ports.ErrNotFound)
 }
 
 // resolveObjectiveReference turns an objective_id input into an objective's

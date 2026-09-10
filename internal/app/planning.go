@@ -1253,6 +1253,34 @@ func (s *Service) ListObjectives(ctx context.Context) ([]work.Objective, error) 
 	return objectives, nil
 }
 
+// ResolveObjectiveIn matches a reference against objectives the caller already
+// holds. It is the single statement of what an objective_id may be, so a caller
+// that has the slice in hand does not need a second read and cannot answer the
+// same field differently from one that does.
+//
+// One pass, identifier first: an identifier is the canonical immutable address,
+// and keys are unique, so a key can only ever be a second-best match for the
+// same reference.
+func ResolveObjectiveIn(objectives []work.Objective, reference string) (string, error) {
+	reference = strings.TrimSpace(reference)
+	if reference == "" {
+		return "", nil
+	}
+	byKey := ""
+	for _, objective := range objectives {
+		if objective.ID == reference {
+			return objective.ID, nil
+		}
+		if objective.Key == reference && byKey == "" {
+			byKey = objective.ID
+		}
+	}
+	if byKey != "" {
+		return byKey, nil
+	}
+	return "", fmt.Errorf("resolve objective %q: %w", reference, ports.ErrNotFound)
+}
+
 // ResolveObjective accepts either an objective's identifier or the readable key
 // it is known by, so a caller that has only the key written down can address it
 // without first listing the board. It reads the objectives table rather than
@@ -1267,20 +1295,14 @@ func (s *Service) ResolveObjective(ctx context.Context, reference string) (work.
 	if err != nil {
 		return work.Objective{}, err
 	}
-	// One pass, identifier first: an identifier is the canonical immutable
-	// address, and keys are unique, so a key can only ever be a second-best
-	// match for the same reference.
-	var byKey *work.Objective
-	for index, objective := range objectives {
-		if objective.ID == reference {
+	id, err := ResolveObjectiveIn(objectives, reference)
+	if err != nil {
+		return work.Objective{}, err
+	}
+	for _, objective := range objectives {
+		if objective.ID == id {
 			return objective, nil
 		}
-		if objective.Key == reference && byKey == nil {
-			byKey = &objectives[index]
-		}
-	}
-	if byKey != nil {
-		return *byKey, nil
 	}
 	return work.Objective{}, fmt.Errorf("resolve objective %q: %w", reference, ports.ErrNotFound)
 }
