@@ -319,6 +319,100 @@ current code path can reach past the domain's already-superseded guard and the s
   rebuild preserves a pre-existing row's `required`, `text`, `ordinal` and `status`, not merely its
   count; verified to fail against a hardcoded-`required`-to-`0` rebuild.
 
+### REP-05 LOCATION
+
+- Commits: `905f246` (implementation), then `ea3b15c`, `a9e72fd` and `f352683`, each a response
+  to a review pass, at the 3-pass budget (decision `01a088ef-4338-7c02-8732-e694b5c7b114`).
+- Claim: `01a08cde-4db0-740b-81c5-abc27b7ea1ae`, held for the whole node without lapsing — the
+  first node in this objective where that happened.
+- Final gate: all six repository commands exited zero on 2026-09-10 at `f352683`, plus
+  `go test ./... -race -shuffle=on`.
+
+Two independent halves, each closing one gap where something claimed to work and did not.
+
+A daemon resolving `workspace_id` per call (OBJ-WORKSPACE-ROUTING) has no way to learn one from a
+client's own working directory, since routing runs solely through an explicit identifier the daemon
+cannot infer on its own. `resolve_workspace`, a new read-only, domain-neutral tool mirroring
+`get_semantic_model`'s registration, takes a client-supplied path and returns the `workspace_id` of
+the nearest registered ancestor: `Router.ResolveWorkspaceIDForPath` canonicalizes the path and walks
+it upward, issuing one indexed `Registry.LookupByCanonicalRoot` point query per ancestor directory,
+never listing what else is registered. Two implementation decisions were recorded before writing
+code — `01a08cde-ad92-75a5-b259-da615f31bead` (a dedicated tool rather than a field widening every
+`workspaceInput`) and `01a08cde-f37e-734f-98c2-1a96c6e48e4b` (artifact containment and dedup stay
+purely lexical) — both left open by the triage decisions this node implements.
+
+Artifact URIs gain a `workspace:` scheme naming a path relative to canonical_root, explicitly
+marked rather than inferred from a bare relative string, so a typo'd absolute URI cannot silently
+become a path. Containment is enforced lexically (no `..` may climb above the root) because
+`internal/domain` cannot import the registry that holds `canonical_root`. Normalizing every artifact
+URI's path component at construction — the one function every URI already passes through before
+`ArtifactByURI`'s dedup lookup runs — fixed dedup for absolute URIs generally, not only the new
+relative form.
+
+#### Review
+
+Three passes, the full reduced budget. Two passes each found and fixed one real defect; the third
+found none.
+
+| Pass | Mutants | Survived | Disposition |
+|---|---|---|---|
+| 1 | 16 | 5 | 3 real coverage gaps on already-correct code, closed with tests; 2 accepted residual |
+| 2 | 6 | 0 | 0 mutants survived; 1 new defect found by direct execution, not mutation, and fixed |
+| 3 | 4 mutants + 7 probes | 1 mutant, 1 probe | 1 real defect (idempotency), fixed; 1 coverage gap, closed |
+
+The two real defects, both found on the artifact half, are worth naming precisely because neither
+was a mutation survivor in the ordinary sense — both were gaps in already-shipped logic that no
+test yet existed to mutate against, found by testing the shipped code's actual behavior directly
+against inputs the brief asked reviewers to try.
+
+**Pass 2:** `normalizeArtifactURI`'s workspace-scheme branch reconstructed its result from only the
+cleaned path, silently discarding any host, userinfo, query string, or fragment the caller wrote.
+`workspace:docs/report.md?v=2` and `workspace:docs/report.md` normalized to the same string and
+collided under the dedup lookup, though the caller meant them as distinct references — a case where
+the fix that was supposed to guarantee equivalence instead created a false one. Fixed by rejecting
+those four components outright, the same "fail loudly rather than silently reinterpret" rule the
+scheme itself exists to enforce.
+
+**Pass 3, immediately behind that fix:** the opaque spelling of a `workspace:` URI
+(`workspace:notes%3F.md`) and its hierarchical spelling (`workspace:///notes%3F.md`) reach
+`net/url`'s decoding through different rules — `Opaque` is taken verbatim, `Path` is already
+percent-decoded — so writing the decoded literal straight back into the canonical form meant a
+real `?` or `#` in a filename reparsed as a query or fragment the next time the function saw its
+own output, tripping pass 2's brand-new rejection. The same asymmetry meant the two spellings of one
+file normalized to two *different* strings, defeating dedup for exactly the filenames that need
+percent-encoding at all. Fixed by decoding both spellings to the same literal path before cleaning
+and re-escaping segment by segment on the way out, making normalization idempotent and
+spelling-independent.
+
+The review budget stayed at three passes and the artifact half was clean neither in review 2 nor 3;
+the reviewer's own framing of pass 3's task — "if you found nothing new... that is a valid result" —
+turned out to be the wrong prediction twice in a row on this node's second half, while the
+`resolve_workspace` half was clean from pass 2 onward. One line of work converging while an adjacent
+one keeps producing real findings, inside the same node and the same budget, is itself worth
+recording: a fixed pass count per *node* averages across two pieces of work that did not need the
+same number of passes.
+
+#### Dispositions
+
+| Finding | Disposition |
+|---|---|
+| The ancestor walk querying the filesystem root itself before terminating has no dedicated test | Accepted: shipped code is correct (queries `current` before checking termination), coverage gap only |
+| The new `workspaces_canonical_root` index has no test forcing its existence | Accepted: performance-only, no observable behavior depends on it (SQLite falls back to a table scan) |
+| A `workspace:` URI carrying userinfo without a host (`workspace://user@/path`) was untested | Closed with a test case; shipped code already rejected it correctly |
+
+#### Evidence
+
+- `TestResolveWorkspaceIDForPathFindsTheNearestAncestor` asserts the number of
+  `LookupByCanonicalRoot` calls stays bounded to the path's own ancestor depth, not to how many
+  workspaces are registered — the property distinguishing an ancestor walk from enumeration.
+- `TestLookupByCanonicalRootDistinguishesPendingFromNotFound` runs against a real `*Registry`, not
+  a fake reimplementing its contract, after pass 1 found every fake independently carried the
+  pending-vs-not-found distinction while the real SQL path carried none.
+- `TestNewArtifactNormalizesAWorkspaceReferenceIdempotently` feeds a function's own output back
+  into itself; `TestNewArtifactDeduplicatesWorkspaceReferencesAcrossSpellings` and
+  `TestAttachArtifactDeduplicatesEquivalentAbsoluteReferences` pin AC2 at the domain constructor and
+  at the actual `attach_artifact` mutation independently.
+
 ## Feedback
 
 - REP-01 was estimated small but consumed the full five-pass review budget because file permissions
@@ -427,3 +521,37 @@ current code path can reach past the domain's already-superseded guard and the s
   (`01a088ef-997f-72f5-81ce-3b65992ff3ee`) covered all three implementation commits and all three
   review passes without lapsing. Worth noting precisely because the four prior lapses across two
   nodes made it look like a certainty rather than a function of how long a node runs unattended.
+
+### REP-05
+
+- **A fixed number of review passes per node averages across pieces of work that did not need the
+  same number.** REP-05 was two independent halves — a routing tool and an artifact-URI format —
+  sharing one budget of three. The routing half was clean from pass 2 on; the artifact half
+  produced a real, previously-undetected defect in pass 2 *and* in pass 3, the second one hiding
+  directly behind the first one's own fix. A node-level pass count cannot see that one half
+  converged early while the other kept producing findings on the pass explicitly framed as "report
+  nothing new if there's nothing new" — it was wrong to expect nothing, twice.
+- **A fix that closes one gap can open an adjacent one in the same function, and only a further
+  pass finds it.** Pass 2's fix — reject a host, query, or fragment on a `workspace:` URI rather
+  than silently dropping it — was itself correct and is not being second-guessed. What it exposed
+  was that the function's *acceptance* path and its *rejection* path disagreed about which
+  characters were already decoded: the rejection path (pass 2's fix) read `RawQuery`/`Fragment`
+  straight from `net/url`'s parse, while the acceptance path (the pre-existing code) wrote a
+  percent-decoded literal back out unescaped. Tightening validation surfaced an inconsistency in
+  normalization that had been there since the implementation commit, unreachable until the
+  validation around it changed. Worth a standing question for review generally: when a pass fixes
+  a validation gap, does anything downstream of the newly-validated field make an assumption the
+  validation itself doesn't guarantee?
+- **Direct execution against the shipped function found what mutation testing structurally
+  cannot.** Both of this node's real defects were gaps in logic that *already existed* and had no
+  test to mutate — mutating code that is already silently wrong just changes which wrong thing
+  happens. The brief's own instruction to try concrete adversarial inputs (a query string, a
+  percent-encoded filename, round-tripping a function's own output back through itself) is what
+  found both, and neither would have surfaced from "delete a line and see what turns red." The
+  standing habit from earlier nodes — mutate rather than read — needs a second half for exactly
+  this case: for new, previously-unexercised code, also try the inputs an adversarial user would
+  actually type, not only mutations of the code that would validate them.
+- **The claim held for the whole node.** A second node in a row (after REP-04) where the claim
+  covered every commit and every review pass without lapsing, against four lapses across REP-02
+  and REP-03 combined. Not yet enough to call it fixed rather than favorable timing, but two
+  clean nodes after two rough ones is worth carrying forward as a data point rather than losing.
