@@ -568,6 +568,75 @@ creation path and found nothing new.
 - `TestObjectiveContextRecentChangesKeepObjectiveLevelAndSelectedItemHistory` and
   `TestObjectiveChangesIncludeDiscoveryRecords` (MCP wire, objective addressed by key).
 
+### REP-08 QUESTIONS
+
+- Commits: `f130797` (implementation), then `16dea6b`, `eb50bcb` and `329092e`, each a response to
+  a review pass, at the 3-pass budget.
+- Claim: `01a09204-c75f-7ec1-9765-16bfc257af92`. Decision: `01a09205-07bd-7c77-b71b-1336d416a7af`.
+- Final gate: all six repository commands exited zero on 2026-09-11 at `329092e`, plus
+  `go test ./... -race -shuffle=on`.
+
+Implements triage decisions `01a07241-be30` (unsharp state and per-link blocking) and
+`01a07251-e48f` (attention targets narrowed, questions storing their attention state). Question
+gains `unsharp` before `open`; `sharpen_question` records the graduation with the previous wording
+in its event. Blocking derives from one `question_blocks` link table: `ask_question` takes
+`blocks_item_ids`, `link_question_blocker` adds links to an unresolved question, links are never
+removed, and an unresolved question holds every linked item for claiming, readiness and every
+transition that runs the claim gate. `request_attention` accepts only `work_item` and `question`;
+a question stores the exact state. `board_overview` gains `questions_needing_human_attention`
+beside the unchanged `needs_human_attention`. The dashboard names question blockers on cards and
+in the drawer apart from dependencies, shows the stored attention state, and offers only Waive on
+an unsharp question.
+
+One premise of the triage decision did not hold: questions were not "consulted nowhere in
+coordination". An open question asked on a work item already blocked that item through
+`HasOpenBlocker` and the ready query. Decision `01a09205-07bd` keeps that behaviour as a link
+recorded at creation (and backfilled by migration 0015) rather than dropping it on the strength of
+the premise; "never automatic" stays true for every item the question does not name. The same
+reading found that `request_attention` on a question had never persisted anything, because the
+update statement did not write the column; migration 0015 recovers the requested state from the
+last `attention.requested` activity.
+
+#### Review
+
+Three passes, all degraded (same model family; no cross-provider reviewer available).
+
+| Pass | Mutants | Survived | Real defects found and fixed |
+|---|---|---|---|
+| 1 | 18 | 7 | 1 (`get_objective_context` hid unsharp questions) + 1 (links to finished items) |
+| 2 | 13 | 3 | 2 (replay of stored pre-REP-08 questions; links to rejected/superseded items) |
+| 3 | 12 | 2 | 1 (replayed attention response contradicted itself) |
+
+Pass 1's defect was the one this node exists to prevent: the resume surface filtered on `open`
+only, so a session resuming while an unsharp question held work saw no questions at all. Pass 2
+and pass 3 both found upgrade-path defects in idempotent replay — responses stored before the
+change decode through the new types, and the first fix (map the old boolean) was right for
+`ask_question` and wrong for `request_attention`, whose response carries the real state at its top
+level. Each fix was followed by a test that decodes the old stored shape.
+
+#### Dispositions
+
+| Finding | Disposition |
+|---|---|
+| A retry of a command first sent to the old binary is refused, because the request hash covers the whole command struct and the struct changed (`ask_question` here; `create_objective` in REP-06 alike) | Filed as separate work: a general hash-compatibility rule, not an `ask_question` patch |
+| The snake-case wire converter renders `EvidenceIDs` as `evidence_i_ds` | Noted, pre-existing; this node renamed its own field to `BlocksWorkItems` to avoid the same shape |
+| `status` and `attention_state` carry no enum in the `ask_question` input schema | Accepted: the server validates both |
+| A question asked on an item shows that card as "gated" rather than `blocked_question` | Accepted: gate precedence is deliberate; other linked items show `blocked_question` |
+| Pre-REP-08 `request_attention` replays of a `decision` target lose their decision pointer | Accepted: the target kind no longer exists and the result had no state to carry |
+
+#### Evidence
+
+- `TestUnresolvedQuestionsBlockEveryLinkedItemUntilResolved`: unsharp and open questions hold items
+  linked at creation, by being asked on the item, and later; claims are refused with only the
+  no-blockers requirement; answering and waiving each release every held item; links to other
+  objectives' and to done or rejected items are refused.
+- `TestMigration0015CarriesQuestionsAndTheirExistingBlocksForward`: pre-upgrade questions keep
+  status, text and version, gain their self-links, and recover attention from the latest request.
+- `TestDashboardShowsAnUnsharpQuestionHoldingAnItem` (loop and drawer handlers),
+  `TestCardNamesAQuestionBlockerApartFromDependencies`,
+  `TestQuestionGatePreservesTheStoredAttentionState`,
+  `TestQuestionBlockingAndAttentionOverTheWire` (MCP), and the two replay-decoding tests.
+
 ## Feedback
 
 - REP-01 was estimated small but consumed the full five-pass review budget because file permissions
@@ -759,4 +828,26 @@ creation path and found nothing new.
   identically-worded CHECK constraint; REP-07 hit its `sqlite_sequence`. Any test or query that
   inspects schema state after `Migrate` should name `main.` explicitly.
 - **The claim held for a fourth node in a row.**
+
+### REP-08
+
+- **A triage decision's premise can be wrong about the code, and the fix is to record the
+  divergence, not to follow the premise.** The decision said questions were advisory; the code had
+  made item-scoped questions blocking all along. Implementing the decision literally would have
+  silently unblocked work. The divergence went into its own decision before any code was written,
+  which is where a reviewer or the owner can overturn it.
+- **Upgrade paths through idempotent replay are a review blind spot the mutation technique does not
+  reach.** Two of the three passes found defects in how responses stored by the previous binary
+  decode through the new types. No mutant of the new code exposes that; only asking "what does a
+  record written before this change look like, and what reads it?" does. The same question
+  produced the filed hash-compatibility item, which applies to every node that reshaped a command.
+- **The node was large and the budget still held.** Four capabilities (a lifecycle state, a link
+  table with blocking semantics, attention narrowing and storage, dashboard surfaces) shared one
+  item. Every pass found at least one real defect, but each was smaller and further from the core
+  than the one before: resume surface, then replay of stored questions, then replay of stored
+  attention responses.
+- **The worktree's HEAD was detached between REP-07 and REP-08 by something outside this session.**
+  The first REP-08 commit landed on a detached HEAD whose parent was the branch tip, so a
+  fast-forward repaired it without loss; `git status -sb` after every commit is what caught it.
+- **The claim held for a fifth node in a row.**
 
