@@ -2008,7 +2008,7 @@ func (a *adapter) createObjective(ctx context.Context, service *app.Service, raw
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	command := app.CreateObjectiveCommand{ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome, Phase: in.Phase, Priority: in.Priority}
+	command := app.CreateObjectiveCommand{ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome, Phase: in.Phase, Priority: in.Priority, Appetite: in.Appetite.toMeasure()}
 	return service.CreateObjective(ctx, command)
 }
 

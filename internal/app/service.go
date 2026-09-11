@@ -35,6 +35,7 @@ type CreateObjectiveCommand struct {
 	DesiredOutcome string
 	Phase          work.ObjectivePhase
 	Priority       work.Priority
+	Appetite       work.Measure
 }
 
 func (s *Service) createObjectiveMutation(ctx context.Context, command CreateObjectiveCommand) (work.Objective, error) {
@@ -63,6 +64,10 @@ func (s *Service) createObjectiveMutation(ctx context.Context, command CreateObj
 	}
 	objective, err := work.NewObjective(id, command.Key, command.Title, command.Description, command.DesiredOutcome, command.Phase, command.Priority, s.clock.Now())
 	if err != nil {
+		return work.Objective{}, err
+	}
+	objective.Appetite = command.Appetite
+	if err := objective.Validate(); err != nil {
 		return work.Objective{}, err
 	}
 	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {

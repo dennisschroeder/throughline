@@ -125,13 +125,21 @@ func TestSemanticModelIdentifiesTheNewContextKindLifecycles(t *testing.T) {
 		States      []string   `json:"states"`
 		Transitions [][]string `json:"transitions"`
 	}
+	// len(Kinds) > 0 guards against contains' vacuous-truth-on-empty behavior
+	// (by design elsewhere, for "no requirement means anything satisfies
+	// it") matching every kindless lifecycle here instead of the one that
+	// actually names non_goal; matched is tracked separately so more than
+	// one match is a failure too, not a silent last-one-wins overwrite.
+	matched := 0
 	for index := range payload.Result.Data {
-		if payload.Result.Data[index].Entity == "context_record" && contains(payload.Result.Data[index].Kinds, "non_goal") {
-			proposalLifecycle = &payload.Result.Data[index]
+		entry := &payload.Result.Data[index]
+		if entry.Entity == "context_record" && len(entry.Kinds) > 0 && contains(entry.Kinds, "non_goal") {
+			proposalLifecycle = entry
+			matched++
 		}
 	}
-	if proposalLifecycle == nil {
-		t.Fatalf("no context_record lifecycle names non_goal: %#v", payload.Result.Data)
+	if matched != 1 {
+		t.Fatalf("%d context_record lifecycles name non_goal, want exactly one: %#v", matched, payload.Result.Data)
 	}
 	if !contains(proposalLifecycle.Kinds, "affected") {
 		t.Fatalf("non_goal's lifecycle kinds = %v, want affected on the same shape", proposalLifecycle.Kinds)
