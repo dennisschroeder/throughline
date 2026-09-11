@@ -78,6 +78,12 @@ func TestObjectiveFeedIncludesPlanningRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := app.UnwrapMutation(service.ResolveApproval(ctx, app.ResolveApprovalCommand{
+		ApprovalID: approval.ID, ActorID: "human:owner", IdempotencyKey: "feed-approval-resolved",
+		ExpectedVersion: approval.Version, Decision: work.ApprovalRejected, Rationale: "Not yet.",
+	})); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := app.UnwrapMutation(service.RecordDecision(ctx, app.RecordDecisionCommand{
 		ObjectiveID: other.ID, ActorID: "human:owner", Title: "Elsewhere", Decision: "Belongs to the other objective.", IdempotencyKey: "feed-other-decision",
 	})); err != nil {
@@ -108,13 +114,14 @@ func TestObjectiveFeedIncludesPlanningRecords(t *testing.T) {
 		"decision.recorded:" + decision.ID,
 		"plan.created:" + plan.ID,
 		"approval.requested:" + approval.ID,
+		"approval.resolved:" + approval.ID,
 	} {
 		if _, ok := events[want]; !ok {
 			t.Fatalf("objective feed omits %s; got %v", want, events)
 		}
 	}
-	if len(events) != 7 {
-		t.Fatalf("objective feed = %v, want exactly the seven events of this objective", events)
+	if len(events) != 8 {
+		t.Fatalf("objective feed = %v, want exactly the eight events of this objective", events)
 	}
 
 	snapshot, err := service.SelectObjectiveContext(ctx, app.ObjectiveContextQuery{ObjectiveID: objective.ID})
@@ -191,6 +198,10 @@ func TestMigration0014BackfillsActivityObjectiveOnAPopulatedWorkspace(t *testing
 		 VALUES ('context-a', 'objective-a', 'requirement', 'Requirement', 'proposed', 1, '` + timestamp + `', '` + timestamp + `', 'human:legacy')`,
 		`INSERT INTO approvals (id, objective_id, plan_id, request, status, requested_by, requested_at)
 		 VALUES ('approval-a', 'objective-a', 'plan-a', 'Approve?', 'requested', 'human:legacy', '` + timestamp + `')`,
+		// Execution approvals are stored without an objective, so their
+		// activity must be bound through the work item, never the approval.
+		`INSERT INTO approvals (id, work_item_id, approved_for_actor_id, request, status, requested_by, requested_at)
+		 VALUES ('approval-execution', 'item-a', 'human:legacy', 'Execute?', 'approved', 'human:legacy', '` + timestamp + `')`,
 	} {
 		if _, err := database.db.ExecContext(ctx, statement); err != nil {
 			t.Fatalf("seed pre-upgrade row: %v\n%s", err, statement)
@@ -207,6 +218,7 @@ func TestMigration0014BackfillsActivityObjectiveOnAPopulatedWorkspace(t *testing
 		{"act-context", "context_record", "context-a", "", "objective-a"},
 		{"act-approval", "approval", "approval-a", "", "objective-a"},
 		{"act-item", "work_item", "item-a", "item-a", "objective-a"},
+		{"act-execution-approval", "approval", "approval-execution", "item-a", "objective-a"},
 		{"act-profile", "output_profile", "profile-x", "", ""},
 	}
 	sequences := map[string]int64{}
@@ -248,6 +260,13 @@ VALUES (?, ?, ?, ?, 'human:legacy', 'legacy.event', 'Legacy event', '{}', ?)`, r
 		return definition
 	}
 	triggerBefore := triggerSQL()
+	var indexes int
+	if err := database.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM main.sqlite_master WHERE type = 'index' AND name = 'activity_by_objective_sequence'").Scan(&indexes); err != nil {
+		t.Fatal(err)
+	}
+	if indexes != 0 {
+		t.Fatal("activity_by_objective_sequence exists before the migration that creates it")
+	}
 
 	if err := database.Migrate(ctx); err != nil {
 		t.Fatalf("migrate a populated activity table: %v", err)
@@ -260,6 +279,12 @@ VALUES (?, ?, ?, ?, 'human:legacy', 'legacy.event', 'Legacy event', '{}', ?)`, r
 	// The trigger the backfill lifts must come back exactly as 0003 defined
 	// it: a column-restricted UPDATE OF trigger would leave objective_id and
 	// sequence rewritable while still rejecting the summary update below.
+	if err := database.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM main.sqlite_master WHERE type = 'index' AND name = 'activity_by_objective_sequence' AND sql LIKE '%(objective_id, sequence)%'").Scan(&indexes); err != nil {
+		t.Fatal(err)
+	}
+	if indexes != 1 {
+		t.Fatal("the objective feed's activity_by_objective_sequence index is missing after the migration")
+	}
 	if triggerAfter := triggerSQL(); triggerAfter != triggerBefore {
 		t.Fatalf("append-only update trigger after backfill =\n%s\nwant\n%s", triggerAfter, triggerBefore)
 	}
@@ -291,7 +316,7 @@ VALUES (?, ?, ?, ?, 'human:legacy', 'legacy.event', 'Legacy event', '{}', ?)`, r
 	for _, change := range feed {
 		feedIDs = append(feedIDs, change.ID)
 	}
-	if got, want := strings.Join(feedIDs, ","), "act-objective,act-plan,act-question,act-context,act-approval,act-item"; got != want {
+	if got, want := strings.Join(feedIDs, ","), "act-objective,act-plan,act-question,act-context,act-approval,act-item,act-execution-approval"; got != want {
 		t.Fatalf("objective feed after backfill = %s, want %s", got, want)
 	}
 

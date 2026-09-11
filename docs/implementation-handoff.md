@@ -1510,8 +1510,8 @@ V1 is selection-based and size-bounded, not semantically generated: return objec
 // output
 {
   "changes": [
-    { "sequence": 143, "item_id": "TH-42", "event_type": "status_changed", "summary": "Moved to review", "created_at": "..." },
-    { "sequence": 144, "item_id": "TH-51", "event_type": "attention_requested", "summary": "Human decision needed", "created_at": "..." }
+    { "sequence": 143, "entity_kind": "work_item", "entity_id": "...", "work_item_id": "...", "objective_id": "...", "event_type": "work_item.status_changed", "summary": "Work item moved from in_progress to review", "created_at": "..." },
+    { "sequence": 144, "entity_kind": "decision", "entity_id": "...", "work_item_id": "", "objective_id": "...", "event_type": "decision.recorded", "summary": "Decision recorded", "created_at": "..." }
   ],
   "next_cursor": "144",
   "has_more": false
@@ -1520,7 +1520,7 @@ V1 is selection-based and size-bounded, not semantically generated: return objec
 
 Use an opaque monotonic activity sequence as the initial cursor. Define retention/compaction policy before any deletion exists.
 
-`objective_id` accepts an objective id or key and matches on the objective binding every activity row carries: the objective's own events, its plans, the questions, decisions and context records recorded against it, and every event of its work items. Workspace-level events (actor registration and capabilities, output profiles and their approvals) belong to no objective and appear only in the unfiltered feed. Rows written before the binding existed were backfilled by migration without changing their sequence.
+`objective_id` accepts an objective id or key and matches on the row's objective binding, when it has one: the objective's own events, its plans and their approvals, the questions, decisions and context records recorded against it, and every event of its work items. Rows without a binding appear only in the unfiltered feed: workspace-level events (actor registration and capabilities, output profiles and their approvals) and `request_attention` on the free-form `review`, `clarification` and `intervention` target kinds, whose target ids Throughline does not resolve. Rows written before the binding existed were backfilled by migration without changing their sequence.
 
 ### Work tools
 
