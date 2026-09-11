@@ -813,3 +813,18 @@ func (s *memoryStore) ListAcceptedOutputs(context.Context, ports.AcceptedOutputF
 
 var _ ports.Store = (*memoryStore)(nil)
 var _ ports.Repository = (*memoryStore)(nil)
+
+// TestReplayedAttentionResultKeepsTheRequestedQuestionState covers a
+// request_attention response stored before REP-08: its question carried only
+// RequiresHumanAttention, which alone would decode as needs_human_decision
+// whatever state was requested.
+func TestReplayedAttentionResultKeepsTheRequestedQuestionState(t *testing.T) {
+	stored := `{"target_kind":"question","target_id":"q","attention_state":"intervention_required","question":{"ID":"q","Status":"open","RequiresHumanAttention":true}}`
+	var result AttentionRequestResult
+	if err := json.Unmarshal([]byte(stored), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Question == nil || result.Question.AttentionState != work.AttentionInterventionRequired || result.AttentionState != work.AttentionInterventionRequired {
+		t.Fatalf("replayed attention result = %#v, question %#v", result, result.Question)
+	}
+}

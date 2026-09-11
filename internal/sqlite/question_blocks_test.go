@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"slices"
@@ -149,6 +150,36 @@ func TestUnresolvedQuestionsBlockEveryLinkedItemUntilResolved(t *testing.T) {
 	}
 	if got := readyItemIDs(t, ctx, service); strings.Join(got, ",") != "item-d" {
 		t.Fatalf("ready while the open question holds a, b and c = %v", got)
+	}
+	// The unsharp wording survives only in the graduation event, and the link
+	// event belongs to the item it now holds, so that item's feed shows it.
+	var sawSharpened, sawLinked bool
+	objectiveFeed, err := service.ListActivity(ctx, app.ActivityFilter{ObjectiveID: "objective-a", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range objectiveFeed {
+		if change.EventType == "question.sharpened" && change.EntityID == fog.ID {
+			var payload struct {
+				PreviousText string `json:"previous_text"`
+			}
+			if err := json.Unmarshal(change.PayloadJSON, &payload); err != nil {
+				t.Fatal(err)
+			}
+			sawSharpened = payload.PreviousText == "How the export interacts with retention"
+		}
+	}
+	itemFeed, err := service.ListActivity(ctx, app.ActivityFilter{WorkItemID: "item-c", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range itemFeed {
+		if change.EventType == "question.blocks_linked" && change.EntityID == fog.ID {
+			sawLinked = true
+		}
+	}
+	if !sawSharpened || !sawLinked {
+		t.Fatalf("graduation event with previous text recorded = %v, link event in item-c's feed = %v", sawSharpened, sawLinked)
 	}
 	if _, err := service.LinkQuestionBlocker(ctx, app.LinkQuestionBlockerCommand{
 		QuestionID: fog.ID, WorkItemID: "item-done", ActorID: "human:owner", ExpectedVersion: linked.Version, IdempotencyKey: "link-done",

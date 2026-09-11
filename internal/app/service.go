@@ -479,6 +479,23 @@ type AttentionRequestResult struct {
 	Question       *work.Question      `json:"question,omitempty"`
 }
 
+// UnmarshalJSON keeps a replayed response consistent with itself. Before
+// REP-08 a question stored only whether any attention was requested, which
+// Question upgrades to needs_human_decision; the state actually requested is
+// the one this result carries at its top level.
+func (result *AttentionRequestResult) UnmarshalJSON(data []byte) error {
+	type stored AttentionRequestResult
+	var decoded stored
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*result = AttentionRequestResult(decoded)
+	if result.Question != nil && result.AttentionState != "" {
+		result.Question.AttentionState = result.AttentionState
+	}
+	return nil
+}
+
 func (s *Service) requestAttentionMutation(ctx context.Context, command RequestAttentionCommand) (AttentionRequestResult, error) {
 	var result AttentionRequestResult
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
