@@ -195,3 +195,196 @@ func TestContextNonGoalAndAffectedTransitionThroughTheService(t *testing.T) {
 		}
 	}
 }
+
+// TestMigration0013AppliesToAWorkspaceWithAnExistingContextSupersession is the
+// upgrade fixture the storage layer needs: context_records.supersedes_id is
+// not a column this migration adds, unlike migration 0012's, so a workspace
+// that superseded a context record before upgrading already has rows
+// referencing each other through it. Rebuilding the table by dropping the
+// original enforces that self-referencing foreign key immediately unless
+// enforcement is deferred to the commit, and the only way to catch a
+// regression here is a fixture that seeds a real supersession before the
+// migration runs — an empty table never exercises the constraint at all.
+func TestMigration0013AppliesToAWorkspaceWithAnExistingContextSupersession(t *testing.T) {
+	ctx := context.Background()
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeContextKinds := -1
+	for index, migration := range migrations {
+		if migration.version == 13 {
+			beforeContextKinds = index
+		}
+	}
+	if beforeContextKinds < 0 {
+		t.Fatal("the priority/measure/context-kinds migration is missing")
+	}
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "supersession-upgrade.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.ensureMigrationTable(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, migration := range migrations[:beforeContextKinds] {
+		if err := database.applyMigration(ctx, migration); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const (
+		timestamp   = "2026-09-01T00:00:00.000000000Z"
+		objectiveID = "legacy-objective"
+		predecessor = "legacy-predecessor"
+		replacement = "legacy-replacement"
+	)
+	for _, statement := range []string{
+		`INSERT INTO actors (id, kind, display_name, created_at) VALUES ('human:legacy', 'human', 'Legacy owner', '` + timestamp + `')`,
+		`INSERT INTO objectives (id, key, title, description, desired_outcome, phase, version, created_at, updated_at)
+		 VALUES ('` + objectiveID + `', 'OBJ-LEGACY-SUPERSESSION', 'Predates priority/measure', '', 'A pre-existing supersession survives the upgrade.', 'planning', 1, '` + timestamp + `', '` + timestamp + `')`,
+		`INSERT INTO context_records (id, objective_id, kind, title, status, version, created_at, updated_at, created_by)
+		 VALUES ('` + predecessor + `', '` + objectiveID + `', 'requirement', 'The original requirement', 'superseded', 2, '` + timestamp + `', '` + timestamp + `', 'human:legacy')`,
+		`INSERT INTO context_records (id, objective_id, kind, title, status, supersedes_id, version, created_at, updated_at, created_by)
+		 VALUES ('` + replacement + `', '` + objectiveID + `', 'requirement', 'The corrected requirement', 'proposed', '` + predecessor + `', 1, '` + timestamp + `', '` + timestamp + `', 'human:legacy')`,
+	} {
+		if _, err := database.db.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("seed pre-upgrade row: %v\n%s", err, statement)
+		}
+	}
+
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatalf("migrate over an existing context supersession: %v", err)
+	}
+
+	service := app.NewService(database.Store(), &testIDs{}, testClock{})
+	objectiveContext, err := service.GetObjectiveContext(ctx, objectiveID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found int
+	for _, record := range objectiveContext.ContextRecords {
+		if record.ID == predecessor && record.Status == work.ContextSuperseded {
+			found++
+		}
+		if record.ID == replacement && record.SupersedesID == predecessor {
+			found++
+		}
+	}
+	if found != 2 {
+		t.Fatalf("supersession pair after migrating = %#v, want both rows intact and linked", objectiveContext.ContextRecords)
+	}
+}
+
+// TestWorkItemMeasureDistinguishesGenuineZeroFromUnset exercises the same
+// zero-value convention end to end: a Measure whose Value is a real zero,
+// not the unset sentinel, must round-trip through creation, storage and a
+// database reopen without being silently collapsed into "no measure".
+func TestWorkItemMeasureDistinguishesGenuineZeroFromUnset(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "zero-measure.db")
+	database, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	service := app.NewService(database.Store(), &testIDs{}, testClock{})
+	if _, err := app.UnwrapMutation(service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: "human:owner", Kind: work.ActorTypeHuman, DisplayName: "Owner"}, IdempotencyKey: "zero-owner"})); err != nil {
+		t.Fatal(err)
+	}
+	objective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{
+		ActorID: "human:owner", IdempotencyKey: "zero-objective", Key: "OBJ-ZERO",
+		Title: "Carries a genuinely zero measure", DesiredOutcome: "The zero survives.", Phase: work.ObjectivePlanning,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero := work.Measure{Value: 0, Unit: "defects", Basis: work.MeasureMeasured}
+	item, err := app.UnwrapMutation(service.CreateWorkItem(ctx, app.CreateWorkItemCommand{
+		ActorID: "human:owner", IdempotencyKey: "zero-item", Key: "TH-ZERO", ObjectiveID: objective.ID,
+		Title: "Zero defects found", Kind: "research", CommitmentState: work.ItemProposed, ExecutionStatus: work.StatusBacklog,
+		Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose,
+		RequiredActorKind: work.ActorAny, AttentionState: work.AttentionNone, Measure: zero,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Measure != zero {
+		t.Fatalf("measure at creation = %+v, want the genuine zero %+v", item.Measure, zero)
+	}
+
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	restarted, err := app.NewService(reopened.Store(), &testIDs{}, testClock{}).GetWorkItem(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarted.WorkItem.Measure != zero {
+		t.Fatalf("after reopening, measure = %+v, want the genuine zero %+v, not collapsed to unset", restarted.WorkItem.Measure, zero)
+	}
+}
+
+// TestMigration0013PreservesTheOriginalContextRecordsConstraintsAndIndex
+// pins the three properties the rebuild claims to carry across unchanged:
+// the pre-existing index, and the version CHECK. A regression in any of
+// these previously passed the whole suite silently.
+func TestMigration0013PreservesTheOriginalContextRecordsConstraintsAndIndex(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "rebuild-constraints.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	var indexCount int
+	if err := database.db.QueryRowContext(ctx,
+		"SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'context_by_objective_kind' AND tbl_name = 'context_records'",
+	).Scan(&indexCount); err != nil {
+		t.Fatal(err)
+	}
+	if indexCount != 1 {
+		t.Fatal("context_by_objective_kind index is missing after the migration 0013 rebuild")
+	}
+
+	service := app.NewService(database.Store(), &testIDs{}, testClock{})
+	if _, err := app.UnwrapMutation(service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: "human:owner", Kind: work.ActorTypeHuman, DisplayName: "Owner"}, IdempotencyKey: "rebuild-owner"})); err != nil {
+		t.Fatal(err)
+	}
+	objective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{
+		ActorID: "human:owner", IdempotencyKey: "rebuild-objective", Key: "OBJ-REBUILD",
+		Title: "Checks the rebuilt table's constraints", DesiredOutcome: "Both constraints still hold.", Phase: work.ObjectivePlanning,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The version CHECK (version > 0) must still reject a non-positive version.
+	if _, err := database.db.ExecContext(ctx,
+		`INSERT INTO context_records (id, objective_id, kind, title, status, version, created_at, updated_at, created_by)
+		 VALUES ('bad-version', ?, 'requirement', 'Invalid version', 'proposed', 0, '2026-09-11T00:00:00Z', '2026-09-11T00:00:00Z', 'human:owner')`,
+		objective.ID); err == nil {
+		t.Fatal("a context_records row with version 0 was accepted, want the CHECK to reject it")
+	}
+
+	// supersedes_id must still enforce referential integrity (NO ACTION still
+	// checks, it just no longer blocks a direct delete — nothing in this
+	// codebase performs one).
+	if _, err := database.db.ExecContext(ctx,
+		`INSERT INTO context_records (id, objective_id, kind, title, status, supersedes_id, version, created_at, updated_at, created_by)
+		 VALUES ('dangling', ?, 'requirement', 'Points nowhere', 'proposed', 'does-not-exist', 1, '2026-09-11T00:00:00Z', '2026-09-11T00:00:00Z', 'human:owner')`,
+		objective.ID); err == nil {
+		t.Fatal("a context_records row superseding a nonexistent id was accepted")
+	}
+}

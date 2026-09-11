@@ -89,3 +89,38 @@ func TestObjectiveRejectsAnInvalidAppetite(t *testing.T) {
 		t.Fatalf("a complete appetite was rejected: %v", err)
 	}
 }
+
+// TestWorkItemRejectsAnInvalidMeasure mirrors TestObjectiveRejectsAnInvalidAppetite
+// for the other struct Measure lives on: WorkItem.Validate() must wire
+// validMeasure the same way Objective.Validate() does, not merely carry the
+// field.
+func TestWorkItemRejectsAnInvalidMeasure(t *testing.T) {
+	item := WorkItem{
+		ID: "id", Key: "TH-1", ObjectiveID: "objective", Title: "Title", Kind: "research",
+		CommitmentState: ItemProposed, ExecutionStatus: StatusBacklog, Priority: PriorityMedium,
+		EstimatedScope: ScopeSmall, ExecutionPolicy: PolicyAgentMayPropose, RequiredActorKind: ActorAny,
+		AttentionState: AttentionNone,
+	}
+	item.Measure = Measure{Value: 200, Unit: "tokens"}
+	if err := item.Validate(); err == nil {
+		t.Fatal("a work item with an incomplete measure was accepted")
+	}
+	item.Measure = Measure{Value: 200, Unit: "tokens", Basis: MeasureEstimated}
+	if err := item.Validate(); err != nil {
+		t.Fatalf("a complete measure was rejected: %v", err)
+	}
+}
+
+// TestMeasureAcceptsAGenuinelyZeroValue guards the case a zero-Value
+// unset-sentinel convention risks losing: a real measurement of zero (zero
+// defects found, zero budget remaining) is not the same thing as no measure
+// at all, and must stay distinguishable once a unit and basis are given.
+func TestMeasureAcceptsAGenuinelyZeroValue(t *testing.T) {
+	zero := Measure{Value: 0, Unit: "defects", Basis: MeasureMeasured}
+	if !validMeasure(zero) {
+		t.Fatalf("%+v rejected: a real zero measurement must be valid once unit and basis are given", zero)
+	}
+	if zero.isZero() {
+		t.Fatal("a measure carrying a unit and basis reported isZero(), want it distinguished from Measure{}")
+	}
+}
