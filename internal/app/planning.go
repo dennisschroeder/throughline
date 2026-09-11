@@ -263,8 +263,14 @@ func (s *Service) askQuestionMutation(ctx context.Context, command AskQuestionCo
 			if _, err := repository.Objective(ctx, question.ObjectiveID); err != nil {
 				return work.Question{}, fmt.Errorf("load objective: %w", err)
 			}
+			if err := ensureWorkItemScope(ctx, repository, question.ObjectiveID, question.WorkItemID); err != nil {
+				return work.Question{}, err
+			}
 			for _, workItemID := range question.BlocksWorkItems {
-				if err := ensureWorkItemScope(ctx, repository, question.ObjectiveID, workItemID); err != nil {
+				if workItemID == question.WorkItemID {
+					continue
+				}
+				if err := ensureBlockableWorkItem(ctx, repository, question.ObjectiveID, workItemID); err != nil {
 					return work.Question{}, err
 				}
 			}
@@ -361,7 +367,7 @@ func (s *Service) linkQuestionBlockerMutation(ctx context.Context, command LinkQ
 			if question.Version != command.ExpectedVersion {
 				return work.Question{}, ports.ErrVersionConflict
 			}
-			if err := ensureWorkItemScope(ctx, repository, question.ObjectiveID, command.WorkItemID); err != nil {
+			if err := ensureBlockableWorkItem(ctx, repository, question.ObjectiveID, command.WorkItemID); err != nil {
 				return work.Question{}, err
 			}
 			updated, err := work.LinkQuestionBlocker(question, command.WorkItemID)
@@ -543,6 +549,28 @@ func ensureWorkItemScope(ctx context.Context, repository ports.Repository, objec
 	}
 	if item.ObjectiveID != objectiveID {
 		return errors.New("work item belongs to another objective")
+	}
+	return nil
+}
+
+// ensureBlockableWorkItem admits an explicit blocking link only to a work
+// item of the question's objective that can still move. A done or cancelled
+// item has no outgoing transition, so a link to it would be recorded and
+// displayed as a block that holds nothing.
+func ensureBlockableWorkItem(ctx context.Context, repository ports.Repository, objectiveID, workItemID string) error {
+	workItemID = strings.TrimSpace(workItemID)
+	if workItemID == "" {
+		return errors.New("blocking link requires a work item")
+	}
+	item, err := repository.WorkItem(ctx, workItemID)
+	if err != nil {
+		return fmt.Errorf("load blocked work item: %w", err)
+	}
+	if item.ObjectiveID != objectiveID {
+		return errors.New("work item belongs to another objective")
+	}
+	if item.ExecutionStatus == work.StatusDone || item.ExecutionStatus == work.StatusCancelled {
+		return fmt.Errorf("a %s work item cannot be blocked by a question", item.ExecutionStatus)
 	}
 	return nil
 }
@@ -1444,7 +1472,7 @@ func (s *Service) SelectObjectiveContext(ctx context.Context, query ObjectiveCon
 		return ObjectiveContextSnapshot{}, err
 	}
 	context := selection.Context
-	snapshot := ObjectiveContextSnapshot{Objective: context.Objective, SelectedContext: limitSlice(context.ContextRecords, limit), Plans: limitSlice(approvedPlans(context.Plans), limit), Questions: limitSlice(openQuestions(context.Questions), limit), Decisions: limitSlice(context.Decisions, limit), Approvals: limitSlice(context.Approvals, limit), RecentChanges: selection.RecentChanges}
+	snapshot := ObjectiveContextSnapshot{Objective: context.Objective, SelectedContext: limitSlice(context.ContextRecords, limit), Plans: limitSlice(approvedPlans(context.Plans), limit), Questions: limitSlice(unresolvedQuestions(context.Questions), limit), Decisions: limitSlice(context.Decisions, limit), Approvals: limitSlice(context.Approvals, limit), RecentChanges: selection.RecentChanges}
 	for _, item := range selection.WorkItems {
 		snapshot.ActorRelevantWork = append(snapshot.ActorRelevantWork, item)
 		for _, revision := range item.OutputRevisions {
@@ -1504,10 +1532,13 @@ func approvedPlans(plans []ports.PlanContext) []ports.PlanContext {
 	return result
 }
 
-func openQuestions(questions []work.Question) []work.Question {
+// unresolvedQuestions keeps unsharp questions beside open ones: a resuming
+// session that saw only open questions would read an objective whose
+// unphrased areas still hold work as having nothing left to ask.
+func unresolvedQuestions(questions []work.Question) []work.Question {
 	result := make([]work.Question, 0, len(questions))
 	for _, question := range questions {
-		if question.Status == work.QuestionOpen {
+		if question.Status.Unresolved() {
 			result = append(result, question)
 		}
 	}

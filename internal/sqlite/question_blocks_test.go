@@ -79,6 +79,12 @@ func TestUnresolvedQuestionsBlockEveryLinkedItemUntilResolved(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedExecutableItems(t, ctx, database, "item-a", "item-b", "item-c", "item-d")
+	if _, err := database.db.ExecContext(ctx, `INSERT INTO work_items (id, key, objective_id, plan_id, title, kind, commitment_state, execution_status, priority, estimated_scope,
+		   execution_policy, required_actor_kind, attention_state, created_at, updated_at)
+		 VALUES ('item-done', 'item-done', 'objective-a', 'plan-a', 'Item', 'task', 'accepted', 'done', 'medium', 'small',
+		   'autonomous_with_report', 'any', 'none', '`+questionFixtureTime+`', '`+questionFixtureTime+`')`); err != nil {
+		t.Fatal(err)
+	}
 	service := app.NewService(database.Store(), &testIDs{}, testClock{})
 	claim := func(id, key string) error {
 		item, err := service.GetWorkItem(ctx, id)
@@ -122,6 +128,13 @@ func TestUnresolvedQuestionsBlockEveryLinkedItemUntilResolved(t *testing.T) {
 	if sharpened.Status != work.QuestionOpen || sharpened.Text != "Does exporting a record extend its retention period?" {
 		t.Fatalf("sharpened question = %#v", sharpened)
 	}
+	stored, err := service.GetObjectiveContext(ctx, "objective-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Questions) != 1 || stored.Questions[0].Text != sharpened.Text || stored.Questions[0].Status != work.QuestionOpen {
+		t.Fatalf("stored question after sharpening = %#v, want the phrased text persisted", stored.Questions)
+	}
 	linked, err := app.UnwrapMutation(service.LinkQuestionBlocker(ctx, app.LinkQuestionBlockerCommand{
 		QuestionID: fog.ID, WorkItemID: "item-c", ActorID: "human:owner", ExpectedVersion: sharpened.Version, IdempotencyKey: "link-c",
 	}))
@@ -130,6 +143,11 @@ func TestUnresolvedQuestionsBlockEveryLinkedItemUntilResolved(t *testing.T) {
 	}
 	if got := readyItemIDs(t, ctx, service); strings.Join(got, ",") != "item-d" {
 		t.Fatalf("ready while the open question holds a, b and c = %v", got)
+	}
+	if _, err := service.LinkQuestionBlocker(ctx, app.LinkQuestionBlockerCommand{
+		QuestionID: fog.ID, WorkItemID: "item-done", ActorID: "human:owner", ExpectedVersion: linked.Version, IdempotencyKey: "link-done",
+	}); err == nil {
+		t.Fatal("a question was linked as a blocker of a done item, which it could never hold")
 	}
 	if _, err := service.LinkQuestionBlocker(ctx, app.LinkQuestionBlockerCommand{
 		QuestionID: fog.ID, WorkItemID: "item-elsewhere", ActorID: "human:owner", ExpectedVersion: linked.Version, IdempotencyKey: "link-elsewhere",
@@ -162,6 +180,9 @@ func TestUnresolvedQuestionsBlockEveryLinkedItemUntilResolved(t *testing.T) {
 	}
 	if got := readyItemIDs(t, ctx, service); strings.Join(got, ",") != "item-a,item-b,item-c" {
 		t.Fatalf("ready after answering = %v, want every item the answered question held", got)
+	}
+	if released, err := service.GetWorkItem(ctx, "item-c"); err != nil || len(released.BlockingQuestions) != 0 {
+		t.Fatalf("item-c blocking questions after answering = %#v, %v, want none", released.BlockingQuestions, err)
 	}
 	if _, err := service.LinkQuestionBlocker(ctx, app.LinkQuestionBlockerCommand{
 		QuestionID: fog.ID, WorkItemID: "item-d", ActorID: "human:owner", ExpectedVersion: answered.Version, IdempotencyKey: "link-after-answer",

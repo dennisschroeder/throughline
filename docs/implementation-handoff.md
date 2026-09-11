@@ -1517,7 +1517,7 @@ Return stable item fields, version, derived blockers, and only requested optiona
 }
 ```
 
-V1 is selection-based and size-bounded, not semantically generated: return objective phase, requirements/constraints/success metrics, accepted decisions, active assumptions with validation state, findings/evidence, open questions/approvals, approved-plan revision, actor-relevant ready/claimed work, accepted/reusable outputs, current external-action authorization summaries for that actor, recent changes, and relevant artifact metadata. A later context compiler may add token budgeting and relevance ranking, but it must remain explainable and cite source records.
+V1 is selection-based and size-bounded, not semantically generated: return objective phase, requirements/constraints/success metrics, accepted decisions, active assumptions with validation state, findings/evidence, unresolved questions (the `open_questions` section carries unsharp as well as open ones)/approvals, approved-plan revision, actor-relevant ready/claimed work, accepted/reusable outputs, current external-action authorization summaries for that actor, recent changes, and relevant artifact metadata. A later context compiler may add token budgeting and relevance ranking, but it must remain explainable and cite source records.
 
 #### `get_changes`
 

@@ -64,6 +64,12 @@ func TestQuestionBlockingAndAttentionOverTheWire(t *testing.T) {
 	if blocks, _ := asked["blocks_work_items"].([]any); len(blocks) != 1 || blocks[0] != first {
 		t.Fatalf("asked question blocks = %#v, want [%s]", asked["blocks_work_items"], first)
 	}
+	// A resuming session must see the unsharp question: hiding it would make
+	// an objective whose unphrased areas still hold work look settled.
+	objectiveContext := must("get_objective_context", map[string]any{"objective_id": "OBJ-QUESTIONS", "include": []any{"open_questions"}})
+	if questions, _ := objectiveContext["questions"].([]any); len(questions) != 1 || questions[0].(map[string]any)["status"] != "unsharp" {
+		t.Fatalf("objective context questions = %#v, want the unsharp question", objectiveContext["questions"])
+	}
 	sharpened := must("sharpen_question", map[string]any{
 		"actor_id": "agent:planner", "idempotency_key": "sharpen", "question_id": asked["id"],
 		"expected_version": asked["version"], "question": "Does export extend retention?",
@@ -84,9 +90,40 @@ func TestQuestionBlockingAndAttentionOverTheWire(t *testing.T) {
 		t.Fatalf("get_item blocking questions = %#v", detail["blocking_questions"])
 	}
 
+	if trimmed := must("get_item", map[string]any{"id": second, "include": []any{"dependencies"}}); trimmed["blocking_questions"] != nil {
+		t.Fatalf("get_item without the questions section = %#v, want blocking_questions omitted", trimmed["blocking_questions"])
+	}
+
+	// A second objective with its own flagged question, and a flagged question
+	// here that is then answered: neither may appear in this objective's list.
+	must("create_objective", map[string]any{
+		"actor_id": "agent:planner", "idempotency_key": "other-objective", "key": "OBJ-OTHER",
+		"title": "Elsewhere", "desired_outcome": "Stays apart.", "phase": "planning",
+	})
+	must("ask_question", map[string]any{
+		"actor_id": "agent:planner", "idempotency_key": "ask-other", "objective_id": "OBJ-OTHER",
+		"question": "Unrelated?", "attention_state": "needs_human_review",
+	})
+	resolved := must("ask_question", map[string]any{
+		"actor_id": "agent:planner", "idempotency_key": "ask-resolved", "objective_id": "OBJ-QUESTIONS",
+		"question": "Settled soon?", "attention_state": "needs_human_review",
+	})
+	must("answer_question", map[string]any{
+		"actor_id": "agent:planner", "idempotency_key": "answer-resolved", "question_id": resolved["id"],
+		"expected_version": resolved["version"], "answer": "Yes.",
+	})
 	overview := must("board_overview", map[string]any{"objective_id": "OBJ-QUESTIONS", "include_attention": true})
 	if flagged, _ := overview["questions_needing_human_attention"].([]any); len(flagged) != 1 || flagged[0].(map[string]any)["id"] != asked["id"] {
-		t.Fatalf("board_overview questions needing attention = %#v", overview["questions_needing_human_attention"])
+		t.Fatalf("board_overview questions needing attention = %#v, want only this objective's unresolved flagged question", overview["questions_needing_human_attention"])
+	}
+	if quiet := must("board_overview", map[string]any{"objective_id": "OBJ-QUESTIONS"}); quiet["questions_needing_human_attention"] != nil {
+		t.Fatalf("board_overview without include_attention = %#v, want no questions", quiet["questions_needing_human_attention"])
+	}
+	if payload, text := call("ask_question", map[string]any{
+		"actor_id": "agent:planner", "idempotency_key": "ask-conflict", "objective_id": "OBJ-QUESTIONS",
+		"question": "Conflicting?", "requires_human_attention": true, "attention_state": "needs_human_review",
+	}); payload["error"] == nil || !strings.Contains(text, "conflicts") {
+		t.Fatalf("ask_question with a conflicting legacy flag = %s, want it refused", text)
 	}
 
 	for _, kind := range []string{"decision", "review"} {

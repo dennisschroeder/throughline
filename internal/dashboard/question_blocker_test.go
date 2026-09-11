@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -66,5 +67,58 @@ func TestQuestionGatePreservesTheStoredAttentionState(t *testing.T) {
 	}
 	if evidence.Meta != string(work.QuestionUnsharp) || !strings.Contains(ask, "sharpen_question") {
 		t.Fatalf("unsharp question gate: meta %q, ask %q", evidence.Meta, ask)
+	}
+}
+
+// TestDashboardShowsAnUnsharpQuestionHoldingAnItem runs REP-08's second
+// criterion through the real loop and drawer handlers: the unsharp question
+// is a Waive-only gate, the item it holds carries a question blocker rather
+// than a dependency blocker, and the drawer lists the question with its
+// stored attention state.
+func TestDashboardShowsAnUnsharpQuestionHoldingAnItem(t *testing.T) {
+	h := newTestHarness(t)
+	objectiveID, planID := h.setupObjectiveWithOpenPlan()
+	h.call("review_plan", map[string]any{"plan_id": planID, "actor_id": "human:reviewer", "idempotency_key": "review", "decision": "approved", "reason": "Approved.", "expected_version": 1})
+	h.call("transition_objective", map[string]any{"objective_id": objectiveID, "actor_id": "human:reviewer", "idempotency_key": "planning-to-execution", "target_phase": "execution", "reason": "Go.", "expected_version": 1})
+	items := h.call("list_items", map[string]any{"objective_id": objectiveID})["result"].(map[string]any)["items"].([]any)
+	itemID := items[0].(map[string]any)["work_item"].(map[string]any)["id"].(string)
+	question := h.call("ask_question", map[string]any{
+		"objective_id": objectiveID, "actor_id": "agent:dashboard-worker", "idempotency_key": "fog",
+		"question": "How retention interacts with export", "status": "unsharp",
+		"blocks_item_ids": []any{itemID}, "attention_state": "needs_clarification",
+	})["result"].(map[string]any)
+
+	h.login("human:reviewer")
+	var snapshot LoopSnapshot
+	if resp := h.getJSON("/dashboard/api/v1/loop?objective_id="+objectiveID, &snapshot); resp.StatusCode != http.StatusOK {
+		t.Fatalf("loop status = %d", resp.StatusCode)
+	}
+	var gate *Gate
+	for index := range snapshot.Gates {
+		if snapshot.Gates[index].ID == question["id"] {
+			gate = &snapshot.Gates[index]
+		}
+	}
+	if gate == nil || strings.Join(gate.AllowedDecisions, ",") != "Waive" {
+		t.Fatalf("unsharp question gate = %+v, want present with Waive as its only decision", gate)
+	}
+	var card *LoopCard
+	for columnIndex := range snapshot.Columns {
+		for cardIndex := range snapshot.Columns[columnIndex].Cards {
+			if snapshot.Columns[columnIndex].Cards[cardIndex].ItemID == itemID {
+				card = &snapshot.Columns[columnIndex].Cards[cardIndex]
+			}
+		}
+	}
+	if card == nil || card.Blocker == nil || card.Blocker.Code != "blocked_question" {
+		t.Fatalf("card of the held item = %+v, want blocker code blocked_question", card)
+	}
+
+	var detail itemDetail
+	if resp := h.getJSON("/dashboard/api/v1/item?id="+itemID, &detail); resp.StatusCode != http.StatusOK {
+		t.Fatalf("item detail status = %d", resp.StatusCode)
+	}
+	if len(detail.BlockingQuestions) != 1 || detail.BlockingQuestions[0].Status != "unsharp" || detail.BlockingQuestions[0].AttentionState != "needs_clarification" {
+		t.Fatalf("drawer blocking questions = %+v", detail.BlockingQuestions)
 	}
 }
