@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dennisschroeder/throughline/internal/app"
@@ -358,33 +359,48 @@ func TestMigration0013PreservesTheOriginalContextRecordsConstraintsAndIndex(t *t
 		t.Fatal("context_by_objective_kind index is missing after the migration 0013 rebuild")
 	}
 
-	service := app.NewService(database.Store(), &testIDs{}, testClock{})
-	if _, err := app.UnwrapMutation(service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: "human:owner", Kind: work.ActorTypeHuman, DisplayName: "Owner"}, IdempotencyKey: "rebuild-owner"})); err != nil {
+	// The version CHECK (version > 0) is asserted from the table's own
+	// recorded schema text rather than by attempting a bad INSERT: Migrate
+	// itself installs this connection's TEMP mutation-effects triggers
+	// (internal/sqlite/effects.go, called from migrations.go as a
+	// self-check), and their collector table carries its own independent
+	// CHECK (version > 0) on an unrelated table with the identical
+	// predicate. An INSERT that violates context_records' own CHECK cannot
+	// be distinguished from one that only ever reached the collector's — a
+	// dynamic version-0 insert passed this test even with the real CHECK
+	// removed from context_records, which is exactly the silent regression
+	// this assertion exists to catch.
+	var contextRecordsSchema string
+	if err := database.db.QueryRowContext(ctx,
+		"SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'context_records'",
+	).Scan(&contextRecordsSchema); err != nil {
 		t.Fatal(err)
 	}
-	objective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{
-		ActorID: "human:owner", IdempotencyKey: "rebuild-objective", Key: "OBJ-REBUILD",
-		Title: "Checks the rebuilt table's constraints", DesiredOutcome: "Both constraints still hold.", Phase: work.ObjectivePlanning,
-	}))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// The version CHECK (version > 0) must still reject a non-positive version.
-	if _, err := database.db.ExecContext(ctx,
-		`INSERT INTO context_records (id, objective_id, kind, title, status, version, created_at, updated_at, created_by)
-		 VALUES ('bad-version', ?, 'requirement', 'Invalid version', 'proposed', 0, '2026-09-11T00:00:00Z', '2026-09-11T00:00:00Z', 'human:owner')`,
-		objective.ID); err == nil {
-		t.Fatal("a context_records row with version 0 was accepted, want the CHECK to reject it")
+	if !strings.Contains(contextRecordsSchema, "CHECK (version > 0)") {
+		t.Fatalf("context_records schema after the migration 0013 rebuild = %q, want it to still declare CHECK (version > 0)", contextRecordsSchema)
 	}
 
 	// supersedes_id must still enforce referential integrity (NO ACTION still
 	// checks, it just no longer blocks a direct delete — nothing in this
-	// codebase performs one).
+	// codebase performs one). This one is not confounded by the collector:
+	// its own trigger inserts a row into mutation_effects using the value
+	// already accepted into context_records, so a dangling supersedes_id is
+	// still rejected by context_records' own foreign key before the trigger
+	// ever runs.
+	const ts = "2026-09-11T00:00:00Z"
+	for _, statement := range []string{
+		`INSERT INTO actors (id, kind, display_name, created_at) VALUES ('human:owner', 'human', 'Owner', '` + ts + `')`,
+		`INSERT INTO objectives (id, key, title, description, desired_outcome, phase, priority, version, created_at, updated_at)
+		 VALUES ('obj-rebuild', 'OBJ-REBUILD', 'Checks the rebuilt table''s constraints', '', 'Both constraints still hold.', 'planning', 'medium', 1, '` + ts + `', '` + ts + `')`,
+	} {
+		if _, err := database.db.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("seed: %v\n%s", err, statement)
+		}
+	}
 	if _, err := database.db.ExecContext(ctx,
 		`INSERT INTO context_records (id, objective_id, kind, title, status, supersedes_id, version, created_at, updated_at, created_by)
-		 VALUES ('dangling', ?, 'requirement', 'Points nowhere', 'proposed', 'does-not-exist', 1, '2026-09-11T00:00:00Z', '2026-09-11T00:00:00Z', 'human:owner')`,
-		objective.ID); err == nil {
+		 VALUES ('dangling', 'obj-rebuild', 'requirement', 'Points nowhere', 'proposed', 'does-not-exist', 1, '`+ts+`', '`+ts+`', 'human:owner')`,
+	); err == nil {
 		t.Fatal("a context_records row superseding a nonexistent id was accepted")
 	}
 }
