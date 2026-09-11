@@ -413,6 +413,96 @@ same number of passes.
   `TestAttachArtifactDeduplicatesEquivalentAbsoluteReferences` pin AC2 at the domain constructor and
   at the actual `attach_artifact` mutation independently.
 
+### REP-06 DIMS
+
+- Commits: `7e931f7` (implementation), then `2dc766e`, `91420ba` and `d39894a`, each a
+  response to a review pass, at the 3-pass budget.
+- Claim: `01a08db2-552d-7c25-931b-0a6b2ca8c85a`.
+- Final gate: all six repository commands exited zero on 2026-09-11 at `d39894a`, plus
+  `go test ./... -race -shuffle=on`.
+
+Three largely independent pieces, bundling four of the triage's decided additions in one node:
+`Objective.Priority` (the same low/medium/high/urgent vocabulary `WorkItem` already uses, no ready
+phase — ordering a parked idea is a priority question, not a lifecycle one); a new `Measure` type
+(a value, an opaque unit never interpreted or compared across units, a basis of `estimated` or
+`measured`) used as `Objective.Appetite` and as `WorkItem.Measure` beside the existing coarse
+`EstimatedScope` hint; and two new `ContextKind` values, `non_goal` and `affected`, both sharing
+the proposed -> accepted -> waived lifecycle `requirement`/`constraint`/`risk` already use. The
+frozen graph's own gate condition for this node — "every kind maps mechanically to its declared
+lifecycle" — is broader than the two stored acceptance criteria, which name only the two new
+kinds; a decision recorded before writing code (`01a08db2-957a-7320-a781-6c3e06f3d6e3`) commits to
+the broader reading, declaring all eight `ContextRecord` kinds' lifecycles in the ontology (a new
+`kinds` field on lifecycle entries, grouped into the four shapes the code actually enforces), not
+only the two this node adds.
+
+#### Review
+
+Three passes, the full reduced budget. Every pass found and fixed at least one real defect — the
+first node in this objective where that held for the entire budget without a clean pass.
+
+| Pass | Mutants | Survived | Real defects found and fixed |
+|---|---|---|---|
+| 1 | 12 | 6 | 1 (migration fails on existing data) + 4 coverage gaps |
+| 2 | 10 | 4 (3 refuted) | 1 (masked test) |
+| 3 | 6 | 4 | 1 (dropped appetite input) + 1 coverage gap + 1 test hardening |
+
+**Pass 1** found the most severe defect of the node, and arguably of the objective so far: migration
+0013's `context_records` rebuild — needed to widen the `kind` CHECK constraint for the two new
+values — failed outright on any workspace that had ever superseded a context record before
+upgrading. `supersedes_id`'s pre-existing `ON DELETE RESTRICT` is enforced the instant the original
+table is dropped during a rebuild, which every prior migration touching this table had simply never
+triggered (its own column was new in each earlier case). Neither `PRAGMA foreign_keys=OFF` nor
+`defer_foreign_keys` alone rescues the usual drop-and-rename order once already inside the
+transaction `Database.Migrate` opens — both are no-ops in that position, and RESTRICT is checked
+immediately regardless of the defer pragma. The fix needed both changes together: rename the
+original table out of the way before creating the replacement under the permanent name, and drop
+`ON DELETE RESTRICT` to bare `REFERENCES` (inert in practice, since nothing in this codebase deletes
+a `context_records` row directly). A new upgrade fixture seeds a real predecessor/replacement pair
+before migrating and is verified to fail against the pre-fix SQL.
+
+**Pass 2** found that one of pass 1's own new tests passed for the wrong reason: asserting a
+version-0 insert into `context_records` failed proved nothing about `context_records`' own
+`CHECK (version > 0)`, because `Database.Migrate` unconditionally installs this connection's TEMP
+mutation-effects triggers, whose collector table carries an identically-worded CHECK on a
+completely unrelated table — the insert failed via that trigger regardless of whether
+`context_records`' own constraint existed. Fixed by asserting the CHECK's presence from the table's
+own recorded schema text instead of by attempting a bad insert. Pass 2 also raised a second claim —
+that pass 1's fix was more invasive than necessary, and that the pragma alone, without the reorder
+and without dropping `RESTRICT`, would have been sufficient — which was checked directly against
+both the real driver in isolation and this project's own fixture test, reproduced as failing both
+times, and not acted on. Recorded here because a claim from a review pass is not automatically
+correct merely for having been mutation-tested; this one did not survive being run.
+
+**Pass 3** found that `create_objective`'s own `appetite` field was decoded from the wire, advertised
+in the tool's schema, and silently discarded: `CreateObjectiveCommand` had no `Appetite` field at
+all, so any appetite given at creation succeeded with no error and was never stored, reachable only
+afterward through `patch_objective`. It also found that `patch_objective`'s priority-application
+path — at both the service layer and the MCP wire mapping — had no test proving a patched priority
+takes effect rather than being silently ignored (the shipped code was correct; nothing would have
+caught a regression), and that the new semantic-model lifecycle test's search loop relied on a
+shared helper's vacuous-truth-on-empty behavior in a way that could have picked the wrong lifecycle
+entry rather than reporting no match, had a future entry ever come back kindless. All three closed.
+
+#### Dispositions
+
+| Finding | Disposition |
+|---|---|
+| `semanticmodel.Lifecycle.Kinds`'s `omitempty` json tag has no test forcing its presence | Accepted: informational, neither acceptance criterion depends on it |
+
+#### Evidence
+
+- `TestObjectivePriorityAndAppetiteSurvivePatchAndReopen` and `TestWorkItemMeasureSurvivesPatchAndReopen`
+  each patch one field, confirm an unrelated patch does not disturb it, then close and reopen the
+  database.
+- `TestMigration0013AppliesToAWorkspaceWithAnExistingContextSupersession` seeds a real
+  predecessor/replacement pair under the pre-migration schema and migrates over it; verified to
+  fail against the pre-fix SQL.
+- `TestMigration0013PreservesTheOriginalContextRecordsConstraintsAndIndex` asserts the rebuilt
+  table's index and version CHECK directly against schema state, not through a path a same-connection
+  side effect could mask.
+- `TestCreateObjectivePersistsAppetite` and `TestPatchObjectiveAppliesPriority` each verified to fail
+  against the code before its respective fix.
+
 ## Feedback
 
 - REP-01 was estimated small but consumed the full five-pass review budget because file permissions
@@ -555,3 +645,34 @@ same number of passes.
   covered every commit and every review pass without lapsing, against four lapses across REP-02
   and REP-03 combined. Not yet enough to call it fixed rather than favorable timing, but two
   clean nodes after two rough ones is worth carrying forward as a data point rather than losing.
+
+### REP-06
+
+- **Every one of three passes found and fixed a real defect — the first node in this objective
+  where the reduced budget never had a clean pass to spare.** REP-05 alternated (defect, defect,
+  none); REP-04 converged to nothing by pass 3. REP-06 went defect, defect, defect. Three passes
+  was still enough — nothing found in pass 3 looked structural, all three were the kind of gap a
+  fresh angle on already-reviewed code turns up — but this is the first data point suggesting the
+  budget is sized close to where a genuinely three-piece node (priority, measure, two context
+  kinds bundled in one item) actually needs it, not comfortably above it.
+- **A review pass's own claim is data, not a verdict, even when it comes with a mutant table.**
+  Pass 2 reported, with a specific mutant table, that pass 1's migration fix was more invasive
+  than necessary. Reproducing the simpler alternative directly — against the real driver in
+  isolation and against this project's own fixture — showed it fails both times; the claim did not
+  survive being checked. Nothing here impugns mutation testing as a technique: the tool caught a
+  real defect (the masked version-CHECK test) in the very same pass. It argues for one further
+  step on a *surprising* result specifically — reproduce it a second, independent way before
+  accepting it — which pass 3's own brief adopted explicitly, and which produced a clean signal
+  (three findings, all confirmed by direct reproduction, one instance where a mutant's mechanism
+  was itself worth explaining rather than taken at face value).
+- **A field can be in a schema, decoded, and validated, and still never reach storage.**
+  `create_objective`'s `appetite` was declared in the tool's input schema and successfully parsed
+  into a Go struct on every call; the command type it was copied into simply had no field for it.
+  Every check that would normally catch this — schema validation, decode, the domain layer's own
+  `Validate()` — passed, because none of them see the *command construction* step in between,
+  where the value was dropped without an error on either side of it. The class of bug is not new
+  to this objective (REP-02's effect-kind vocabulary gap and REP-03's key-resolution gap were both
+  "the value exists and something downstream silently doesn't use it"), but this is the sharpest
+  instance yet: a field that round-trips cleanly through everything except the one line that was
+  supposed to forward it.
+- **The claim held for a third node in a row.**
