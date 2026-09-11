@@ -72,6 +72,12 @@ func TestObjectiveFeedIncludesPlanningRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	approval, err := app.UnwrapMutation(service.RequestApproval(ctx, app.RequestApprovalCommand{
+		ActorID: "human:owner", IdempotencyKey: "feed-approval", Request: "Approve the draft?", PlanID: plan.ID,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := app.UnwrapMutation(service.RecordDecision(ctx, app.RecordDecisionCommand{
 		ObjectiveID: other.ID, ActorID: "human:owner", Title: "Elsewhere", Decision: "Belongs to the other objective.", IdempotencyKey: "feed-other-decision",
 	})); err != nil {
@@ -101,13 +107,14 @@ func TestObjectiveFeedIncludesPlanningRecords(t *testing.T) {
 		"question.answered:" + question.ID,
 		"decision.recorded:" + decision.ID,
 		"plan.created:" + plan.ID,
+		"approval.requested:" + approval.ID,
 	} {
 		if _, ok := events[want]; !ok {
 			t.Fatalf("objective feed omits %s; got %v", want, events)
 		}
 	}
-	if len(events) != 6 {
-		t.Fatalf("objective feed = %v, want exactly the six events of this objective", events)
+	if len(events) != 7 {
+		t.Fatalf("objective feed = %v, want exactly the seven events of this objective", events)
 	}
 
 	snapshot, err := service.SelectObjectiveContext(ctx, app.ObjectiveContextQuery{ObjectiveID: objective.ID})
@@ -221,9 +228,40 @@ VALUES (?, ?, ?, ?, 'human:legacy', 'legacy.event', 'Legacy event', '{}', ?)`, r
 		sequences[row[0]] = sequence
 	}
 	highWaterMark := sequences["act-profile"]
+	sequenceCounter := func() int64 {
+		t.Helper()
+		var counter int64
+		// Qualified: the effects collector's TEMP table has AUTOINCREMENT too,
+		// so after Migrate an unqualified name resolves to temp.sqlite_sequence.
+		if err := database.db.QueryRowContext(ctx, "SELECT seq FROM main.sqlite_sequence WHERE name = 'activity'").Scan(&counter); err != nil {
+			t.Fatal(err)
+		}
+		return counter
+	}
+	counterBefore := sequenceCounter()
+	triggerSQL := func() string {
+		t.Helper()
+		var definition string
+		if err := database.db.QueryRowContext(ctx, "SELECT sql FROM main.sqlite_master WHERE type = 'trigger' AND name = 'activity_is_append_only_update'").Scan(&definition); err != nil {
+			t.Fatal(err)
+		}
+		return definition
+	}
+	triggerBefore := triggerSQL()
 
 	if err := database.Migrate(ctx); err != nil {
 		t.Fatalf("migrate a populated activity table: %v", err)
+	}
+	// A rebuilt table would reset the AUTOINCREMENT counter to the highest
+	// surviving sequence; the cursor high water mark must survive exactly.
+	if counterAfter := sequenceCounter(); counterAfter != counterBefore {
+		t.Fatalf("activity sequence counter moved from %d to %d", counterBefore, counterAfter)
+	}
+	// The trigger the backfill lifts must come back exactly as 0003 defined
+	// it: a column-restricted UPDATE OF trigger would leave objective_id and
+	// sequence rewritable while still rejecting the summary update below.
+	if triggerAfter := triggerSQL(); triggerAfter != triggerBefore {
+		t.Fatalf("append-only update trigger after backfill =\n%s\nwant\n%s", triggerAfter, triggerBefore)
 	}
 
 	for _, row := range history {
@@ -274,7 +312,73 @@ VALUES (?, ?, ?, ?, 'human:legacy', 'legacy.event', 'Legacy event', '{}', ?)`, r
 	if _, err := database.db.ExecContext(ctx, "UPDATE activity SET summary = 'rewritten' WHERE id = 'act-objective'"); err == nil || !strings.Contains(err.Error(), "append-only") {
 		t.Fatalf("update after backfill = %v, want the append-only trigger to reject it", err)
 	}
+	if _, err := database.db.ExecContext(ctx, "UPDATE activity SET objective_id = NULL WHERE id = 'act-objective'"); err == nil || !strings.Contains(err.Error(), "append-only") {
+		t.Fatalf("rebinding after backfill = %v, want the append-only trigger to reject it", err)
+	}
 	if _, err := database.db.ExecContext(ctx, "DELETE FROM activity WHERE id = 'act-objective'"); err == nil || !strings.Contains(err.Error(), "append-only") {
 		t.Fatalf("delete after backfill = %v, want the append-only trigger to reject it", err)
+	}
+}
+
+// TestObjectiveContextRecentChangesKeepObjectiveLevelAndSelectedItemHistory
+// pins the selection get_objective_context applies to recent changes:
+// objective-level history always, history of the work items it selected, and
+// nothing from items it did not select.
+func TestObjectiveContextRecentChangesKeepObjectiveLevelAndSelectedItemHistory(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "recent-changes.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const timestamp = "2026-09-01T00:00:00.000000000Z"
+	item := func(id, status string) string {
+		return `INSERT INTO work_items (id, key, objective_id, plan_id, title, kind, commitment_state, execution_status, priority, estimated_scope,
+		   execution_policy, required_actor_kind, attention_state, created_at, updated_at)
+		 VALUES ('` + id + `', '` + id + `', 'objective-a', 'plan-a', 'Item', 'task', 'accepted', '` + status + `', 'medium', 'small',
+		   'autonomous_with_report', 'any', 'none', '` + timestamp + `', '` + timestamp + `')`
+	}
+	for _, statement := range []string{
+		`INSERT INTO objectives (id, key, title, description, desired_outcome, phase, version, created_at, updated_at)
+		 VALUES ('objective-a', 'OBJ-A', 'A', '', 'Recent history is selected.', 'execution', 1, '` + timestamp + `', '` + timestamp + `')`,
+		`INSERT INTO plans (id, objective_id, title, revision, commitment_state, created_at, updated_at)
+		 VALUES ('plan-a', 'objective-a', 'Plan', 1, 'approved', '` + timestamp + `', '` + timestamp + `')`,
+		item("item-selected", "ready"),
+		item("item-unselected", "backlog"),
+	} {
+		if _, err := database.db.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("seed: %v\n%s", err, statement)
+		}
+	}
+	for _, row := range [][3]string{
+		{"act-question", "question", ""},
+		{"act-selected", "work_item", "item-selected"},
+		{"act-unselected", "work_item", "item-unselected"},
+	} {
+		var workItemID any
+		if row[2] != "" {
+			workItemID = row[2]
+		}
+		if _, err := database.db.ExecContext(ctx, `
+INSERT INTO activity (id, entity_kind, entity_id, work_item_id, objective_id, actor_id, event_type, summary, payload_json, created_at)
+VALUES (?, ?, ?, ?, 'objective-a', 'human:owner', 'test.event', 'Test event', '{}', ?)`, row[0], row[1], row[0], workItemID, timestamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	service := app.NewService(database.Store(), &testIDs{}, testClock{})
+	snapshot, err := service.SelectObjectiveContext(ctx, app.ObjectiveContextQuery{ObjectiveID: "objective-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recent []string
+	for _, change := range snapshot.RecentChanges {
+		recent = append(recent, change.ID)
+	}
+	if got, want := strings.Join(recent, ","), "act-selected,act-question"; got != want {
+		t.Fatalf("recent changes = %s, want %s (newest first, unselected item excluded)", got, want)
 	}
 }
