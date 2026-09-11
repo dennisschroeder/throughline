@@ -90,7 +90,7 @@ func (s *Service) transitionObjectiveMutation(ctx context.Context, command Trans
 				return work.Objective{}, err
 			}
 			if err := s.recordActivity(ctx, repository, work.Activity{
-				EntityKind: "objective", EntityID: transitioned.ID, ActorID: command.ActorID,
+				EntityKind: "objective", EntityID: transitioned.ID, ObjectiveID: transitioned.ID, ActorID: command.ActorID,
 				EventType: "objective.phase_changed", Summary: fmt.Sprintf("Objective moved from %s to %s", objective.Phase, transitioned.Phase),
 			}); err != nil {
 				return work.Objective{}, err
@@ -144,7 +144,7 @@ func (s *Service) recordContextMutation(ctx context.Context, command RecordConte
 				if err := repository.CreateContextRecord(ctx, record); err != nil {
 					return work.ContextRecord{}, err
 				}
-				if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "context_record", EntityID: record.ID, WorkItemID: record.WorkItemID, ActorID: command.ActorID, EventType: "context_record.recorded", Summary: fmt.Sprintf("Context %s recorded", record.Kind)}); err != nil {
+				if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "context_record", EntityID: record.ID, WorkItemID: record.WorkItemID, ObjectiveID: record.ObjectiveID, ActorID: command.ActorID, EventType: "context_record.recorded", Summary: fmt.Sprintf("Context %s recorded", record.Kind)}); err != nil {
 					return work.ContextRecord{}, err
 				}
 				return record, nil
@@ -166,7 +166,7 @@ func (s *Service) recordContextMutation(ctx context.Context, command RecordConte
 			if err := repository.UpdateContextRecord(ctx, superseded, previous.Version); err != nil {
 				return work.ContextRecord{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "context_record", EntityID: record.ID, WorkItemID: record.WorkItemID, ActorID: command.ActorID, EventType: "context_record.recorded", Summary: fmt.Sprintf("Context %s recorded and predecessor superseded", record.Kind)}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "context_record", EntityID: record.ID, WorkItemID: record.WorkItemID, ObjectiveID: record.ObjectiveID, ActorID: command.ActorID, EventType: "context_record.recorded", Summary: fmt.Sprintf("Context %s recorded and predecessor superseded", record.Kind)}); err != nil {
 				return work.ContextRecord{}, err
 			}
 			return record, nil
@@ -206,7 +206,7 @@ func (s *Service) transitionContextMutation(ctx context.Context, command Transit
 				return work.ContextRecord{}, err
 			}
 			if err := s.recordActivity(ctx, repository, work.Activity{
-				EntityKind: "context_record", EntityID: transitioned.ID, WorkItemID: transitioned.WorkItemID, ActorID: command.ActorID,
+				EntityKind: "context_record", EntityID: transitioned.ID, WorkItemID: transitioned.WorkItemID, ObjectiveID: transitioned.ObjectiveID, ActorID: command.ActorID,
 				EventType: "context_record.status_changed", Summary: fmt.Sprintf("Context marked %s", transitioned.Status),
 			}); err != nil {
 				return work.ContextRecord{}, err
@@ -263,7 +263,7 @@ func (s *Service) askQuestionMutation(ctx context.Context, command AskQuestionCo
 			if err := repository.CreateQuestion(ctx, question); err != nil {
 				return work.Question{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "question", EntityID: question.ID, WorkItemID: question.WorkItemID, ActorID: command.ActorID, EventType: "question.asked", Summary: "Question asked"}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "question", EntityID: question.ID, WorkItemID: question.WorkItemID, ObjectiveID: question.ObjectiveID, ActorID: command.ActorID, EventType: "question.asked", Summary: "Question asked"}); err != nil {
 				return work.Question{}, err
 			}
 			return question, nil
@@ -310,7 +310,7 @@ func (s *Service) answerQuestionMutation(ctx context.Context, command AnswerQues
 			if err := repository.UpdateQuestion(ctx, updated, command.ExpectedVersion); err != nil {
 				return work.Question{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "question", EntityID: updated.ID, WorkItemID: updated.WorkItemID, ActorID: command.ActorID, EventType: "question.answered", Summary: "Question answered"}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "question", EntityID: updated.ID, WorkItemID: updated.WorkItemID, ObjectiveID: updated.ObjectiveID, ActorID: command.ActorID, EventType: "question.answered", Summary: "Question answered"}); err != nil {
 				return work.Question{}, err
 			}
 			return updated, nil
@@ -341,7 +341,7 @@ func (s *Service) waiveQuestionMutation(ctx context.Context, command WaiveQuesti
 			if err := repository.UpdateQuestion(ctx, updated, command.ExpectedVersion); err != nil {
 				return work.Question{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "question", EntityID: updated.ID, WorkItemID: updated.WorkItemID, ActorID: command.ActorID, EventType: "question.waived", Summary: "Question waived"}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "question", EntityID: updated.ID, WorkItemID: updated.WorkItemID, ObjectiveID: updated.ObjectiveID, ActorID: command.ActorID, EventType: "question.waived", Summary: "Question waived"}); err != nil {
 				return work.Question{}, err
 			}
 			return updated, nil
@@ -402,7 +402,7 @@ func (s *Service) recordDecisionMutation(ctx context.Context, command RecordDeci
 				if err := repository.CreateDecision(ctx, decision); err != nil {
 					return work.Decision{}, err
 				}
-				if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "decision", EntityID: decision.ID, WorkItemID: decision.WorkItemID, ActorID: command.ActorID, EventType: "decision.recorded", Summary: "Decision recorded"}); err != nil {
+				if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "decision", EntityID: decision.ID, WorkItemID: decision.WorkItemID, ObjectiveID: decision.ObjectiveID, ActorID: command.ActorID, EventType: "decision.recorded", Summary: "Decision recorded"}); err != nil {
 					return work.Decision{}, err
 				}
 				return decision, nil
@@ -424,7 +424,7 @@ func (s *Service) recordDecisionMutation(ctx context.Context, command RecordDeci
 			if err := repository.UpdateDecision(ctx, superseded); err != nil {
 				return work.Decision{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "decision", EntityID: decision.ID, WorkItemID: decision.WorkItemID, ActorID: command.ActorID, EventType: "decision.recorded", Summary: "Decision recorded and predecessor superseded"}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "decision", EntityID: decision.ID, WorkItemID: decision.WorkItemID, ObjectiveID: decision.ObjectiveID, ActorID: command.ActorID, EventType: "decision.recorded", Summary: "Decision recorded and predecessor superseded"}); err != nil {
 				return work.Decision{}, err
 			}
 			return decision, nil
@@ -711,7 +711,7 @@ func (s *Service) proposePlanMutation(ctx context.Context, command ProposePlanCo
 				}
 			}
 			if err := s.recordActivity(ctx, repository, work.Activity{
-				EntityKind: "plan", EntityID: plan.ID, ActorID: command.ActorID,
+				EntityKind: "plan", EntityID: plan.ID, ObjectiveID: plan.ObjectiveID, ActorID: command.ActorID,
 				EventType: "plan.proposed", Summary: fmt.Sprintf("Plan revision %d proposed with %d work items", plan.Revision, len(items)),
 			}); err != nil {
 				return ports.PlanContext{}, err
@@ -951,7 +951,7 @@ func (s *Service) requestApprovalMutation(ctx context.Context, command RequestAp
 			if err := repository.CreateApproval(ctx, approval); err != nil {
 				return work.Approval{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "approval", EntityID: approval.ID, WorkItemID: approval.WorkItemID, ActorID: command.ActorID, EventType: "approval.requested", Summary: "Approval requested"}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "approval", EntityID: approval.ID, WorkItemID: approval.WorkItemID, ObjectiveID: approval.ObjectiveID, ActorID: command.ActorID, EventType: "approval.requested", Summary: "Approval requested"}); err != nil {
 				return work.Approval{}, err
 			}
 			return approval, nil
@@ -1005,7 +1005,7 @@ func (s *Service) resolveApprovalMutation(ctx context.Context, command ResolveAp
 			if err := repository.UpdateApproval(ctx, approval, command.ExpectedVersion); err != nil {
 				return work.Approval{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "approval", EntityID: approval.ID, WorkItemID: approval.WorkItemID, ActorID: command.ActorID, EventType: "approval.resolved", Summary: fmt.Sprintf("Approval marked %s", approval.Status)}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "approval", EntityID: approval.ID, WorkItemID: approval.WorkItemID, ObjectiveID: approval.ObjectiveID, ActorID: command.ActorID, EventType: "approval.resolved", Summary: fmt.Sprintf("Approval marked %s", approval.Status)}); err != nil {
 				return work.Approval{}, err
 			}
 			return approval, nil
@@ -1073,7 +1073,7 @@ func (s *Service) reviewPlanMutation(ctx context.Context, command ReviewPlanComm
 				return work.Plan{}, err
 			}
 			if err := s.recordActivity(ctx, repository, work.Activity{
-				EntityKind: "plan", EntityID: reviewed.ID, ActorID: command.ReviewerActorID,
+				EntityKind: "plan", EntityID: reviewed.ID, ObjectiveID: reviewed.ObjectiveID, ActorID: command.ReviewerActorID,
 				EventType: "plan.reviewed", Summary: fmt.Sprintf("Plan revision %d marked %s", reviewed.Revision, reviewed.CommitmentState),
 			}); err != nil {
 				return work.Plan{}, err

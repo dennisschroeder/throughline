@@ -143,7 +143,7 @@ ORDER BY item.updated_at, item.id`, query.ActorID, formatTime(time.Now().UTC()),
 			return err
 		}
 		for _, change := range changes {
-			if change.EntityID == context.Objective.ID || selected[change.WorkItemID] {
+			if (change.ObjectiveID == context.Objective.ID && change.WorkItemID == "") || selected[change.WorkItemID] {
 				result.RecentChanges = append(result.RecentChanges, change)
 			}
 		}
@@ -156,7 +156,10 @@ ORDER BY item.updated_at, item.id`, query.ActorID, formatTime(time.Now().UTC()),
 }
 
 func (s *Store) listRecentActivity(ctx context.Context, reader sqlReader, objectiveID string, workItemIDs map[string]bool, limit int) ([]work.Activity, error) {
-	conditions := []string{"entity_kind = 'objective' AND entity_id = ?"}
+	// Objective-level history (the objective itself, its plans, and questions,
+	// decisions and context recorded against it) is always included; work-item
+	// history only for the selected items.
+	conditions := []string{"objective_id = ? AND work_item_id IS NULL"}
 	arguments := []any{objectiveID}
 	if len(workItemIDs) > 0 {
 		placeholders := make([]string, 0, len(workItemIDs))

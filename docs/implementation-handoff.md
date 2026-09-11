@@ -1013,6 +1013,7 @@ CREATE TABLE activity (
   entity_kind TEXT NOT NULL,
   entity_id TEXT NOT NULL,
   work_item_id TEXT REFERENCES work_items(id) ON DELETE CASCADE,
+  objective_id TEXT REFERENCES objectives(id) ON DELETE CASCADE,
   actor_id TEXT REFERENCES actors(id),
   event_type TEXT NOT NULL,
   summary TEXT NOT NULL,
@@ -1046,6 +1047,7 @@ CREATE INDEX external_actions_by_item_state ON external_actions(work_item_id, st
 CREATE INDEX authority_grants_by_action_principal ON authority_grants(external_action_id, external_action_revision, principal_actor_id, revoked_at, expires_at);
 CREATE INDEX activity_by_sequence ON activity(sequence);
 CREATE INDEX activity_by_item_sequence ON activity(work_item_id, sequence);
+CREATE INDEX activity_by_objective_sequence ON activity(objective_id, sequence);
 ```
 
 Implementation notes:
@@ -1517,6 +1519,8 @@ V1 is selection-based and size-bounded, not semantically generated: return objec
 ```
 
 Use an opaque monotonic activity sequence as the initial cursor. Define retention/compaction policy before any deletion exists.
+
+`objective_id` accepts an objective id or key and matches on the objective binding every activity row carries: the objective's own events, its plans, the questions, decisions and context records recorded against it, and every event of its work items. Workspace-level events (actor registration and capabilities, output profiles and their approvals) belong to no objective and appear only in the unfiltered feed. Rows written before the binding existed were backfilled by migration without changing their sequence.
 
 ### Work tools
 

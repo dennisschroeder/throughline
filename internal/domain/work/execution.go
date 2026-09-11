@@ -159,6 +159,7 @@ type Activity struct {
 	EntityKind  string
 	EntityID    string
 	WorkItemID  string
+	ObjectiveID string
 	ActorID     string
 	EventType   string
 	Summary     string
@@ -166,11 +167,20 @@ type Activity struct {
 	CreatedAt   time.Time
 }
 
+// objectiveScopedActivityKinds belong to an objective even when no work item
+// is involved. Without the binding the objective-filtered change feed omits
+// them silently, which is indistinguishable from an objective where nothing
+// happened.
+var objectiveScopedActivityKinds = map[string]bool{
+	"objective": true, "plan": true, "question": true, "decision": true, "context_record": true,
+}
+
 func NewActivity(activity Activity, now time.Time) (Activity, error) {
 	activity.ID = strings.TrimSpace(activity.ID)
 	activity.EntityKind = strings.TrimSpace(activity.EntityKind)
 	activity.EntityID = strings.TrimSpace(activity.EntityID)
 	activity.WorkItemID = strings.TrimSpace(activity.WorkItemID)
+	activity.ObjectiveID = strings.TrimSpace(activity.ObjectiveID)
 	activity.ActorID = strings.TrimSpace(activity.ActorID)
 	activity.EventType = strings.TrimSpace(activity.EventType)
 	activity.Summary = strings.TrimSpace(activity.Summary)
@@ -179,6 +189,9 @@ func NewActivity(activity Activity, now time.Time) (Activity, error) {
 	}
 	if activity.ID == "" || activity.EntityKind == "" || activity.EntityID == "" || activity.ActorID == "" || activity.EventType == "" || activity.Summary == "" {
 		return Activity{}, errors.New("activity requires id, entity kind, entity id, actor, event type, and summary")
+	}
+	if activity.ObjectiveID == "" && (activity.WorkItemID != "" || objectiveScopedActivityKinds[activity.EntityKind]) {
+		return Activity{}, fmt.Errorf("%s activity requires its objective", activity.EntityKind)
 	}
 	payload, err := normalizeJSONObject(activity.PayloadJSON)
 	if err != nil {

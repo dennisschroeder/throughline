@@ -204,9 +204,9 @@ SELECT NOT EXISTS(
 func (r *transactionRepository) CreateActivity(ctx context.Context, activity work.Activity) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO activity
-  (id, entity_kind, entity_id, work_item_id, actor_id, event_type, summary, payload_json, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, activity.ID, activity.EntityKind, activity.EntityID,
-		nullableString(activity.WorkItemID), activity.ActorID, activity.EventType, activity.Summary,
+  (id, entity_kind, entity_id, work_item_id, objective_id, actor_id, event_type, summary, payload_json, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, activity.ID, activity.EntityKind, activity.EntityID,
+		nullableString(activity.WorkItemID), nullableString(activity.ObjectiveID), activity.ActorID, activity.EventType, activity.Summary,
 		string(activity.PayloadJSON), formatTime(activity.CreatedAt))
 	if err != nil {
 		return fmt.Errorf("insert activity: %w", err)
@@ -481,12 +481,8 @@ func (s *Store) listActivity(ctx context.Context, reader sqlReader, filter ports
 		arguments = append(arguments, strings.TrimSpace(filter.WorkItemID))
 	}
 	if strings.TrimSpace(filter.ObjectiveID) != "" {
-		query += ` AND (
-  (entity_kind = 'objective' AND entity_id = ?)
-  OR EXISTS (SELECT 1 FROM work_items item WHERE item.id = activity.work_item_id AND item.objective_id = ?)
-)`
-		objectiveID := strings.TrimSpace(filter.ObjectiveID)
-		arguments = append(arguments, objectiveID, objectiveID)
+		query += " AND objective_id = ?"
+		arguments = append(arguments, strings.TrimSpace(filter.ObjectiveID))
 	}
 	query += " ORDER BY sequence LIMIT ?"
 	arguments = append(arguments, limit)
@@ -701,7 +697,7 @@ SELECT id, output_revision_id, criterion_ref, validator_kind, verdict, score, ve
 FROM output_validations`
 
 const activitySelect = `
-SELECT sequence, id, entity_kind, entity_id, work_item_id, actor_id, event_type, summary, payload_json, created_at
+SELECT sequence, id, entity_kind, entity_id, work_item_id, objective_id, actor_id, event_type, summary, payload_json, created_at
 FROM activity`
 
 const outputRequirementsSatisfiedSQL = `NOT EXISTS(
@@ -841,13 +837,14 @@ func scanValidationRecord(row scanner) (output.ValidationRecord, error) {
 
 func scanActivity(row scanner) (work.Activity, error) {
 	var activity work.Activity
-	var workItemID sql.NullString
+	var workItemID, objectiveID sql.NullString
 	var payload, createdAt string
 	if err := row.Scan(&activity.Sequence, &activity.ID, &activity.EntityKind, &activity.EntityID,
-		&workItemID, &activity.ActorID, &activity.EventType, &activity.Summary, &payload, &createdAt); err != nil {
+		&workItemID, &objectiveID, &activity.ActorID, &activity.EventType, &activity.Summary, &payload, &createdAt); err != nil {
 		return work.Activity{}, err
 	}
 	activity.WorkItemID = workItemID.String
+	activity.ObjectiveID = objectiveID.String
 	activity.PayloadJSON = []byte(payload)
 	var err error
 	activity.CreatedAt, err = parseTime(createdAt)

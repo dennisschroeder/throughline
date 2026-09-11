@@ -443,7 +443,7 @@ func assertInitializationState(t *testing.T, database *Database) {
 		query string
 		want  int
 	}{
-		{"SELECT COUNT(*) FROM schema_migrations", 13},
+		{"SELECT COUNT(*) FROM schema_migrations", 14},
 		{"SELECT COUNT(*) FROM output_profiles", 8},
 		{"SELECT COUNT(*) FROM output_profiles WHERE lifecycle_state = 'active' AND built_in = 1", 8},
 		{"PRAGMA foreign_keys", 1},

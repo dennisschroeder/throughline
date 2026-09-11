@@ -75,7 +75,7 @@ func (s *Service) createObjectiveMutation(ctx context.Context, command CreateObj
 			if err := repository.CreateObjective(ctx, objective); err != nil {
 				return work.Objective{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "objective", EntityID: objective.ID, ActorID: command.ActorID, EventType: "objective.created", Summary: fmt.Sprintf("Objective %s created", objective.Key)}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "objective", EntityID: objective.ID, ObjectiveID: objective.ID, ActorID: command.ActorID, EventType: "objective.created", Summary: fmt.Sprintf("Objective %s created", objective.Key)}); err != nil {
 				return work.Objective{}, err
 			}
 			return objective, nil
@@ -146,7 +146,7 @@ func (s *Service) patchObjectiveMutation(ctx context.Context, command PatchObjec
 			if err := repository.UpdateObjective(ctx, objective, command.ExpectedVersion); err != nil {
 				return work.Objective{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "objective", EntityID: objective.ID, ActorID: command.ActorID, EventType: "objective.patched", Summary: "Objective details updated"}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "objective", EntityID: objective.ID, ObjectiveID: objective.ID, ActorID: command.ActorID, EventType: "objective.patched", Summary: "Objective details updated"}); err != nil {
 				return work.Objective{}, err
 			}
 			return objective, nil
@@ -528,6 +528,7 @@ func (s *Service) requestAttentionMutation(ctx context.Context, command RequestA
 				}
 				result.Question = &question
 				activity.WorkItemID = question.WorkItemID
+				activity.ObjectiveID = question.ObjectiveID
 			case "decision":
 				decision, err := repository.Decision(ctx, targetID)
 				if err != nil {
@@ -535,6 +536,7 @@ func (s *Service) requestAttentionMutation(ctx context.Context, command RequestA
 				}
 				result.Decision = &decision
 				activity.WorkItemID = decision.WorkItemID
+				activity.ObjectiveID = decision.ObjectiveID
 			}
 			if err := s.recordActivity(ctx, repository, activity); err != nil {
 				return AttentionRequestResult{}, err
@@ -613,7 +615,7 @@ func (s *Service) createPlanMutation(ctx context.Context, command CreatePlanComm
 				return work.Plan{}, err
 			}
 			if err := s.recordActivity(ctx, repository, work.Activity{
-				EntityKind: "plan", EntityID: plan.ID, ActorID: command.ActorID,
+				EntityKind: "plan", EntityID: plan.ID, ObjectiveID: plan.ObjectiveID, ActorID: command.ActorID,
 				EventType: "plan.created", Summary: fmt.Sprintf("Draft plan revision %d created", plan.Revision),
 			}); err != nil {
 				return work.Plan{}, err

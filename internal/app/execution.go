@@ -763,6 +763,13 @@ func (s *Service) recordActivity(ctx context.Context, repository ports.Repositor
 		return fmt.Errorf("generate activity id: %w", err)
 	}
 	candidate.ID = id
+	if candidate.ObjectiveID == "" && candidate.WorkItemID != "" {
+		item, err := repository.WorkItem(ctx, candidate.WorkItemID)
+		if err != nil {
+			return fmt.Errorf("resolve activity objective: %w", err)
+		}
+		candidate.ObjectiveID = item.ObjectiveID
+	}
 	activity, err := work.NewActivity(candidate, s.clock.Now())
 	if err != nil {
 		return err
