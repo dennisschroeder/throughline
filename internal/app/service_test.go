@@ -201,6 +201,10 @@ func TestRequestAttentionPersistsObjectiveScopedTargetAssociation(t *testing.T) 
 		t.Fatalf("question attention after review request = %#v, stored %#v", review.Question, store.questions["question"])
 	}
 
+	if _, err := UnwrapMutation(service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "question", TargetID: "question", WorkItemID: "item", ActorID: "agent:researcher", IdempotencyKey: "question-with-item", ExpectedVersion: 3, AttentionState: work.AttentionNeedsHumanReview})); err == nil {
+		t.Fatal("attention on a question that also named a work item was accepted")
+	}
+
 	// Decisions are immutable records, and review, clarification and
 	// intervention are attention states rather than targets; none of them
 	// ever stored anything, so each is refused rather than silently recorded.

@@ -85,6 +85,12 @@ func TestUnresolvedQuestionsBlockEveryLinkedItemUntilResolved(t *testing.T) {
 		   'autonomous_with_report', 'any', 'none', '`+questionFixtureTime+`', '`+questionFixtureTime+`')`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := database.db.ExecContext(ctx, `INSERT INTO work_items (id, key, objective_id, plan_id, title, kind, commitment_state, execution_status, priority, estimated_scope,
+		   execution_policy, required_actor_kind, attention_state, created_at, updated_at)
+		 VALUES ('item-rejected', 'item-rejected', 'objective-a', 'plan-a', 'Item', 'task', 'rejected', 'backlog', 'medium', 'small',
+		   'autonomous_with_report', 'any', 'none', '`+questionFixtureTime+`', '`+questionFixtureTime+`')`); err != nil {
+		t.Fatal(err)
+	}
 	service := app.NewService(database.Store(), &testIDs{}, testClock{})
 	claim := func(id, key string) error {
 		item, err := service.GetWorkItem(ctx, id)
@@ -148,6 +154,22 @@ func TestUnresolvedQuestionsBlockEveryLinkedItemUntilResolved(t *testing.T) {
 		QuestionID: fog.ID, WorkItemID: "item-done", ActorID: "human:owner", ExpectedVersion: linked.Version, IdempotencyKey: "link-done",
 	}); err == nil {
 		t.Fatal("a question was linked as a blocker of a done item, which it could never hold")
+	}
+	if _, err := service.LinkQuestionBlocker(ctx, app.LinkQuestionBlockerCommand{
+		QuestionID: fog.ID, WorkItemID: "item-rejected", ActorID: "human:owner", ExpectedVersion: linked.Version, IdempotencyKey: "link-rejected",
+	}); err == nil {
+		t.Fatal("a question was linked as a blocker of a rejected item, which can never be claimed")
+	}
+	// Asking about a finished item is still a question about it, and its own
+	// link is recorded even though it holds nothing.
+	aboutDone, err := app.UnwrapMutation(service.AskQuestion(ctx, app.AskQuestionCommand{
+		ObjectiveID: "objective-a", WorkItemID: "item-done", ActorID: "human:owner", IdempotencyKey: "about-done", Question: "Was the output archived?",
+	}))
+	if err != nil {
+		t.Fatalf("asking a question on a done item: %v", err)
+	}
+	if strings.Join(aboutDone.BlocksWorkItems, ",") != "item-done" {
+		t.Fatalf("question on a done item blocks %v, want its own item", aboutDone.BlocksWorkItems)
 	}
 	if _, err := service.LinkQuestionBlocker(ctx, app.LinkQuestionBlockerCommand{
 		QuestionID: fog.ID, WorkItemID: "item-elsewhere", ActorID: "human:owner", ExpectedVersion: linked.Version, IdempotencyKey: "link-elsewhere",

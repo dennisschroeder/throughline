@@ -1,6 +1,7 @@
 package work
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -241,6 +242,29 @@ type Question struct {
 	ResolvedBy      string
 	CreatedAt       time.Time
 	ResolvedAt      time.Time
+}
+
+// UnmarshalJSON upgrades question records stored before AttentionState
+// replaced RequiresHumanAttention, such as idempotency responses replayed
+// after an upgrade: a stored true meant a human had to decide, and a record
+// with neither field means no attention was requested.
+func (question *Question) UnmarshalJSON(data []byte) error {
+	type stored Question
+	var decoded struct {
+		stored
+		RequiresHumanAttention bool
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*question = Question(decoded.stored)
+	if question.AttentionState == "" {
+		question.AttentionState = AttentionNone
+		if decoded.RequiresHumanAttention {
+			question.AttentionState = AttentionNeedsHumanDecision
+		}
+	}
+	return nil
 }
 
 func NewQuestion(question Question, now time.Time) (Question, error) {

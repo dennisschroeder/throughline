@@ -104,6 +104,10 @@ func TestQuestionBlockingAndAttentionOverTheWire(t *testing.T) {
 		"actor_id": "agent:planner", "idempotency_key": "ask-other", "objective_id": "OBJ-OTHER",
 		"question": "Unrelated?", "attention_state": "needs_human_review",
 	})
+	must("ask_question", map[string]any{
+		"actor_id": "agent:planner", "idempotency_key": "ask-plain", "objective_id": "OBJ-QUESTIONS",
+		"question": "Unflagged and unresolved?",
+	})
 	resolved := must("ask_question", map[string]any{
 		"actor_id": "agent:planner", "idempotency_key": "ask-resolved", "objective_id": "OBJ-QUESTIONS",
 		"question": "Settled soon?", "attention_state": "needs_human_review",

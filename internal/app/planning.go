@@ -554,9 +554,10 @@ func ensureWorkItemScope(ctx context.Context, repository ports.Repository, objec
 }
 
 // ensureBlockableWorkItem admits an explicit blocking link only to a work
-// item of the question's objective that can still move. A done or cancelled
-// item has no outgoing transition, so a link to it would be recorded and
-// displayed as a block that holds nothing.
+// item of the question's objective that can still be executed. A done or
+// cancelled item has no outgoing transition and a rejected or superseded one
+// can never be claimed, so a link to either would be recorded and displayed
+// as a block that holds nothing.
 func ensureBlockableWorkItem(ctx context.Context, repository ports.Repository, objectiveID, workItemID string) error {
 	workItemID = strings.TrimSpace(workItemID)
 	if workItemID == "" {
@@ -571,6 +572,9 @@ func ensureBlockableWorkItem(ctx context.Context, repository ports.Repository, o
 	}
 	if item.ExecutionStatus == work.StatusDone || item.ExecutionStatus == work.StatusCancelled {
 		return fmt.Errorf("a %s work item cannot be blocked by a question", item.ExecutionStatus)
+	}
+	if item.CommitmentState == work.ItemRejected || item.CommitmentState == work.ItemSuperseded {
+		return fmt.Errorf("a %s work item cannot be blocked by a question", item.CommitmentState)
 	}
 	return nil
 }

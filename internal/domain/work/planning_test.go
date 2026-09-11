@@ -1,6 +1,7 @@
 package work
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -316,5 +317,39 @@ func TestQuestionFrontierLifecycle(t *testing.T) {
 	}
 	if QuestionAnswered.Unresolved() || QuestionWaived.Unresolved() || !QuestionUnsharp.Unresolved() || !QuestionOpen.Unresolved() {
 		t.Fatal("Unresolved does not match the blocking states")
+	}
+}
+
+// TestQuestionDecodesRecordsStoredBeforeAttentionState covers idempotency
+// responses written before REP-08, which carry RequiresHumanAttention and no
+// AttentionState; replaying one must not yield an invalid empty state.
+func TestQuestionDecodesRecordsStoredBeforeAttentionState(t *testing.T) {
+	for _, testCase := range []struct {
+		stored string
+		want   AttentionState
+	}{
+		{`{"ID":"q","Status":"open","RequiresHumanAttention":true}`, AttentionNeedsHumanDecision},
+		{`{"ID":"q","Status":"open","RequiresHumanAttention":false}`, AttentionNone},
+		{`{"ID":"q","Status":"open"}`, AttentionNone},
+		{`{"ID":"q","Status":"open","AttentionState":"needs_human_review","RequiresHumanAttention":true}`, AttentionNeedsHumanReview},
+	} {
+		var question Question
+		if err := json.Unmarshal([]byte(testCase.stored), &question); err != nil {
+			t.Fatal(err)
+		}
+		if question.AttentionState != testCase.want || question.ID != "q" || question.Status != QuestionOpen {
+			t.Fatalf("%s decoded to %#v, want attention %s", testCase.stored, question, testCase.want)
+		}
+	}
+	encoded, err := json.Marshal(Question{ID: "q", Status: QuestionUnsharp, AttentionState: AttentionNeedsClarification, BlocksWorkItems: []string{"a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTrip Question
+	if err := json.Unmarshal(encoded, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip.AttentionState != AttentionNeedsClarification || roundTrip.Status != QuestionUnsharp || len(roundTrip.BlocksWorkItems) != 1 {
+		t.Fatalf("round trip = %#v", roundTrip)
 	}
 }
