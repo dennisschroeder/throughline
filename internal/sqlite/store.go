@@ -270,6 +270,10 @@ func (s *Store) getWorkItemContext(ctx context.Context, reader sqlReader, id str
 	if err != nil {
 		return ports.WorkItemContext{}, err
 	}
+	blockingQuestions, err := listBlockingQuestions(ctx, reader, item.ID)
+	if err != nil {
+		return ports.WorkItemContext{}, err
+	}
 	return ports.WorkItemContext{
 		Objective:            objective,
 		Plan:                 plan,
@@ -284,6 +288,7 @@ func (s *Store) getWorkItemContext(ctx context.Context, reader sqlReader, id str
 		Progress:             progress,
 		Artifacts:            artifacts,
 		ExternalActions:      externalActions,
+		BlockingQuestions:    blockingQuestions,
 	}, nil
 }
 

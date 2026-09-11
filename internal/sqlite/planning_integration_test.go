@@ -79,7 +79,7 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 		t.Fatal(err)
 	}
 	question, err := app.UnwrapMutation(service.AskQuestion(ctx, app.AskQuestionCommand{
-		ObjectiveID: objective.ID, ActorID: "agent:planner", IdempotencyKey: "ask-reviewer-question", Question: "Which audience owns final review?", RequiresHumanAttention: true,
+		ObjectiveID: objective.ID, ActorID: "agent:planner", IdempotencyKey: "ask-reviewer-question", Question: "Which audience owns final review?", AttentionState: work.AttentionNeedsHumanDecision,
 	}))
 	if err != nil {
 		t.Fatal(err)

@@ -477,7 +477,6 @@ type AttentionRequestResult struct {
 	AttentionState work.AttentionState `json:"attention_state"`
 	WorkItem       *work.WorkItem      `json:"work_item,omitempty"`
 	Question       *work.Question      `json:"question,omitempty"`
-	Decision       *work.Decision      `json:"decision,omitempty"`
 }
 
 func (s *Service) requestAttentionMutation(ctx context.Context, command RequestAttentionCommand) (AttentionRequestResult, error) {
@@ -521,7 +520,7 @@ func (s *Service) requestAttentionMutation(ctx context.Context, command RequestA
 				if question.Version != command.ExpectedVersion {
 					return AttentionRequestResult{}, ports.ErrVersionConflict
 				}
-				question.RequiresHumanAttention = command.AttentionState != work.AttentionNone
+				question.AttentionState = command.AttentionState
 				question.Version++
 				if err := repository.UpdateQuestion(ctx, question, command.ExpectedVersion); err != nil {
 					return AttentionRequestResult{}, err
@@ -529,14 +528,6 @@ func (s *Service) requestAttentionMutation(ctx context.Context, command RequestA
 				result.Question = &question
 				activity.WorkItemID = question.WorkItemID
 				activity.ObjectiveID = question.ObjectiveID
-			case "decision":
-				decision, err := repository.Decision(ctx, targetID)
-				if err != nil {
-					return AttentionRequestResult{}, err
-				}
-				result.Decision = &decision
-				activity.WorkItemID = decision.WorkItemID
-				activity.ObjectiveID = decision.ObjectiveID
 			}
 			if err := s.recordActivity(ctx, repository, activity); err != nil {
 				return AttentionRequestResult{}, err
@@ -567,12 +558,15 @@ func attentionTarget(command RequestAttentionCommand) (string, string, error) {
 		if targetID == "" || (workItemID != "" && workItemID != targetID) {
 			return "", "", errors.New("attention requires exactly one work item target")
 		}
-	case "question", "decision", "review", "clarification", "intervention":
+	case "question":
 		if targetID == "" || workItemID != "" {
-			return "", "", errors.New("attention requires exactly one non-work target")
+			return "", "", errors.New("attention on a question requires its id and no work item")
 		}
 	default:
-		return "", "", errors.New("attention target kind is not supported")
+		// review, clarification and intervention were attention states that
+		// leaked into this list, and a decision is an immutable record with no
+		// state to hold; none of them ever stored anything.
+		return "", "", fmt.Errorf("attention target kind %q is not supported; use work_item or question", targetKind)
 	}
 	return targetKind, targetID, nil
 }

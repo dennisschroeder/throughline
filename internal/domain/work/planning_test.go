@@ -1,6 +1,7 @@
 package work
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -240,5 +241,80 @@ func TestContextNonGoalAndAffectedFollowTheProposalLifecycle(t *testing.T) {
 		if _, err := TransitionContextRecord(record, ContextWaived, "agent:reviewer", now.Add(time.Hour)); err == nil {
 			t.Fatalf("%s: proposed->waived succeeded, want the accepted step required", kind)
 		}
+	}
+}
+
+func TestQuestionFrontierLifecycle(t *testing.T) {
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	base := Question{ID: "q", ObjectiveID: "objective", WorkItemID: " item-own ", Text: "Retention and export", CreatedBy: "human:owner",
+		BlocksWorkItems: []string{"item-b", " item-own", "", "item-b"}}
+
+	question, err := NewQuestion(base, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if question.Status != QuestionOpen || question.AttentionState != AttentionNone {
+		t.Fatalf("defaults = %s/%s, want open/none", question.Status, question.AttentionState)
+	}
+	if got := strings.Join(question.BlocksWorkItems, ","); got != "item-own,item-b" {
+		t.Fatalf("blocked items = %q, want the question's own item first, then each other item once", got)
+	}
+	for _, invalid := range []Question{
+		func() Question { q := base; q.Status = QuestionAnswered; return q }(),
+		func() Question { q := base; q.AttentionState = "flagged"; return q }(),
+	} {
+		if _, err := NewQuestion(invalid, now); err == nil {
+			t.Fatalf("NewQuestion accepted %s/%s", invalid.Status, invalid.AttentionState)
+		}
+	}
+
+	unsharp := base
+	unsharp.Status = QuestionUnsharp
+	unsharp, err = NewQuestion(unsharp, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AnswerQuestion(unsharp, "Too early.", "human:owner", now); err == nil {
+		t.Fatal("an unsharp question was answered")
+	}
+	if _, err := SharpenQuestion(unsharp, "  "); err == nil {
+		t.Fatal("an unsharp question was sharpened without its phrasing")
+	}
+	if _, err := SharpenQuestion(question, "Already open"); err == nil {
+		t.Fatal("an open question was sharpened")
+	}
+	sharpened, err := SharpenQuestion(unsharp, " Does export extend retention? ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sharpened.Status != QuestionOpen || sharpened.Text != "Does export extend retention?" || sharpened.Version != unsharp.Version+1 {
+		t.Fatalf("sharpened = %#v", sharpened)
+	}
+	if waived, err := WaiveQuestion(unsharp, "Out of scope.", "human:owner", now); err != nil || waived.Status != QuestionWaived {
+		t.Fatalf("waiving an unsharp question = %#v, %v", waived, err)
+	}
+
+	linked, err := LinkQuestionBlocker(question, " item-c ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(linked.BlocksWorkItems, ","); got != "item-own,item-b,item-c" || linked.Version != question.Version+1 {
+		t.Fatalf("linked = %q v%d", got, linked.Version)
+	}
+	if got := strings.Join(question.BlocksWorkItems, ","); got != "item-own,item-b" {
+		t.Fatalf("linking mutated the original question's links: %q", got)
+	}
+	if _, err := LinkQuestionBlocker(linked, "item-c"); err == nil {
+		t.Fatal("the same item was linked twice")
+	}
+	answered, err := AnswerQuestion(question, "Yes.", "human:owner", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LinkQuestionBlocker(answered, "item-d"); err == nil {
+		t.Fatal("an answered question was linked as a blocker")
+	}
+	if QuestionAnswered.Unresolved() || QuestionWaived.Unresolved() || !QuestionUnsharp.Unresolved() || !QuestionOpen.Unresolved() {
+		t.Fatal("Unresolved does not match the blocking states")
 	}
 }

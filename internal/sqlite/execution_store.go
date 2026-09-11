@@ -432,7 +432,8 @@ WHERE objective.phase = 'execution'
     WHERE dependency.work_item_id = item.id AND dependency.kind = 'hard' AND prerequisite.execution_status <> 'done'
   )
   AND NOT EXISTS (
-    SELECT 1 FROM questions question WHERE question.work_item_id = item.id AND question.status = 'open'
+    SELECT 1 FROM question_blocks link JOIN questions question ON question.id = link.question_id
+    WHERE link.work_item_id = item.id AND question.status IN ('unsharp', 'open')
   )
 	  AND NOT EXISTS (
 	    SELECT 1 FROM manual_blockers blocker WHERE blocker.work_item_id = item.id AND blocker.status = 'active'

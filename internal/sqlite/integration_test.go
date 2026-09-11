@@ -315,9 +315,15 @@ func TestCreateWorkItemPersistsInitialExecutionGraphAtomically(t *testing.T) {
 	}
 }
 
-func TestActivityOnlyMutationHasEmptyEffects(t *testing.T) {
+// TestQuestionAttentionPersistsAndReportsTheQuestionAsItsEffect covers what
+// request_attention on a question actually changes. Before REP-08 the
+// question's stored flag was set in memory but never written, and the
+// review/clarification/intervention target kinds recorded activity and
+// nothing else; those kinds are refused now, so no attention request is
+// activity-only.
+func TestQuestionAttentionPersistsAndReportsTheQuestionAsItsEffect(t *testing.T) {
 	ctx := context.Background()
-	database, err := Open(ctx, filepath.Join(t.TempDir(), "activity-only.db"))
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "question-attention.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,25 +332,39 @@ func TestActivityOnlyMutationHasEmptyEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := app.NewService(database.Store(), &testIDs{}, testClock{})
-	mutation, err := service.RequestAttention(ctx, app.RequestAttentionCommand{
-		TargetKind: "review", TargetID: "review:effects", ActorID: "human:owner",
-		IdempotencyKey: "request-review-attention", AttentionState: work.AttentionNeedsHumanReview,
-	})
+	objective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{
+		ActorID: "human:owner", IdempotencyKey: "attention-objective", Key: "OBJ-ATTENTION",
+		Title: "Question attention", DesiredOutcome: "The asked-for state is stored.", Phase: work.ObjectiveDiscovery,
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mutation.Effects == nil || len(mutation.Effects) != 0 {
-		t.Fatalf("activity-only effects = %#v, want non-nil empty list", mutation.Effects)
-	}
-	replayed, err := service.RequestAttention(ctx, app.RequestAttentionCommand{
-		TargetKind: "review", TargetID: "review:effects", ActorID: "human:owner",
-		IdempotencyKey: "request-review-attention", AttentionState: work.AttentionNeedsHumanReview,
-	})
+	question, err := app.UnwrapMutation(service.AskQuestion(ctx, app.AskQuestionCommand{
+		ObjectiveID: objective.ID, ActorID: "human:owner", IdempotencyKey: "attention-question", Question: "Who signs off?",
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replayed.Effects == nil || len(replayed.Effects) != 0 {
-		t.Fatalf("activity-only replay effects = %#v, want non-nil empty list", replayed.Effects)
+	command := app.RequestAttentionCommand{
+		TargetKind: "question", TargetID: question.ID, ActorID: "human:owner", ExpectedVersion: question.Version,
+		IdempotencyKey: "request-question-review", AttentionState: work.AttentionNeedsHumanReview,
+	}
+	mutation, err := service.RequestAttention(ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertEffects(t, mutation.Effects, map[string]int{"question:" + question.ID: 2})
+	replayed, err := service.RequestAttention(ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertEffects(t, replayed.Effects, map[string]int{"question:" + question.ID: 2})
+	objectiveContext, err := service.GetObjectiveContext(ctx, objective.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(objectiveContext.Questions) != 1 || objectiveContext.Questions[0].AttentionState != work.AttentionNeedsHumanReview {
+		t.Fatalf("stored question = %#v, want attention needs_human_review", objectiveContext.Questions)
 	}
 }
 
@@ -443,7 +463,7 @@ func assertInitializationState(t *testing.T, database *Database) {
 		query string
 		want  int
 	}{
-		{"SELECT COUNT(*) FROM schema_migrations", 14},
+		{"SELECT COUNT(*) FROM schema_migrations", 15},
 		{"SELECT COUNT(*) FROM output_profiles", 8},
 		{"SELECT COUNT(*) FROM output_profiles WHERE lifecycle_state = 'active' AND built_in = 1", 8},
 		{"PRAGMA foreign_keys", 1},

@@ -130,8 +130,10 @@ func (a *adapter) addTools(server *mcp.Server) {
 	a.add(server, "record_context", "Record typed objective or work-item context. objective_id accepts an objective's key.", false, schemaFor[recordContextInput]("objective_id", "actor_id", "idempotency_key", "kind", "title", "status"), a.recordContext)
 	a.add(server, "transition_context", "Transition a context record through its governed kind-specific lifecycle.", false, schemaFor[transitionContextInput]("context_record_id", "actor_id", "target_status", "expected_version", "idempotency_key"), a.transitionContext)
 	a.add(server, "record_decision", "Record a durable accepted decision. objective_id accepts an objective's key.", false, schemaFor[recordDecisionInput]("objective_id", "actor_id", "idempotency_key", "title", "decision"), a.recordDecision)
-	a.add(server, "ask_question", "Record a durable open question. objective_id accepts an objective's key.", false, schemaFor[askQuestionInput]("objective_id", "actor_id", "idempotency_key", "question"), a.askQuestion)
-	a.add(server, "answer_question", "Answer or waive an open question.", false, schemaFor[answerQuestionInput]("question_id", "actor_id", "idempotency_key", "expected_version"), a.answerQuestion)
+	a.add(server, "ask_question", "Record a durable question, open or unsharp; blocks_item_ids names work items it holds until resolved, and a question on a work item always holds that item. objective_id accepts an objective's key.", false, schemaFor[askQuestionInput]("objective_id", "actor_id", "idempotency_key", "question"), a.askQuestion)
+	a.add(server, "answer_question", "Answer an open question, or waive an unsharp or open one.", false, schemaFor[answerQuestionInput]("question_id", "actor_id", "idempotency_key", "expected_version"), a.answerQuestion)
+	a.add(server, "sharpen_question", "Phrase an unsharp question, moving it to open so it can be answered.", false, schemaFor[sharpenQuestionInput]("question_id", "actor_id", "idempotency_key", "expected_version", "question"), a.sharpenQuestion)
+	a.add(server, "link_question_blocker", "Make an unsharp or open question block one more work item until it is answered or waived.", false, schemaFor[linkQuestionBlockerInput]("question_id", "work_item_id", "actor_id", "idempotency_key", "expected_version"), a.linkQuestionBlocker)
 	a.add(server, "propose_output_profile", "Propose a governed immutable output profile version.", false, schemaFor[proposeOutputProfileInput]("actor_id", "idempotency_key", "name", "version", "structure", "semantics", "validation"), a.proposeOutputProfile)
 	a.add(server, "review_output_profile", "Activate or reject a proposed output profile.", false, schemaFor[reviewOutputProfileInput]("profile_id", "actor_id", "idempotency_key", "expected_version", "decision", "reason"), a.reviewOutputProfile)
 	a.add(server, "renew_claim", "Renew an owned work lease.", false, schemaFor[claimRenewInput]("work_item_id", "claim_id", "actor_id", "expected_version", "idempotency_key", "lease_seconds"), a.renewClaim)
@@ -688,7 +690,7 @@ func resultSchema(name string) map[string]any {
 		return schemaForResult[work.ContextRecord]()
 	case "record_decision":
 		return schemaForResult[work.Decision]()
-	case "ask_question", "answer_question":
+	case "ask_question", "answer_question", "sharpen_question", "link_question_blocker":
 		return schemaForResult[work.Question]()
 	case "renew_claim", "release_item", "claim_item":
 		return schemaForResult[app.ClaimResult]()
@@ -1443,6 +1445,17 @@ func (a *adapter) boardOverview(ctx context.Context, service *app.Service, raw j
 			result.NeedsHumanAttention = append(result.NeedsHumanAttention, item.WorkItem)
 		}
 	}
+	if in.IncludeAttention {
+		questions, err := service.ListQuestionsNeedingAttention(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, question := range questions {
+			if objectiveID == "" || question.ObjectiveID == objectiveID {
+				result.QuestionsNeedingHumanAttention = append(result.QuestionsNeedingHumanAttention, question)
+			}
+		}
+	}
 	profiles, err := service.ListOutputProfiles(ctx)
 	if err != nil {
 		return nil, err
@@ -1469,6 +1482,9 @@ type boardOverviewResult struct {
 	Counts                          map[string]int        `json:"counts"`
 	ReadyHighPriority               []ports.ReadyWorkItem `json:"ready_high_priority"`
 	NeedsHumanAttention             []work.WorkItem       `json:"needs_human_attention"`
+	// QuestionsNeedingHumanAttention sits beside needs_human_attention rather
+	// than inside it so that field keeps its element type for existing clients.
+	QuestionsNeedingHumanAttention []work.Question `json:"questions_needing_human_attention"`
 }
 
 type listItemsInput struct {
@@ -1696,6 +1712,9 @@ func (a *adapter) getItem(ctx context.Context, service *app.Service, raw json.Ra
 		}
 		if !selected["artifacts"] {
 			item.Artifacts = nil
+		}
+		if !selected["questions"] {
+			item.BlockingQuestions = nil
 		}
 	}
 	result := getItemResult{WorkItemContext: item}
@@ -2228,7 +2247,6 @@ func requestAttentionSchema() map[string]any {
 	result["oneOf"] = []any{
 		map[string]any{"required": []string{"work_item_id", "expected_version"}, "properties": map[string]any{"target_kind": map[string]any{"enum": []string{"work_item"}}}, "not": map[string]any{"required": []string{"target_id"}}},
 		map[string]any{"required": []string{"target_kind", "target_id", "expected_version"}, "properties": map[string]any{"target_kind": map[string]any{"enum": []string{"question"}}}, "not": map[string]any{"required": []string{"work_item_id"}}},
-		map[string]any{"required": []string{"target_kind", "target_id"}, "properties": map[string]any{"target_kind": map[string]any{"enum": []string{"decision", "review", "clarification", "intervention"}}}, "not": map[string]any{"required": []string{"work_item_id"}}},
 	}
 	return result
 }
@@ -2676,12 +2694,51 @@ func (a *adapter) recordDecision(ctx context.Context, service *app.Service, raw 
 
 type askQuestionInput struct {
 	workspaceInput
-	ObjectiveID            string `json:"objective_id"`
-	WorkItemID             string `json:"work_item_id"`
-	ActorID                string `json:"actor_id"`
-	IdempotencyKey         string `json:"idempotency_key"`
-	Question               string `json:"question"`
-	RequiresHumanAttention bool   `json:"requires_human_attention"`
+	ObjectiveID    string              `json:"objective_id"`
+	WorkItemID     string              `json:"work_item_id"`
+	ActorID        string              `json:"actor_id"`
+	IdempotencyKey string              `json:"idempotency_key"`
+	Question       string              `json:"question"`
+	Status         work.QuestionStatus `json:"status"`
+	AttentionState work.AttentionState `json:"attention_state"`
+	BlocksItemIDs  []string            `json:"blocks_item_ids"`
+	// RequiresHumanAttention is the pre-attention-state flag, kept so older
+	// callers keep working; true means a human has to decide.
+	RequiresHumanAttention bool `json:"requires_human_attention"`
+}
+
+type sharpenQuestionInput struct {
+	workspaceInput
+	QuestionID      string `json:"question_id"`
+	ActorID         string `json:"actor_id"`
+	IdempotencyKey  string `json:"idempotency_key"`
+	ExpectedVersion int    `json:"expected_version"`
+	Question        string `json:"question"`
+}
+
+type linkQuestionBlockerInput struct {
+	workspaceInput
+	QuestionID      string `json:"question_id"`
+	WorkItemID      string `json:"work_item_id"`
+	ActorID         string `json:"actor_id"`
+	IdempotencyKey  string `json:"idempotency_key"`
+	ExpectedVersion int    `json:"expected_version"`
+}
+
+func (a *adapter) sharpenQuestion(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
+	var in sharpenQuestionInput
+	if err := decode(raw, &in); err != nil {
+		return nil, err
+	}
+	return service.SharpenQuestion(ctx, app.SharpenQuestionCommand{QuestionID: in.QuestionID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, Question: in.Question})
+}
+
+func (a *adapter) linkQuestionBlocker(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
+	var in linkQuestionBlockerInput
+	if err := decode(raw, &in); err != nil {
+		return nil, err
+	}
+	return service.LinkQuestionBlocker(ctx, app.LinkQuestionBlockerCommand{QuestionID: in.QuestionID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion})
 }
 
 func (a *adapter) askQuestion(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
@@ -2693,7 +2750,14 @@ func (a *adapter) askQuestion(ctx context.Context, service *app.Service, raw jso
 	if err != nil {
 		return nil, err
 	}
-	return service.AskQuestion(ctx, app.AskQuestionCommand{ObjectiveID: objectiveID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Question: in.Question, RequiresHumanAttention: in.RequiresHumanAttention})
+	attention := in.AttentionState
+	if in.RequiresHumanAttention {
+		if attention != "" && attention != work.AttentionNeedsHumanDecision {
+			return nil, errors.New("requires_human_attention conflicts with attention_state; send attention_state only")
+		}
+		attention = work.AttentionNeedsHumanDecision
+	}
+	return service.AskQuestion(ctx, app.AskQuestionCommand{ObjectiveID: objectiveID, WorkItemID: in.WorkItemID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Question: in.Question, Status: in.Status, AttentionState: attention, BlocksWorkItems: in.BlocksItemIDs})
 }
 
 type answerQuestionInput struct {

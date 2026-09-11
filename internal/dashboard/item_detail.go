@@ -152,6 +152,15 @@ func buildItemDetail(ctx context.Context, service *app.Service, id string, now t
 		}
 	}
 
+	for _, question := range item.BlockingQuestions {
+		detail.BlockingQuestions = append(detail.BlockingQuestions, blockingQuestionView{
+			QuestionID:     question.ID,
+			Text:           question.Text,
+			Status:         string(question.Status),
+			AttentionState: string(question.AttentionState),
+		})
+	}
+
 	// Newest first: Progress arrives oldest-first from the store (append order), the drawer
 	// reads top-to-bottom as a log, most recent entry on top.
 	for i := len(item.Progress) - 1; i >= 0; i-- {
@@ -260,12 +269,15 @@ type itemDetail struct {
 	AcceptanceCriteria []acceptanceCriterionView `json:"acceptance_criteria"`
 	DependsOn          []dependencyView          `json:"depends_on"`
 	RequiredBy         []dependencyView          `json:"required_by"`
-	Progress           []progressView            `json:"progress"`
-	ExpectedOutputs    []expectedOutputView      `json:"expected_outputs"`
-	OutputRevisions    []outputRevisionView      `json:"output_revisions"`
-	ExternalActions    []externalActionView      `json:"external_actions"`
-	Artifacts          []artifactView            `json:"artifacts"`
-	Claim              *claimView                `json:"claim,omitempty"`
+	// BlockingQuestions are kept apart from DependsOn: a question is resolved by
+	// answering or waiving it, not by finishing another item.
+	BlockingQuestions []blockingQuestionView `json:"blocking_questions"`
+	Progress          []progressView         `json:"progress"`
+	ExpectedOutputs   []expectedOutputView   `json:"expected_outputs"`
+	OutputRevisions   []outputRevisionView   `json:"output_revisions"`
+	ExternalActions   []externalActionView   `json:"external_actions"`
+	Artifacts         []artifactView         `json:"artifacts"`
+	Claim             *claimView             `json:"claim,omitempty"`
 	// ReadOnly is true when this item has no open gate — the drawer then shows the
 	// read-only footer ("No open gate on this item...") instead of decision buttons.
 	ReadOnly bool `json:"read_only"`
@@ -306,6 +318,13 @@ type dependencyView struct {
 	Note            string `json:"note,omitempty"`
 	ExecutionStatus string `json:"execution_status,omitempty"`
 	Satisfied       *bool  `json:"satisfied,omitempty"`
+}
+
+type blockingQuestionView struct {
+	QuestionID     string `json:"question_id"`
+	Text           string `json:"text"`
+	Status         string `json:"status"`
+	AttentionState string `json:"attention_state"`
 }
 
 type progressView struct {

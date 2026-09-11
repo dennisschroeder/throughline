@@ -187,26 +187,30 @@ func TestRequestAttentionPersistsObjectiveScopedTargetAssociation(t *testing.T) 
 	if question.Question == nil || question.WorkItem != nil || question.TargetKind != "question" || question.TargetID != "question" {
 		t.Fatalf("question attention result = %#v", question)
 	}
-	if updated := store.questions["question"]; !updated.RequiresHumanAttention || updated.Version != 2 {
+	if updated := store.questions["question"]; updated.AttentionState != work.AttentionNeedsHumanDecision || updated.Version != 2 {
 		t.Fatalf("question attention state = %#v", updated)
 	}
 
-	decision, err := UnwrapMutation(service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "decision", TargetID: "decision", ActorID: "agent:researcher", IdempotencyKey: "decision-attention", ExpectedVersion: 1, AttentionState: work.AttentionNeedsHumanReview}))
+	// needs_human_review and intervention_required used to collapse into the
+	// same stored boolean; the question must keep the exact state asked for.
+	review, err := UnwrapMutation(service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "question", TargetID: "question", ActorID: "agent:researcher", IdempotencyKey: "question-review", ExpectedVersion: 2, AttentionState: work.AttentionNeedsHumanReview}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Decision == nil || decision.WorkItem != nil || decision.TargetKind != "decision" || decision.TargetID != "decision" {
-		t.Fatalf("decision attention result = %#v", decision)
+	if review.Question == nil || review.Question.AttentionState != work.AttentionNeedsHumanReview || store.questions["question"].AttentionState != work.AttentionNeedsHumanReview {
+		t.Fatalf("question attention after review request = %#v, stored %#v", review.Question, store.questions["question"])
 	}
-	intervention, err := UnwrapMutation(service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "intervention", TargetID: "release-1", ActorID: "agent:researcher", IdempotencyKey: "intervention-attention", AttentionState: work.AttentionInterventionRequired}))
-	if err != nil {
-		t.Fatal(err)
+
+	// Decisions are immutable records, and review, clarification and
+	// intervention are attention states rather than targets; none of them
+	// ever stored anything, so each is refused rather than silently recorded.
+	for _, kind := range []string{"decision", "review", "clarification", "intervention"} {
+		if _, err := UnwrapMutation(service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: kind, TargetID: "decision", ActorID: "agent:researcher", IdempotencyKey: kind + "-attention", ExpectedVersion: 1, AttentionState: work.AttentionNeedsHumanReview})); err == nil {
+			t.Fatalf("attention on target kind %q was accepted", kind)
+		}
 	}
-	if intervention.TargetKind != "intervention" || intervention.TargetID != "release-1" || intervention.WorkItem != nil || intervention.Question != nil || intervention.Decision != nil {
-		t.Fatalf("intervention attention result = %#v", intervention)
-	}
-	if len(store.activities) != 3 {
-		t.Fatalf("attention activity count = %d", len(store.activities))
+	if len(store.activities) != 2 {
+		t.Fatalf("attention activity count = %d, want one per accepted request", len(store.activities))
 	}
 	for _, activity := range store.activities {
 		var payload struct {
@@ -305,6 +309,10 @@ func (s *memoryStore) Question(_ context.Context, id string) (work.Question, err
 
 func (s *memoryStore) UpdateQuestion(_ context.Context, question work.Question, _ int) error {
 	s.questions[question.ID] = question
+	return nil
+}
+
+func (s *memoryStore) CreateQuestionBlock(context.Context, string, string, string, time.Time) error {
 	return nil
 }
 
@@ -780,6 +788,10 @@ func (s *memoryStore) ListReadyWork(context.Context) ([]ports.ReadyWorkItem, err
 }
 
 func (s *memoryStore) ListReadyWorkForActor(context.Context, string) ([]ports.ReadyWorkItem, error) {
+	return nil, nil
+}
+
+func (s *memoryStore) ListQuestionsNeedingAttention(context.Context) ([]work.Question, error) {
 	return nil, nil
 }
 

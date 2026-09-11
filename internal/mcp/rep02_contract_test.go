@@ -64,8 +64,8 @@ func rep02OutputSchema(t *testing.T, name string) map[string]any {
 
 func TestREP02MutationOutputSchemasRequireEffects(t *testing.T) {
 	mutations, _ := rep02ToolInventory(t)
-	if got := len(mutations); got != 39 {
-		t.Fatalf("server advertises %d mutating tools, want 39: %v", got, mutations)
+	if got := len(mutations); got != 41 {
+		t.Fatalf("server advertises %d mutating tools, want 41: %v", got, mutations)
 	}
 	for _, name := range mutations {
 		t.Run(name, func(t *testing.T) {

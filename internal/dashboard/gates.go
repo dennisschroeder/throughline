@@ -79,8 +79,14 @@ func buildGates(ctx context.Context, service *app.Service, objCtx ports.Objectiv
 	}
 
 	for _, q := range objCtx.Questions {
-		if q.Status != work.QuestionOpen {
+		if !q.Status.Unresolved() {
 			continue
+		}
+		// An unsharp question cannot be answered until it is phrased, which
+		// happens outside the dashboard, so waiving is the only decision here.
+		allowed := []string{"Answer", "Waive"}
+		if q.Status == work.QuestionUnsharp {
+			allowed = []string{"Waive"}
 		}
 		gates = append(gates, Gate{
 			ID:                   q.ID,
@@ -92,7 +98,7 @@ func buildGates(ctx context.Context, service *app.Service, objCtx ports.Objectiv
 			RequestedAt:          formatOptionalTime(q.CreatedAt),
 			WaitingLabel:         ageLabel(q.CreatedAt, now),
 			ExpectedVersion:      q.Version,
-			AllowedDecisions:     []string{"Answer", "Waive"},
+			AllowedDecisions:     allowed,
 			RationaleRequiredFor: []string{"Waive"},
 			EvidenceHint:         truncate(q.Text, 120),
 			Actor:                al.ref(q.CreatedBy),

@@ -15,7 +15,7 @@
     {"id":"output_requirement","name":"OutputRequirement","definition":"A dependency on an accepted output revision or compatible profile."},
     {"id":"dependency","name":"Dependency","definition":"A directed, typed relationship between work items."},
     {"id":"decision","name":"Decision","definition":"A concise durable choice with rationale and scope."},
-    {"id":"question","name":"Question","definition":"An unresolved question that may request human attention or block work."},
+    {"id":"question","name":"Question","definition":"A question about an objective: unsharp while an in-scope area is visible but not yet phrasable, open once phrased, then answered or waived. It stores its own attention state, and while unsharp or open it blocks every work item it is linked to; a question asked on a work item is always linked to that item. Links are never removed, so only answering or waiving clears them."},
     {"id":"approval","name":"Approval","definition":"A durable request and decision for a governed target."},
     {"id":"artifact","name":"Artifact","definition":"A typed external reference, not a large database blob."},
     {"id":"claim","name":"Claim","definition":"A time-limited lease that an actor is working a work item."},
@@ -27,7 +27,7 @@
     {"id":"authority_grant","name":"AuthorityGrant","definition":"A principal-bound grant for one exact authorization subject within constraints and lifetime."},
     {"id":"blocker","name":"Blocker","definition":"A persisted manual or derived reason work cannot proceed; manual blockers are auditable."},
     {"id":"progress","name":"Progress","definition":"A concise durable checkpoint of completed, remaining, discovered, and blocking work; never raw model reasoning."},
-    {"id":"attention","name":"Attention","definition":"An orthogonal request for human review, decision, clarification, or intervention; it is not a workflow status."},
+    {"id":"attention","name":"Attention","definition":"An orthogonal request for human review, decision, clarification, or intervention on a work item or a question; it is not a workflow status. The target stores the requested state."},
     {"id":"execution_policy","name":"ExecutionPolicy","definition":"The autonomy gate for claiming or executing a work item; it never grants external authority."}
   ],
   "relations": [
@@ -50,6 +50,8 @@
     {"id":"work_item_has_blocker","from":"work_item","to":"blocker","cardinality":"one_to_many"},
     {"id":"work_item_has_progress","from":"work_item","to":"progress","cardinality":"one_to_many"},
     {"id":"work_item_has_attention","from":"work_item","to":"attention","cardinality":"many_to_one"},
+    {"id":"question_has_attention","from":"question","to":"attention","cardinality":"many_to_one"},
+    {"id":"question_blocks_work_item","from":"question","to":"work_item","cardinality":"many_to_many"},
     {"id":"work_item_uses_execution_policy","from":"work_item","to":"execution_policy","cardinality":"many_to_one"}
   ],
   "lifecycles": [
@@ -59,6 +61,7 @@
     {"id":"output_profile_lifecycle","entity":"output_profile","states":["draft","proposed","active","rejected","superseded"],"transitions":[["draft","proposed"],["proposed","active"],["proposed","rejected"],["active","superseded"]]},
     {"id":"external_action_lifecycle","entity":"external_action","states":["proposed","authorized","executing","succeeded","failed","rejected","cancelled","expired"],"transitions":[["proposed","authorized"],["authorized","executing"],["executing","succeeded"],["executing","failed"],["proposed","rejected"],["proposed","cancelled"],["authorized","expired"]]},
     {"id":"manual_blocker_lifecycle","entity":"blocker","states":["active","resolved"],"transitions":[["active","resolved"]]},
+    {"id":"question_lifecycle","entity":"question","states":["unsharp","open","answered","waived"],"transitions":[["unsharp","open"],["unsharp","waived"],["open","answered"],["open","waived"]]},
     {"id":"context_record_assumption_lifecycle","entity":"context_record","kinds":["assumption"],"states":["untested","validating","validated","invalidated","superseded"],"transitions":[["untested","validating"],["validating","validated"],["validating","invalidated"],["untested","superseded"],["validating","superseded"],["validated","superseded"],["invalidated","superseded"]]},
     {"id":"context_record_success_metric_lifecycle","entity":"context_record","kinds":["success_metric"],"states":["untested","validating","validated","invalidated","waived","superseded"],"transitions":[["untested","validating"],["validating","validated"],["validating","invalidated"],["untested","waived"],["validating","waived"],["untested","superseded"],["validating","superseded"],["validated","superseded"],["invalidated","superseded"],["waived","superseded"]]},
     {"id":"context_record_proposal_lifecycle","entity":"context_record","kinds":["requirement","constraint","risk","non_goal","affected"],"states":["proposed","accepted","waived","superseded"],"transitions":[["proposed","accepted"],["accepted","waived"],["proposed","superseded"],["accepted","superseded"],["waived","superseded"]]},
@@ -75,6 +78,7 @@
     {"id":"profile_immutability","statement":"Active output profile versions and produced output revisions are immutable; changes create new versions."},
     {"id":"execution_policy_not_authority","statement":"Execution policy governs internal work autonomy and never grants authority for an ExternalAction."},
     {"id":"attention_is_orthogonal","statement":"Attention requests human intervention without changing the work-item execution status."},
+    {"id":"questions_block_linked_work","statement":"An unsharp or open question blocks claiming and readiness of every work item it is linked to; the block clears only when the question is answered or waived."},
     {"id":"progress_is_concise","statement":"Progress records concise checkpoints and never raw model reasoning."}
   ],
   "source_mappings": [

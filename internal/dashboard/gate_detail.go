@@ -205,16 +205,21 @@ func questionGateSections(objCtx ports.ObjectiveContext, gate Gate, activity []w
 		}
 	}
 	ask := fmt.Sprintf("Answer or waive: %q. Waiving requires a rationale and leaves the question open-ended for whatever proceeds without it.", gate.Title)
+	if question != nil && question.Status == work.QuestionUnsharp {
+		ask = fmt.Sprintf("Unsharp: %q. It cannot be answered until someone phrases it with sharpen_question; waiving requires a rationale.", gate.Title)
+	}
 	meta := "open"
-	if question != nil && question.RequiresHumanAttention {
-		meta = "flagged for human attention"
+	attention := string(work.AttentionNone)
+	if question != nil {
+		meta = string(question.Status)
+		attention = string(question.AttentionState)
 	}
 	evidence := Evidence{Label: "Evidence", Meta: meta, Kind: "text", Text: gate.Title}
 	facts := []Fact{
 		{"target", gate.TargetID},
 		{"version", fmt.Sprint(gate.ExpectedVersion)},
 		{"requester", gate.Requester + " · " + ageLabel(parseTime(gate.RequestedAt), now)},
-		{"attention state", meta},
+		{"attention state", attention},
 		{"profile", "-"},
 		{"objective", objCtx.Objective.Title},
 		{"supersedes", "-"},

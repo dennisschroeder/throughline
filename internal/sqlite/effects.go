@@ -24,6 +24,7 @@ var effectTables = []effectTable{
 	{table: "expected_outputs", kind: "expected_output", id: "NEW.id", version: "NEW.version"},
 	{table: "context_records", kind: "context_record", id: "NEW.id", version: "NEW.version"},
 	{table: "questions", kind: "question", id: "NEW.id", version: "NEW.version"},
+	{table: "question_blocks", kind: "question_block", id: "NEW.question_id || ':' || NEW.work_item_id", version: "NEW.version"},
 	{table: "decisions", kind: "decision", id: "NEW.id", version: "NEW.version"},
 	{table: "approvals", id: "NEW.id", version: "NEW.version", kindExpr: "CASE WHEN NEW.external_action_id IS NOT NULL THEN 'action_approval' WHEN NEW.work_item_id IS NOT NULL AND NEW.approved_for_actor_id IS NOT NULL THEN 'execution_approval' ELSE 'approval' END"},
 	{table: "capabilities", kind: "capability", id: "NEW.slug", version: "NEW.version"},

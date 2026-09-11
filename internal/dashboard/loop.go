@@ -421,6 +421,16 @@ func buildCard(item ports.WorkItemContext, gatedWorkItem map[string]Gate, readyI
 	if gate, ok := gatedWorkItem[wi.ID]; ok {
 		card.GateID = gate.ID
 		card.Blocker = &CardBlocker{Code: "gated", Label: "gated · " + gate.ID + " needs you"}
+	} else if len(item.BlockingQuestions) > 0 && wi.ExecutionStatus != work.StatusDone && wi.ExecutionStatus != work.StatusCancelled {
+		// A question holding the item is a different thing to wait on than a
+		// prerequisite item, and the person reading the card resolves it
+		// differently, so it is named rather than folded into dependencies.
+		question := item.BlockingQuestions[0]
+		label := "blocked · question: " + truncate(question.Text, 60)
+		if more := len(item.BlockingQuestions) - 1; more > 0 {
+			label += fmt.Sprintf(" (+%d more)", more)
+		}
+		card.Blocker = &CardBlocker{Code: "blocked_question", Label: label}
 	} else if wi.CommitmentState == work.ItemAccepted && objective.Phase == work.ObjectiveExecution &&
 		wi.ExecutionStatus != work.StatusDone && wi.ExecutionStatus != work.StatusCancelled && !readyIDs[wi.ID] {
 		card.Blocker = &CardBlocker{Code: "blocked_dependency", Label: "blocked · waiting on dependencies"}

@@ -207,24 +207,40 @@ func ReviewPlan(plan Plan, decision PlanCommitment, reviewer, reason string, now
 type QuestionStatus string
 
 const (
+	// QuestionUnsharp is an in-scope area a session can see coming but cannot
+	// yet phrase. Answering every open question must not read as discovery
+	// being complete while such areas remain, so they are a state of their
+	// own rather than an ordinary open question.
+	QuestionUnsharp  QuestionStatus = "unsharp"
 	QuestionOpen     QuestionStatus = "open"
 	QuestionAnswered QuestionStatus = "answered"
 	QuestionWaived   QuestionStatus = "waived"
 )
 
+// Unresolved reports whether the question still holds the work items it
+// blocks.
+func (status QuestionStatus) Unresolved() bool {
+	return status == QuestionUnsharp || status == QuestionOpen
+}
+
 type Question struct {
-	ID                     string
-	ObjectiveID            string
-	WorkItemID             string
-	Text                   string
-	Status                 QuestionStatus
-	Answer                 string
-	RequiresHumanAttention bool
-	Version                int
-	CreatedBy              string
-	ResolvedBy             string
-	CreatedAt              time.Time
-	ResolvedAt             time.Time
+	ID          string
+	ObjectiveID string
+	WorkItemID  string
+	Text        string
+	Status      QuestionStatus
+	Answer      string
+	// AttentionState is stored as given; a boolean derived from it made
+	// needs_human_review and intervention_required indistinguishable.
+	AttentionState AttentionState
+	// BlocksWorkItems are the work items this question holds while it is
+	// unresolved. Links are never removed; resolving the question clears them.
+	BlocksWorkItems []string
+	Version         int
+	CreatedBy       string
+	ResolvedBy      string
+	CreatedAt       time.Time
+	ResolvedAt      time.Time
 }
 
 func NewQuestion(question Question, now time.Time) (Question, error) {
@@ -236,9 +252,73 @@ func NewQuestion(question Question, now time.Time) (Question, error) {
 	if question.ID == "" || question.ObjectiveID == "" || question.Text == "" || question.CreatedBy == "" {
 		return Question{}, errors.New("question requires id, objective id, text, and creator")
 	}
-	question.Status = QuestionOpen
+	if question.Status == "" {
+		question.Status = QuestionOpen
+	}
+	if !question.Status.Unresolved() {
+		return Question{}, fmt.Errorf("a new question must be unsharp or open, not %q", question.Status)
+	}
+	if question.AttentionState == "" {
+		question.AttentionState = AttentionNone
+	}
+	if !ValidAttentionState(question.AttentionState) {
+		return Question{}, fmt.Errorf("invalid attention state %q", question.AttentionState)
+	}
+	question.BlocksWorkItems = normalizeBlockedWorkItems(question.BlocksWorkItems, question.WorkItemID)
 	question.Version = 1
 	question.CreatedAt = now.UTC()
+	return question, nil
+}
+
+// normalizeBlockedWorkItems trims and deduplicates the blocked items and adds
+// the question's own work item: a question asked on a work item has always
+// blocked that item, and recording it as a link keeps one blocking path.
+func normalizeBlockedWorkItems(ids []string, own string) []string {
+	seen := map[string]bool{}
+	var result []string
+	for _, id := range append([]string{own}, ids...) {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		result = append(result, id)
+	}
+	return result
+}
+
+// SharpenQuestion records the graduation of an unsharp area into a question
+// that can be answered, replacing the placeholder text with the phrasing.
+func SharpenQuestion(question Question, text string) (Question, error) {
+	text = strings.TrimSpace(text)
+	if question.Status != QuestionUnsharp {
+		return Question{}, errors.New("only unsharp questions can be sharpened")
+	}
+	if text == "" {
+		return Question{}, errors.New("sharpening a question requires its phrased text")
+	}
+	question.Text = text
+	question.Status = QuestionOpen
+	question.Version++
+	return question, nil
+}
+
+// LinkQuestionBlocker makes an unresolved question hold one more work item.
+func LinkQuestionBlocker(question Question, workItemID string) (Question, error) {
+	workItemID = strings.TrimSpace(workItemID)
+	if !question.Status.Unresolved() {
+		return Question{}, errors.New("only an unsharp or open question can block work")
+	}
+	if workItemID == "" {
+		return Question{}, errors.New("blocking link requires a work item")
+	}
+	for _, existing := range question.BlocksWorkItems {
+		if existing == workItemID {
+			return Question{}, errors.New("question already blocks this work item")
+		}
+	}
+	question.BlocksWorkItems = append(append([]string(nil), question.BlocksWorkItems...), workItemID)
+	question.Version++
 	return question, nil
 }
 
@@ -246,7 +326,7 @@ func AnswerQuestion(question Question, answer, actor string, now time.Time) (Que
 	answer = strings.TrimSpace(answer)
 	actor = strings.TrimSpace(actor)
 	if question.Status != QuestionOpen {
-		return Question{}, errors.New("only open questions can be answered")
+		return Question{}, errors.New("only open questions can be answered; sharpen an unsharp question first")
 	}
 	if answer == "" || actor == "" {
 		return Question{}, errors.New("question answer requires text and actor")
@@ -262,8 +342,8 @@ func AnswerQuestion(question Question, answer, actor string, now time.Time) (Que
 func WaiveQuestion(question Question, reason, actor string, now time.Time) (Question, error) {
 	reason = strings.TrimSpace(reason)
 	actor = strings.TrimSpace(actor)
-	if question.Status != QuestionOpen {
-		return Question{}, errors.New("only open questions can be waived")
+	if !question.Status.Unresolved() {
+		return Question{}, errors.New("only unsharp or open questions can be waived")
 	}
 	if reason == "" || actor == "" {
 		return Question{}, errors.New("question waiver requires reason and actor")

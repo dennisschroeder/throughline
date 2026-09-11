@@ -135,6 +135,18 @@ func (s *Service) AnswerQuestion(ctx context.Context, command AnswerQuestionComm
 	return finishMutation(capture, result, err)
 }
 
+func (s *Service) SharpenQuestion(ctx context.Context, command SharpenQuestionCommand) (Mutation[work.Question], error) {
+	ctx, capture := beginMutation(ctx)
+	result, err := s.sharpenQuestionMutation(ctx, command)
+	return finishMutation(capture, result, err)
+}
+
+func (s *Service) LinkQuestionBlocker(ctx context.Context, command LinkQuestionBlockerCommand) (Mutation[work.Question], error) {
+	ctx, capture := beginMutation(ctx)
+	result, err := s.linkQuestionBlockerMutation(ctx, command)
+	return finishMutation(capture, result, err)
+}
+
 func (s *Service) WaiveQuestion(ctx context.Context, command WaiveQuestionCommand) (Mutation[work.Question], error) {
 	ctx, capture := beginMutation(ctx)
 	result, err := s.waiveQuestionMutation(ctx, command)

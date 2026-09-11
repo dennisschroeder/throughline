@@ -869,6 +869,11 @@ function renderItemDrawer(detail){
     (detail.required_by || []).forEach(function(d){ html += "<div class=\"dep-row\"><span class=\"rel\">required by</span><span>" + esc(d.title || d.item_id) + "</span><span class=\"mini\">" + esc(d.execution_status || "") + "</span></div>"; });
     html += "</div>";
   }
+  if (detail.blocking_questions && detail.blocking_questions.length) {
+    html += "<div class=\"drawer-section\"><div class=\"section-lbl\">Blocking questions</div>";
+    detail.blocking_questions.forEach(function(q){ html += "<div class=\"dep-row\"><span class=\"rel\">held by " + esc(q.status) + " question</span><span>" + esc(q.text) + "</span><span class=\"mini\">" + esc(q.attention_state) + "</span></div>"; });
+    html += "</div>";
+  }
   if (detail.external_actions && detail.external_actions.length) {
     html += "<div class=\"drawer-section\"><div class=\"section-lbl\">External actions</div>";
     detail.external_actions.forEach(function(ea){

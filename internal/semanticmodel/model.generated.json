@@ -31,7 +31,7 @@
     {
       "id": "attention",
       "name": "Attention",
-      "definition": "An orthogonal request for human review, decision, clarification, or intervention; it is not a workflow status."
+      "definition": "An orthogonal request for human review, decision, clarification, or intervention on a work item or a question; it is not a workflow status. The target stores the requested state."
     },
     {
       "id": "authority_grant",
@@ -121,7 +121,7 @@
     {
       "id": "question",
       "name": "Question",
-      "definition": "An unresolved question that may request human attention or block work."
+      "definition": "A question about an objective: unsharp while an in-scope area is visible but not yet phrasable, open once phrased, then answered or waived. It stores its own attention state, and while unsharp or open it blocks every work item it is linked to; a question asked on a work item is always linked to that item. Links are never removed, so only answering or waiving clears them."
     },
     {
       "id": "validation_record",
@@ -200,6 +200,18 @@
       "from": "plan",
       "to": "work_item",
       "cardinality": "one_to_many"
+    },
+    {
+      "id": "question_blocks_work_item",
+      "from": "question",
+      "to": "work_item",
+      "cardinality": "many_to_many"
+    },
+    {
+      "id": "question_has_attention",
+      "from": "question",
+      "to": "attention",
+      "cardinality": "many_to_one"
     },
     {
       "id": "work_item_depends_on_work_item",
@@ -644,6 +656,34 @@
       ]
     },
     {
+      "id": "question_lifecycle",
+      "entity": "question",
+      "states": [
+        "unsharp",
+        "open",
+        "answered",
+        "waived"
+      ],
+      "transitions": [
+        [
+          "unsharp",
+          "open"
+        ],
+        [
+          "unsharp",
+          "waived"
+        ],
+        [
+          "open",
+          "answered"
+        ],
+        [
+          "open",
+          "waived"
+        ]
+      ]
+    },
+    {
       "id": "work_item_execution",
       "entity": "work_item",
       "states": [
@@ -742,6 +782,10 @@
     {
       "id": "progress_is_concise",
       "statement": "Progress records concise checkpoints and never raw model reasoning."
+    },
+    {
+      "id": "questions_block_linked_work",
+      "statement": "An unsharp or open question blocks claiming and readiness of every work item it is linked to; the block clears only when the question is answered or waived."
     }
   ],
   "source_mappings": [
@@ -844,8 +888,8 @@
   "manifest": {
     "schema_version": "1.0",
     "model_version": "1.1.0",
-    "content_digest": "966e1d8987203cccf1d91f5cdc793b76585a45b8ce611a42da3c4b9732940cda",
-    "source_digest": "152c937edda0de02dfdbf51d6d4450d9ea8c3818182b5d704ac2ee459a233037",
+    "content_digest": "2439f77501a70d7e9d718f3f21b540c8f063dc91e5afe1c123d981956b8b0054",
+    "source_digest": "60104d0cfafbe00c348113da48db11079f0e48d5dcf5961f7c90edded4f991b7",
     "bootstrap": "Throughline is a local, authoritative coordination state layer for domain-neutral work. It records intent, plans, work, outputs, validation, reuse, and delegated authority; it does not orchestrate agents or perform external effects. Capability does not imply Authority. Call get_semantic_model for details.",
     "available_sections": [
       "manifest",
@@ -858,12 +902,12 @@
     ],
     "section_counts": {
       "entities": 26,
-      "invariants": 11,
-      "lifecycles": 10,
-      "relations": 20,
+      "invariants": 12,
+      "lifecycles": 11,
+      "relations": 22,
       "source_mappings": 19
     }
   },
-  "content_digest": "966e1d8987203cccf1d91f5cdc793b76585a45b8ce611a42da3c4b9732940cda",
-  "source_digest": "152c937edda0de02dfdbf51d6d4450d9ea8c3818182b5d704ac2ee459a233037"
+  "content_digest": "2439f77501a70d7e9d718f3f21b540c8f063dc91e5afe1c123d981956b8b0054",
+  "source_digest": "60104d0cfafbe00c348113da48db11079f0e48d5dcf5961f7c90edded4f991b7"
 }

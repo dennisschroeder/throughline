@@ -34,6 +34,7 @@ type Repository interface {
 	CreateQuestion(context.Context, work.Question) error
 	Question(ctx context.Context, id string) (work.Question, error)
 	UpdateQuestion(ctx context.Context, question work.Question, expectedVersion int) error
+	CreateQuestionBlock(ctx context.Context, questionID, workItemID, actorID string, createdAt time.Time) error
 	CreateDecision(context.Context, work.Decision) error
 	Decision(ctx context.Context, id string) (work.Decision, error)
 	UpdateDecision(context.Context, work.Decision) error
@@ -135,6 +136,7 @@ type Store interface {
 	GetObjectiveContext(ctx context.Context, id string) (ObjectiveContext, error)
 	SelectObjectiveContext(ctx context.Context, query ObjectiveContextSelectionQuery) (ObjectiveContextSelection, error)
 	ListOutputProfiles(ctx context.Context) ([]output.Profile, error)
+	ListQuestionsNeedingAttention(ctx context.Context) ([]work.Question, error)
 	ListReadyWork(ctx context.Context) ([]ReadyWorkItem, error)
 	ListReadyWorkForActor(ctx context.Context, actorID string) ([]ReadyWorkItem, error)
 	ListActivity(ctx context.Context, filter ActivityFilter) ([]work.Activity, error)
@@ -157,6 +159,8 @@ type WorkItemContext struct {
 	Progress             []work.ProgressEntry
 	Artifacts            []output.Artifact
 	ExternalActions      []ExternalActionDetail
+	// BlockingQuestions are the unsharp or open questions holding this item.
+	BlockingQuestions []work.Question
 }
 
 type OutputRevisionDetail struct {

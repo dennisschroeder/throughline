@@ -883,12 +883,21 @@ CREATE TABLE questions (
   objective_id TEXT REFERENCES objectives(id) ON DELETE CASCADE,
   work_item_id TEXT REFERENCES work_items(id) ON DELETE CASCADE,
   question TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('open', 'answered', 'waived')),
+  status TEXT NOT NULL CHECK (status IN ('unsharp', 'open', 'answered', 'waived')),
   answer TEXT,
-  requires_human_attention INTEGER NOT NULL DEFAULT 0 CHECK (requires_human_attention IN (0, 1)),
+  attention_state TEXT NOT NULL DEFAULT 'none',
   created_at TEXT NOT NULL,
   resolved_at TEXT,
   CHECK (objective_id IS NOT NULL OR work_item_id IS NOT NULL)
+);
+
+CREATE TABLE question_blocks (
+  question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+  work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (question_id, work_item_id)
 );
 
 CREATE TABLE external_actions (
@@ -1107,7 +1116,7 @@ Every state-changing call answers with `effects` beside `workspace` and `result`
 
 - `version` is the version the transaction actually committed. A row written several times inside one transaction appears once, carrying its final version. A deleted row carries the last version it actually had; no version is invented past the delete.
 - An effect says *that* an entity changed, not *how*. There is no operation or tombstone member, so a delete is reported like any other change and a caller that refetches the entity finds it gone. Invalidate on an effect; do not treat one as proof the entity still exists.
-- Versioned relationships are included and use deterministic identifiers: `workItemID:slug` for a work-item capability, `actorID:slug` for an actor capability, `revisionID:artifactID` for an output-revision artifact, and `actionID:revision` for an external-action revision.
+- Versioned relationships are included and use deterministic identifiers: `workItemID:slug` for a work-item capability, `actorID:slug` for an actor capability, `revisionID:artifactID` for an output-revision artifact, `questionID:workItemID` for a question block (kind `question_block`), and `actionID:revision` for an external-action revision.
 - Approval kinds stay distinguishable: `approval`, `action_approval`, and `execution_approval`.
 - Activity and idempotency rows are internal records, never effects. A mutation that only records activity legitimately returns `"effects": []`.
 - Order is stable: entities appear in the order the transaction first touched them.
@@ -1160,6 +1169,8 @@ record_context
 record_decision
 ask_question
 answer_question
+sharpen_question
+link_question_blocker
 request_approval
 resolve_approval
 request_attention
@@ -1270,13 +1281,17 @@ An objective also carries `priority` (the same `low`/`medium`/`high`/`urgent` vo
 
 Creates or supersedes one `requirement`, `constraint`, `assumption`, `finding`, `risk`, `success_metric`, `non_goal`, or `affected`. Assumptions include confidence and validation state; findings may include source/evidence references. `non_goal` records something the work deliberately excludes — a constraint restricts how the work is done, a non-goal says what it is not. `affected` records who or what surface the work lands on, covering both audience and blast radius under one domain-neutral kind rather than software-specific "affected users and systems." Both follow the same proposed -> accepted -> waived lifecycle as `requirement`/`constraint`/`risk`. It never accepts raw chain-of-thought.
 
-#### `record_decision`, `ask_question`, `answer_question`
+#### `record_decision`, `ask_question`, `answer_question`, `sharpen_question`, `link_question_blocker`
 
-Maintain durable decision memory. Decisions include outcome, rationale, alternatives, deciding actor, and optional supersession. Questions can block work and request human attention; answers are audited and may clear linked blockers.
+Maintain durable decision memory. Decisions include outcome, rationale, alternatives, deciding actor, and optional supersession.
+
+A question is `unsharp` while an in-scope area is visible but cannot yet be phrased, `open` once phrased, then `answered` or `waived`. `ask_question` creates it as `open` by default or as `unsharp`; `sharpen_question` replaces the text with the phrasing and moves it to `open`, recording the graduation as its own event. Only an open question can be answered; an unsharp or open one can be waived with a reason. Keeping unphrased areas distinct stops "every open question answered" from reading as discovery complete.
+
+A question blocks work only through explicit links. `ask_question` takes `blocks_item_ids`, `link_question_blocker` adds a link to an unresolved question later, and a question asked with a `work_item_id` is always linked to that item. While the question is unsharp or open, every linked item cannot be claimed and is not ready; answering or waiving it clears all of them. Links are never removed, so nothing but resolution clears the block. A question stores the attention state requested for it (`attention_state`); `requires_human_attention: true` on `ask_question` is accepted as `needs_human_decision` for older callers.
 
 #### `request_approval`, `resolve_approval`, `request_attention`
 
-Approvals target a plan, work item, OutputProfile proposal, OutputRevision, or exact ExternalAction revision. Attention is orthogonal and may point to a question, decision, review, clarification, or intervention. Approval resolution requires an actor and rationale; revocation is a new audited state change and re-blocks dependent work.
+Approvals target a plan, work item, OutputProfile proposal, OutputRevision, or exact ExternalAction revision. Attention is orthogonal and targets a work item or a question, which stores the requested state. `review`, `clarification` and `intervention` are attention states, not targets, and `decision` is an immutable record with no state to hold; all four are rejected. To revisit a settled decision, supersede it or raise a question that blocks the work it bears on. Approval resolution requires an actor and rationale; revocation is a new audited state change and re-blocks dependent work.
 
 For ExternalAction approval, the request must bind `external_action_id`, `revision`, `approved_for_actor_id`, current `authorization_subject_hash`, constraints, and optional expiry. Approval atomically creates an AuthorityGrant. Revocation atomically revokes the corresponding grant. If the current hash or revision differs at resolution time, return `approval_stale`; never broaden or silently regenerate the request.
 
@@ -1418,9 +1433,14 @@ Record `start`, `succeed`, or `fail` for one exact action revision, principal, a
   ],
   "needs_human_attention": [
     { "id": "TH-51", "attention_state": "needs_human_decision", "title": "Choose persistence policy" }
+  ],
+  "questions_needing_human_attention": [
+    { "id": "...", "text": "Who owns final review?", "status": "open", "attention_state": "needs_human_review" }
   ]
 }
 ```
+
+With `include_attention`, `needs_human_attention` lists flagged work items and `questions_needing_human_attention` lists unsharp or open questions whose stored attention state is not `none`. They are separate fields so the first keeps its element type.
 
 `objectives` counts objectives per phase, read from the objectives themselves, so an objective that
 has no work items yet is still counted and still visible to the one call an agent orients with. A
@@ -1520,7 +1540,7 @@ V1 is selection-based and size-bounded, not semantically generated: return objec
 
 Use an opaque monotonic activity sequence as the initial cursor. Define retention/compaction policy before any deletion exists.
 
-`objective_id` accepts an objective id or key and matches on the row's objective binding, when it has one: the objective's own events, its plans and their approvals, the questions, decisions and context records recorded against it, and every event of its work items. Rows without a binding appear only in the unfiltered feed: workspace-level events (actor registration and capabilities, output profiles and their approvals) and `request_attention` on the free-form `review`, `clarification` and `intervention` target kinds, whose target ids Throughline does not resolve. Rows written before the binding existed were backfilled by migration without changing their sequence.
+`objective_id` accepts an objective id or key and matches on the row's objective binding, when it has one: the objective's own events, its plans and their approvals, the questions, decisions and context records recorded against it, and every event of its work items. Rows without a binding appear only in the unfiltered feed: workspace-level events (actor registration and capabilities, output profiles and their approvals), and attention requests recorded before those requests were narrowed to work items and questions. Rows written before the binding existed were backfilled by migration without changing their sequence.
 
 ### Work tools
 

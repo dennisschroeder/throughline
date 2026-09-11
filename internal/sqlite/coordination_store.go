@@ -95,7 +95,7 @@ SELECT EXISTS(
 }
 
 func (r *transactionRepository) HasOpenBlocker(ctx context.Context, workItemID string) (bool, error) {
-	return queryBoolean(ctx, r.transaction, `SELECT EXISTS(SELECT 1 FROM questions WHERE work_item_id = ? AND status = 'open') OR EXISTS(SELECT 1 FROM manual_blockers WHERE work_item_id = ? AND status = 'active')`, workItemID, workItemID)
+	return queryBoolean(ctx, r.transaction, `SELECT EXISTS(SELECT 1 FROM question_blocks link JOIN questions question ON question.id = link.question_id WHERE link.work_item_id = ? AND question.status IN ('unsharp', 'open')) OR EXISTS(SELECT 1 FROM manual_blockers WHERE work_item_id = ? AND status = 'active')`, workItemID, workItemID)
 }
 
 func (r *transactionRepository) CreateManualBlocker(ctx context.Context, blocker work.ManualBlocker) error {

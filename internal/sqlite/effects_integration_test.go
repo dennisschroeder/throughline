@@ -1105,6 +1105,7 @@ func TestEffectTableDefinitionsAreTheReviewedList(t *testing.T) {
 		{table: "expected_outputs", kind: "expected_output", id: "NEW.id", version: "NEW.version"},
 		{table: "context_records", kind: "context_record", id: "NEW.id", version: "NEW.version"},
 		{table: "questions", kind: "question", id: "NEW.id", version: "NEW.version"},
+		{table: "question_blocks", kind: "question_block", id: "NEW.question_id || ':' || NEW.work_item_id", version: "NEW.version"},
 		{table: "decisions", kind: "decision", id: "NEW.id", version: "NEW.version"},
 		{table: "approvals", id: "NEW.id", version: "NEW.version", kindExpr: approvalKinds},
 		{table: "capabilities", kind: "capability", id: "NEW.slug", version: "NEW.version"},

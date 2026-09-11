@@ -78,15 +78,29 @@ WHERE id = ? AND version = ?`,
 func (r *transactionRepository) CreateQuestion(ctx context.Context, question work.Question) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO questions
-  (id, objective_id, work_item_id, question, status, answer, requires_human_attention,
+  (id, objective_id, work_item_id, question, status, answer, attention_state,
    version, created_by, resolved_by, created_at, resolved_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		question.ID, question.ObjectiveID, nullableString(question.WorkItemID), question.Text,
-		question.Status, question.Answer, boolInt(question.RequiresHumanAttention), question.Version,
+		question.Status, question.Answer, question.AttentionState, question.Version,
 		question.CreatedBy, nullableString(question.ResolvedBy), formatTime(question.CreatedAt), nullableTime(question.ResolvedAt),
 	)
 	if err != nil {
 		return fmt.Errorf("insert question: %w", err)
+	}
+	for _, workItemID := range question.BlocksWorkItems {
+		if err := r.CreateQuestionBlock(ctx, question.ID, workItemID, question.CreatedBy, question.CreatedAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *transactionRepository) CreateQuestionBlock(ctx context.Context, questionID, workItemID, actorID string, createdAt time.Time) error {
+	if _, err := r.transaction.ExecContext(ctx, `
+INSERT INTO question_blocks (question_id, work_item_id, created_by, created_at) VALUES (?, ?, ?, ?)`,
+		questionID, workItemID, actorID, formatTime(createdAt)); err != nil {
+		return fmt.Errorf("insert question block: %w", err)
 	}
 	return nil
 }
@@ -99,9 +113,9 @@ func (r *transactionRepository) Question(ctx context.Context, id string) (work.Q
 func (r *transactionRepository) UpdateQuestion(ctx context.Context, question work.Question, expectedVersion int) error {
 	result, err := r.transaction.ExecContext(ctx, `
 UPDATE questions
-SET status = ?, answer = ?, version = ?, resolved_by = ?, resolved_at = ?
+SET question = ?, status = ?, answer = ?, attention_state = ?, version = ?, resolved_by = ?, resolved_at = ?
 WHERE id = ? AND version = ?`,
-		question.Status, question.Answer, question.Version, nullableString(question.ResolvedBy),
+		question.Text, question.Status, question.Answer, question.AttentionState, question.Version, nullableString(question.ResolvedBy),
 		nullableTime(question.ResolvedAt), question.ID, expectedVersion,
 	)
 	if err != nil {
@@ -580,6 +594,43 @@ func scanExpectedOutputDetail(row scanner) (output.ExpectedOutputDetail, error) 
 	return detail, err
 }
 
+// ListQuestionsNeedingAttention returns unresolved questions flagged for a
+// person, so orientation sees them beside flagged work items.
+func (s *Store) ListQuestionsNeedingAttention(ctx context.Context) ([]work.Question, error) {
+	var result []work.Question
+	err := s.withinReadTransaction(ctx, func(reader sqlReader) error {
+		var err error
+		result, err = queryQuestions(ctx, reader, questionSelect+" WHERE attention_state <> 'none' AND status IN ('unsharp', 'open') ORDER BY created_at, id")
+		return err
+	})
+	return result, err
+}
+
+// listBlockingQuestions returns the unresolved questions holding a work item.
+func listBlockingQuestions(ctx context.Context, reader sqlReader, workItemID string) ([]work.Question, error) {
+	return queryQuestions(ctx, reader, questionSelect+`
+WHERE status IN ('unsharp', 'open')
+  AND id IN (SELECT question_id FROM question_blocks WHERE work_item_id = ?)
+ORDER BY created_at, id`, workItemID)
+}
+
+func queryQuestions(ctx context.Context, reader sqlReader, query string, arguments ...any) ([]work.Question, error) {
+	rows, err := reader.QueryContext(ctx, query, arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("query questions: %w", err)
+	}
+	defer rows.Close()
+	var result []work.Question
+	for rows.Next() {
+		question, err := scanQuestion(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, question)
+	}
+	return result, rows.Err()
+}
+
 func (s *Store) listQuestions(ctx context.Context, reader sqlReader, objectiveID string) ([]work.Question, error) {
 	rows, err := reader.QueryContext(ctx, questionSelect+" WHERE objective_id = ? ORDER BY created_at, id", objectiveID)
 	if err != nil {
@@ -637,8 +688,10 @@ SELECT id, objective_id, work_item_id, kind, title, body, status, confidence, so
 FROM context_records`
 
 const questionSelect = `
-SELECT id, objective_id, work_item_id, question, status, answer, requires_human_attention,
-       version, created_by, resolved_by, created_at, resolved_at
+SELECT id, objective_id, work_item_id, question, status, answer, attention_state,
+       version, created_by, resolved_by, created_at, resolved_at,
+       (SELECT json_group_array(work_item_id) FROM (
+          SELECT work_item_id FROM question_blocks WHERE question_id = questions.id ORDER BY rowid))
 FROM questions`
 
 const decisionSelect = `
@@ -677,18 +730,22 @@ func scanContextRecord(row scanner) (work.ContextRecord, error) {
 func scanQuestion(row scanner) (work.Question, error) {
 	var question work.Question
 	var workItemID, resolvedBy, resolvedAt sql.NullString
-	var attention int
-	var createdAt string
+	var createdAt, blocks string
 	if err := row.Scan(
 		&question.ID, &question.ObjectiveID, &workItemID, &question.Text, &question.Status,
-		&question.Answer, &attention, &question.Version, &question.CreatedBy, &resolvedBy,
-		&createdAt, &resolvedAt,
+		&question.Answer, &question.AttentionState, &question.Version, &question.CreatedBy, &resolvedBy,
+		&createdAt, &resolvedAt, &blocks,
 	); err != nil {
 		return work.Question{}, err
 	}
 	question.WorkItemID = workItemID.String
-	question.RequiresHumanAttention = attention == 1
 	question.ResolvedBy = resolvedBy.String
+	if err := json.Unmarshal([]byte(blocks), &question.BlocksWorkItems); err != nil {
+		return work.Question{}, fmt.Errorf("decode question blocks: %w", err)
+	}
+	if len(question.BlocksWorkItems) == 0 {
+		question.BlocksWorkItems = nil
+	}
 	var err error
 	question.CreatedAt, err = parseTime(createdAt)
 	if err != nil {

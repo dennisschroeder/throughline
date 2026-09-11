@@ -223,12 +223,16 @@ func (s *Service) transitionContextMutation(ctx context.Context, command Transit
 }
 
 type AskQuestionCommand struct {
-	ObjectiveID            string
-	WorkItemID             string
-	ActorID                string
-	Question               string
-	RequiresHumanAttention bool
-	IdempotencyKey         string
+	ObjectiveID    string
+	WorkItemID     string
+	ActorID        string
+	Question       string
+	Status         work.QuestionStatus
+	AttentionState work.AttentionState
+	// BlocksWorkItems names the work items the question holds while it is
+	// unresolved, beyond its own work item, which it always holds.
+	BlocksWorkItems []string
+	IdempotencyKey  string
 }
 
 func (s *Service) askQuestionMutation(ctx context.Context, command AskQuestionCommand) (work.Question, error) {
@@ -242,12 +246,14 @@ func (s *Service) askQuestionMutation(ctx context.Context, command AskQuestionCo
 		return work.Question{}, fmt.Errorf("generate question id: %w", err)
 	}
 	question, err := work.NewQuestion(work.Question{
-		ID:                     id,
-		ObjectiveID:            command.ObjectiveID,
-		WorkItemID:             command.WorkItemID,
-		Text:                   command.Question,
-		RequiresHumanAttention: command.RequiresHumanAttention,
-		CreatedBy:              command.ActorID,
+		ID:              id,
+		ObjectiveID:     command.ObjectiveID,
+		WorkItemID:      command.WorkItemID,
+		Text:            command.Question,
+		Status:          command.Status,
+		AttentionState:  command.AttentionState,
+		BlocksWorkItems: command.BlocksWorkItems,
+		CreatedBy:       command.ActorID,
 	}, s.clock.Now())
 	if err != nil {
 		return work.Question{}, err
@@ -257,8 +263,10 @@ func (s *Service) askQuestionMutation(ctx context.Context, command AskQuestionCo
 			if _, err := repository.Objective(ctx, question.ObjectiveID); err != nil {
 				return work.Question{}, fmt.Errorf("load objective: %w", err)
 			}
-			if err := ensureWorkItemScope(ctx, repository, question.ObjectiveID, question.WorkItemID); err != nil {
-				return work.Question{}, err
+			for _, workItemID := range question.BlocksWorkItems {
+				if err := ensureWorkItemScope(ctx, repository, question.ObjectiveID, workItemID); err != nil {
+					return work.Question{}, err
+				}
 			}
 			if err := repository.CreateQuestion(ctx, question); err != nil {
 				return work.Question{}, err
@@ -290,6 +298,94 @@ type WaiveQuestionCommand struct {
 	Reason          string
 	ExpectedVersion int
 	IdempotencyKey  string
+}
+
+type SharpenQuestionCommand struct {
+	QuestionID      string
+	ActorID         string
+	Question        string
+	ExpectedVersion int
+	IdempotencyKey  string
+}
+
+type LinkQuestionBlockerCommand struct {
+	QuestionID      string
+	WorkItemID      string
+	ActorID         string
+	ExpectedVersion int
+	IdempotencyKey  string
+}
+
+func (s *Service) sharpenQuestionMutation(ctx context.Context, command SharpenQuestionCommand) (work.Question, error) {
+	var sharpened work.Question
+	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
+		result, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "sharpen_question", command, func() (work.Question, error) {
+			question, err := repository.Question(ctx, command.QuestionID)
+			if err != nil {
+				return work.Question{}, err
+			}
+			if question.Version != command.ExpectedVersion {
+				return work.Question{}, ports.ErrVersionConflict
+			}
+			updated, err := work.SharpenQuestion(question, command.Question)
+			if err != nil {
+				return work.Question{}, err
+			}
+			if err := repository.UpdateQuestion(ctx, updated, command.ExpectedVersion); err != nil {
+				return work.Question{}, err
+			}
+			payload, _ := json.Marshal(struct {
+				PreviousText string `json:"previous_text"`
+			}{question.Text})
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "question", EntityID: updated.ID, WorkItemID: updated.WorkItemID, ObjectiveID: updated.ObjectiveID, ActorID: command.ActorID, EventType: "question.sharpened", Summary: "Unsharp question phrased and opened", PayloadJSON: payload}); err != nil {
+				return work.Question{}, err
+			}
+			return updated, nil
+		})
+		sharpened = result
+		return err
+	}); err != nil {
+		return work.Question{}, fmt.Errorf("sharpen question: %w", err)
+	}
+	return sharpened, nil
+}
+
+func (s *Service) linkQuestionBlockerMutation(ctx context.Context, command LinkQuestionBlockerCommand) (work.Question, error) {
+	var linked work.Question
+	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
+		result, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "link_question_blocker", command, func() (work.Question, error) {
+			question, err := repository.Question(ctx, command.QuestionID)
+			if err != nil {
+				return work.Question{}, err
+			}
+			if question.Version != command.ExpectedVersion {
+				return work.Question{}, ports.ErrVersionConflict
+			}
+			if err := ensureWorkItemScope(ctx, repository, question.ObjectiveID, command.WorkItemID); err != nil {
+				return work.Question{}, err
+			}
+			updated, err := work.LinkQuestionBlocker(question, command.WorkItemID)
+			if err != nil {
+				return work.Question{}, err
+			}
+			workItemID := updated.BlocksWorkItems[len(updated.BlocksWorkItems)-1]
+			if err := repository.UpdateQuestion(ctx, updated, command.ExpectedVersion); err != nil {
+				return work.Question{}, err
+			}
+			if err := repository.CreateQuestionBlock(ctx, updated.ID, workItemID, command.ActorID, s.clock.Now().UTC()); err != nil {
+				return work.Question{}, err
+			}
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "question", EntityID: updated.ID, WorkItemID: workItemID, ObjectiveID: updated.ObjectiveID, ActorID: command.ActorID, EventType: "question.blocks_linked", Summary: "Question now blocks this work item"}); err != nil {
+				return work.Question{}, err
+			}
+			return updated, nil
+		})
+		linked = result
+		return err
+	}); err != nil {
+		return work.Question{}, fmt.Errorf("link question blocker: %w", err)
+	}
+	return linked, nil
 }
 
 func (s *Service) answerQuestionMutation(ctx context.Context, command AnswerQuestionCommand) (work.Question, error) {
@@ -1423,6 +1519,14 @@ func limitSlice[T any](values []T, limit int) []T {
 		return values
 	}
 	return values[:limit]
+}
+
+func (s *Service) ListQuestionsNeedingAttention(ctx context.Context) ([]work.Question, error) {
+	questions, err := s.store.ListQuestionsNeedingAttention(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list questions needing attention: %w", err)
+	}
+	return questions, nil
 }
 
 func (s *Service) ListOutputProfiles(ctx context.Context) ([]output.Profile, error) {
