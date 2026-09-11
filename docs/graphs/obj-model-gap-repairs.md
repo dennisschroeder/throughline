@@ -503,6 +503,71 @@ entry rather than reporting no match, had a future entry ever come back kindless
 - `TestCreateObjectivePersistsAppetite` and `TestPatchObjectiveAppliesPriority` each verified to fail
   against the code before its respective fix.
 
+### REP-07 ACTIVITY
+
+- Commits: `846caba` (implementation), then `777bbce` and `54f8d47`, each a response to a review
+  pass, at the 3-pass budget.
+- Claim: `01a08fa6-ea15-715f-b6e6-3df56c62ca4d`.
+- Final gate: all six repository commands exited zero on 2026-09-11 at `54f8d47`, plus
+  `go test ./... -race -shuffle=on`.
+
+Implements triage decision `01a0720b-3d03` as decided: the binding, not a widened query. Activity
+gains `objective_id`; the service sets it explicitly for objective-scoped records (objective, plan,
+question, decision, context record, approval, `request_attention` on questions and decisions) and
+resolves it from the work item otherwise. `NewActivity` rejects an objective-scoped kind or a
+work-item event without it, so a missing binding fails at the write instead of vanishing from the
+feed. Migration 0014 adds the column in place (no rebuild, so every sequence and
+`sqlite_sequence` stay untouched), lifts the append-only update trigger only for a `CASE`
+backfill keyed on the entity, recreates it unchanged, and indexes `(objective_id, sequence)`.
+`get_changes` filters on the column. `get_objective_context`'s recent changes had the same
+omission — it selected only the objective's own events and selected items' events — and was
+repaired in the same node, since the decision's rationale names every read path that presents
+questions, decisions and context as belonging to the objective; stated here because neither
+acceptance criterion names that read path.
+
+#### Review
+
+Three passes, all degraded (same model family; no cross-provider reviewer available).
+
+| Pass | Mutants | Survived | Real defects found and fixed |
+|---|---|---|---|
+| 1 | 7 | 4 | 0 behavioural; 4 coverage gaps + 1 vacuous check |
+| 2 | 18 | 3 (+1 near-equivalent) | 0 behavioural; 3 coverage gaps + doc inaccuracies |
+| 3 | 6 | 0 | none |
+
+No pass found a behavioural defect in the shipped code. Pass 1's survivors were the recent-changes
+selection (both directions), the plan-approval binding at write time, and a column-restricted
+`UPDATE OF` trigger that would still reject the summary update the test tried. It also showed the
+high-water-mark check was vacuous: AUTOINCREMENT always issues past the highest surviving row, so
+"a new row's sequence exceeds the old maximum" cannot fail. The replacement compares
+`main.sqlite_sequence` before and after — qualified, because the effects collector's TEMP table has
+its own AUTOINCREMENT and an unqualified `sqlite_sequence` silently resolves to the TEMP one after
+`Migrate`. Pass 2 found that the backfill's branch order was load-bearing and unpinned: execution
+approvals are stored without an objective, so a pre-upgrade `approval` row with a work item must
+take the work-item branch first. Pass 3 walked every one of the 57 activity literals and every
+creation path and found nothing new.
+
+#### Dispositions
+
+| Finding | Disposition |
+|---|---|
+| `request_attention` on `review`/`clarification`/`intervention` writes unbound rows (free-form target ids) | Deferred to REP-08, which narrows those target kinds; documented in the `get_changes` contract |
+| Output-revision approvals appear as objective-level history in recent changes | Rejected: they are bound to the objective, so the presentation is truthful |
+| Recent changes share one `limit*2` window between objective-level and item history | Rejected: pre-existing cap, unchanged in shape |
+| Dashboard reads the oldest 500 objective activity rows as "recent" (`gates.go`, `loop.go`) | Filed as separate work; pre-existing, reached sooner now that the objective feed is complete |
+| `TrimSpace(ObjectiveID)` in `NewActivity` survives removal | Rejected: near-equivalent, every caller passes a stored id |
+
+#### Evidence
+
+- `TestObjectiveFeedIncludesPlanningRecords`: eight events of one objective, in cursor order, none
+  of another objective's; recent changes include the decision. Fails against the pre-fix filter.
+- `TestMigration0014BackfillsActivityObjectiveOnAPopulatedWorkspace`: pre-upgrade history of every
+  entity kind the app writes, including an execution approval; asserts each row's binding, unchanged
+  sequences and `main.sqlite_sequence`, identical trigger SQL, the index, and rejection of update,
+  rebind and delete afterwards.
+- `TestObjectiveContextRecentChangesKeepObjectiveLevelAndSelectedItemHistory` and
+  `TestObjectiveChangesIncludeDiscoveryRecords` (MCP wire, objective addressed by key).
+
 ## Feedback
 
 - REP-01 was estimated small but consumed the full five-pass review budget because file permissions
@@ -676,3 +741,22 @@ entry rather than reporting no match, had a future entry ever come back kindless
   instance yet: a field that round-trips cleanly through everything except the one line that was
   supposed to forward it.
 - **The claim held for a third node in a row.**
+
+### REP-07
+
+- **The first node in this objective with no behavioural defect in any pass.** Every finding was a
+  test that could not fail or a line no test reached. Two things plausibly explain it: the decision
+  being implemented was diagnosed from a reproduction before any code was written, and the node's
+  one real hazard (the append-only trigger colliding with a backfill) was visible from the schema
+  and designed around before the first commit. Not evidence that three passes were too many — pass
+  2 still found the load-bearing branch order — but the first node where pass 3 reported nothing.
+- **A check can be green for a structural reason rather than because it tested anything.** The
+  high-water-mark assertion could not fail under any migration, because AUTOINCREMENT guarantees
+  the property it checked. Same class as REP-06's masked version-CHECK test, from the opposite
+  direction: there an unrelated constraint made the test pass; here the database's own invariant
+  did. Worth a standing question in review: what would have to change for this assertion to fail?
+- **The TEMP effects collector shadows `main` schema objects by name a second time.** REP-06 hit its
+  identically-worded CHECK constraint; REP-07 hit its `sqlite_sequence`. Any test or query that
+  inspects schema state after `Migrate` should name `main.` explicitly.
+- **The claim held for a fourth node in a row.**
+
