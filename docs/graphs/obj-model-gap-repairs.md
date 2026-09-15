@@ -759,6 +759,61 @@ objective out of idea. The instructions now say so and a test requires the sente
   `TestReadyWorkCarriesEveryObjectiveAndItemField` (`get_item`, `list_ready_items`), and the
   instructions assertion in `TestSemanticModelInitializationAndReadContract`.
 
+### REP-11 CAPCLI
+
+- Commits: `f58477b` (implementation), then `8426569`, `516f6e3` and `11b66f7`, each a response to a
+  review pass, at the 3-pass budget.
+- Claim: `01a0a67e-490c-7914-94e9-d2858264840e`. Decision: `01a0a685-531b-78e5-831d-869ff8f60fbb`.
+- Final gate: all six repository commands exited zero on 2026-09-15 at `11b66f7`, plus
+  `go test ./... -race -shuffle=on`.
+
+Implements triage decision `01a07208-694c` and the plan owner's refinement that the CLI checks the
+schema but only the updated daemon migrates. `throughline capability grant` assigns a capability
+with a registered human as granter; the service refuses agent and service granters, so no adapter
+can let an agent grant itself what a claim requires, and no MCP tool exists for it. A claim refused
+for a missing capability lists each one with a shell-quoted grant command. The command opens the
+workspace database directly (ADR 0025 amended), never migrates it, refuses a missing file, retries
+while the SQLite result code says another writer holds the lock, and reports schema mismatches
+with a remediation that is actually true. `throughline doctor` shows the schema state read-only.
+The semantic model moves to 1.2.0 with 30 source mappings (migrations 0010-0017, review evidence,
+mutation effects, the grant command in its own file); the migration upgrade matrix asserts every
+earlier prefix is refused by the schema check and passes once migrated; install.md describes the
+upgrade and restart path.
+
+#### Review
+
+Three passes, all degraded (same model family; no cross-provider reviewer available).
+
+| Pass | Mutants | Survived | Real defects found and fixed |
+|---|---|---|---|
+| 1 | 11 | 5 | 3 (remediation that did not work, empty database created, immediate SQLITE_BUSY) + docs |
+| 2 | 7 | 6 | 2 (busy matched on error text; doctor could not surface schema drift) + AGENTS.md |
+| 3 | 9 | 4 | 2 (cancellation inside an attempt misreported and its test flaky; doctor reset file permissions) |
+
+Pass 1's most important finding contradicted the plan's own wording: "restart the daemon" does not
+migrate a workspace, the first request after the restart does, so the remediation the criterion
+asked for would have sent people into a loop. Pass 3 found that the cancellation test written in
+pass 2 failed roughly six runs in ten on unchanged code, which a single green suite run had hidden.
+
+#### Dispositions
+
+| Finding | Disposition |
+|---|---|
+| `--as` is not authenticated; `register_actor` over MCP can register a `human` actor | Accepted and documented (install.md, ADR 0025): the boundary is the local user who can run commands |
+| `IsBusy` extended codes (`BUSY_SNAPSHOT`) untested | Accepted: modernc exposes no constructor for the error, and the code check covers the family |
+| One extra retry beyond the budget survives mutation | Rejected as immaterial |
+
+#### Evidence
+
+- `TestCapabilityGrantRequiresARegisteredHuman` (agent, service, unregistered, human),
+  `TestCapabilityRejectionNamesTheGrantCommand` (only missing capabilities, quoting).
+- `TestCapabilityGrantNeverMigratesAMismatchedSchema` (older, newer, renamed history; schema left
+  untouched), `TestCapabilityGrantRefusesAMissingDatabaseWithoutCreatingOne`,
+  `TestCapabilityGrantWaitsOutAWriterHoldingTheLock`, `TestCapabilityGrantRetryOnlyForTheLockAndWithinItsBudget`,
+  `TestDoctorReportsASchemaBehindTheBinary`, `TestDoctorSchemaLineOnAMissingOrUnmigratedDatabase`.
+- `TestMigrateUpgradesEverySupportedPrefix` with the schema check before and after migrating from
+  every prefix; generator tests validating all 30 source mappings; model version pinned at 1.2.0.
+
 ## Feedback
 
 - REP-01 was estimated small but consumed the full five-pass review budget because file permissions
@@ -1006,4 +1061,18 @@ objective out of idea. The instructions now say so and a test requires the sente
   (the objective-filtered feed from REP-07, the shared column lists from REP-09) instead of adding a
   store.
 - **The claim held for a seventh node in a row.**
+
+### REP-11
+
+- **A remediation is a claim about behaviour and needs testing like one.** The plan's criterion said
+  the error should name "daemon update/restart"; implementing exactly that would have shipped advice
+  that does not work, because the daemon migrates lazily. The fix came from a reviewer reading the
+  router, not from the criterion.
+- **One green run is not evidence against flakiness.** Pass 2's cancellation test passed the gate
+  and failed about six runs in ten. Timing-sensitive tests written in a review pass should be run
+  repeatedly (`-count`) before being called done; this node now does so for the retry tests.
+- **The last node of an iteration inherits documentation debt from all the earlier ones.** AGENTS.md
+  still described 19 mapped sources from before REP-02; nobody updated it because no earlier node
+  touched the mappings. Finalizing the contract was the first moment the drift became a gate issue.
+- **The claim held for an eighth node in a row, across a usage-limit interruption.**
 
