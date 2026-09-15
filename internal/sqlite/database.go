@@ -56,6 +56,30 @@ func Open(ctx context.Context, path string) (*Database, error) {
 	return &Database{db: db}, nil
 }
 
+// OpenReadOnly opens an existing database for inspection only: it neither
+// creates the file nor adjusts its permissions, and SQLite refuses writes.
+// Diagnostics use it so looking never changes what is looked at.
+func OpenReadOnly(ctx context.Context, path string) (*Database, error) {
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve database path: %w", err)
+	}
+	query := url.Values{}
+	query.Add("mode", "ro")
+	query.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeoutMilliseconds))
+	dsn := (&url.URL{Scheme: "file", Path: filepath.Clean(absolutePath), RawQuery: query.Encode()}).String()
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite database: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("connect sqlite database: %w", err)
+	}
+	return &Database{db: db}, nil
+}
+
 // ensurePermissions establishes the database mode before SQLite can create WAL or SHM
 // sidecars. SQLite uses the main database's mode for those files, so pre-creating the
 // database is necessary when the process umask permits group/other access. These modes

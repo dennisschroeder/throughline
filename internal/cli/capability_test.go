@@ -278,7 +278,7 @@ func TestCapabilityGrantRetryOnlyForTheLockAndWithinItsBudget(t *testing.T) {
 	capabilityGrantBusyRetries, capabilityGrantBusyBackoff = 1000, 50*time.Millisecond
 	cancelled, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
 	defer cancel()
-	if code, stderr, _ := grant(cancelled, "summaries", "human:dennis"); code == 0 || !strings.Contains(stderr, "interrupted while the workspace database was locked") {
+	if code, stderr, _ := grant(cancelled, "summaries", "human:dennis"); code == 0 || !strings.Contains(stderr, "capability grant interrupted") {
 		t.Fatalf("grant cancelled during the retry = exit %d, %q", code, stderr)
 	}
 }
@@ -302,8 +302,23 @@ func TestDoctorReportsASchemaBehindTheBinary(t *testing.T) {
 		}
 		return stdout.String()
 	}
+	info, err := os.Stat(workspace.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(workspace.DatabasePath, 0o640); err != nil {
+		t.Fatal(err)
+	}
 	if out := doctor(); !strings.Contains(out, "schema: current") {
 		t.Fatalf("doctor on a current workspace = %q", out)
+	}
+	// Doctor is read-only: looking must not repair the file's mode, which the
+	// read-write open would have reset to 0600.
+	if after, err := os.Stat(workspace.DatabasePath); err != nil || after.Mode().Perm() != 0o640 {
+		t.Fatalf("database mode after doctor = %v, %v; want 0640 untouched", after.Mode().Perm(), err)
+	}
+	if err := os.Chmod(workspace.DatabasePath, info.Mode().Perm()); err != nil {
+		t.Fatal(err)
 	}
 	db, err := sql.Open("sqlite", workspace.DatabasePath)
 	if err != nil {
@@ -315,5 +330,49 @@ func TestDoctorReportsASchemaBehindTheBinary(t *testing.T) {
 	}
 	if out := doctor(); !strings.Contains(out, "schema: workspace database schema does not match") || !strings.Contains(out, "throughline daemon restart") {
 		t.Fatalf("doctor on a workspace behind the binary = %q", out)
+	}
+}
+
+// TestDoctorSchemaLineOnAMissingOrUnmigratedDatabase covers the two states
+// doctor must report without creating or migrating anything.
+func TestDoctorSchemaLineOnAMissingOrUnmigratedDatabase(t *testing.T) {
+	root, workspace := initWorkspaceWithActors(t)
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previousWD) })
+	doctor := func() string {
+		var stdout, stderr bytes.Buffer
+		if code := Run(context.Background(), []string{"doctor", "--addr", "127.0.0.1:1"}, &stdout, &stderr); code != 0 {
+			t.Fatalf("doctor exited %d: %s", code, stderr.String())
+		}
+		return stdout.String()
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Remove(workspace.DatabasePath + suffix); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+	if out := doctor(); !strings.Contains(out, "schema: database not readable") || !strings.Contains(out, "daemon:") {
+		t.Fatalf("doctor with a missing database = %q", out)
+	}
+	if _, err := os.Stat(workspace.DatabasePath); !os.IsNotExist(err) {
+		t.Fatalf("doctor created the database: %v", err)
+	}
+
+	empty, err := sql.Open("sqlite", workspace.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := empty.Exec("CREATE TABLE unrelated (id INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	empty.Close()
+	if out := doctor(); !strings.Contains(out, "database is at migration 0") {
+		t.Fatalf("doctor on a database without migrations = %q", out)
 	}
 }

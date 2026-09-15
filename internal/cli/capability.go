@@ -78,12 +78,17 @@ func runCapabilityGrant(ctx context.Context, args []string, stdout, stderr io.Wr
 	var granted app.ActorCapability
 	for attempt := 0; ; attempt++ {
 		granted, err = app.UnwrapMutation(service.AssignActorCapability(ctx, command))
+		// A cancellation can land inside an attempt, where it surfaces as
+		// whatever statement was running rather than as an interruption.
+		if err != nil && ctx.Err() != nil {
+			return fmt.Errorf("capability grant interrupted: %w", ctx.Err())
+		}
 		if err == nil || !throughlinesqlite.IsBusy(err) || attempt == capabilityGrantBusyRetries {
 			break
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("capability grant interrupted while the workspace database was locked: %w", ctx.Err())
+			return fmt.Errorf("capability grant interrupted: %w", ctx.Err())
 		case <-time.After(capabilityGrantBusyBackoff):
 		}
 	}

@@ -374,7 +374,7 @@ func reportSchema(ctx context.Context, stdout io.Writer, databasePath string) {
 		fmt.Fprintln(stdout, "  remediation: check the workspace's database path, or run `throughline init` for a new workspace")
 		return
 	}
-	database, err := throughlinesqlite.Open(ctx, databasePath)
+	database, err := throughlinesqlite.OpenReadOnly(ctx, databasePath)
 	if err != nil {
 		fmt.Fprintf(stdout, "schema: %v\n", err)
 		return
