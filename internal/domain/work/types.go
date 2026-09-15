@@ -144,10 +144,22 @@ type Objective struct {
 	PriorPhase     ObjectivePhase
 	Priority       Priority
 	Appetite       Measure
-	UpdatedBy      string
-	Version        int
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// LastPhaseTransition is why the objective is in its phase: the most recent
+	// transition's edge, reason, actor and time. Nil for an objective never
+	// transitioned since reasons began to be stored.
+	LastPhaseTransition *PhaseTransition
+	UpdatedBy           string
+	Version             int
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+type PhaseTransition struct {
+	From    ObjectivePhase
+	To      ObjectivePhase
+	Reason  string
+	ActorID string
+	At      time.Time
 }
 
 type Plan struct {

@@ -3,7 +3,7 @@
   "model_version": "1.1.0",
   "bootstrap": "Throughline is a local, authoritative coordination state layer for domain-neutral work. It records intent, plans, work, outputs, validation, reuse, and delegated authority; it does not orchestrate agents or perform external effects. Capability does not imply Authority. Call get_semantic_model for details.",
   "entities": [
-    {"id":"objective","name":"Objective","definition":"A durable goal that groups work items."},
+    {"id":"objective","name":"Objective","definition":"A durable goal that groups work items. It carries the edge, reason, actor and time of its most recent phase transition."},
     {"id":"plan","name":"Plan","definition":"A versioned proposal for achieving an objective; approval commits work without executing it."},
     {"id":"work_item","name":"WorkItem","definition":"A proposed, executable, reviewable, or trackable unit of domain-neutral work."},
     {"id":"context_record","name":"ContextRecord","definition":"Typed authoritative context such as a requirement, constraint, assumption, finding, risk, success metric, non-goal, or affected party/surface."},
@@ -79,6 +79,7 @@
     {"id":"canonical_authorization","statement":"Authorization uses the same canonical subject serialization and hash for proposal, grant, check, and audit."},
     {"id":"profile_immutability","statement":"Active output profile versions and produced output revisions are immutable; changes create new versions."},
     {"id":"execution_policy_not_authority","statement":"Execution policy governs internal work autonomy and never grants authority for an ExternalAction."},
+    {"id":"objective_phase_moves_explicitly","statement":"An objective changes phase only through an explicit transition with a recorded reason and actor; recording work against it never advances the phase, and objectives are not claimed or leased."},
     {"id":"attention_is_orthogonal","statement":"Attention requests human intervention without changing the work-item execution status."},
     {"id":"questions_block_linked_work","statement":"An unsharp or open question blocks claiming and readiness of every work item it is linked to; the block clears only when the question is answered or waived."},
     {"id":"progress_is_concise","statement":"Progress records concise checkpoints and never raw model reasoning."}

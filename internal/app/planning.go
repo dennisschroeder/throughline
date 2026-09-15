@@ -81,17 +81,17 @@ func (s *Service) transitionObjectiveMutation(ctx context.Context, command Trans
 					return work.Objective{}, errors.New("objective cannot enter execution without an approved plan")
 				}
 			}
-			transitioned, err = work.TransitionObjective(objective, command.TargetPhase, command.Reason, s.clock.Now())
+			transitioned, err = work.TransitionObjective(objective, command.TargetPhase, command.Reason, command.ActorID, s.clock.Now())
 			if err != nil {
 				return work.Objective{}, err
 			}
-			transitioned.UpdatedBy = strings.TrimSpace(command.ActorID)
 			if err := repository.UpdateObjective(ctx, transitioned, command.ExpectedVersion); err != nil {
 				return work.Objective{}, err
 			}
 			if err := s.recordActivity(ctx, repository, work.Activity{
 				EntityKind: "objective", EntityID: transitioned.ID, ObjectiveID: transitioned.ID, ActorID: command.ActorID,
 				EventType: "objective.phase_changed", Summary: fmt.Sprintf("Objective moved from %s to %s", objective.Phase, transitioned.Phase),
+				PayloadJSON: phaseTransitionPayload(*transitioned.LastPhaseTransition),
 			}); err != nil {
 				return work.Objective{}, err
 			}
@@ -104,6 +104,13 @@ func (s *Service) transitionObjectiveMutation(ctx context.Context, command Trans
 		return work.Objective{}, fmt.Errorf("transition objective: %w", err)
 	}
 	return transitioned, nil
+}
+
+// phaseTransitionPayload is the from/to/reason shape work-item status changes
+// already write, so every transition stays readable from the change feed.
+func phaseTransitionPayload(transition work.PhaseTransition) json.RawMessage {
+	payload, _ := json.Marshal(map[string]string{"from": string(transition.From), "to": string(transition.To), "reason": transition.Reason})
+	return payload
 }
 
 func (s *Service) recordContextMutation(ctx context.Context, command RecordContextCommand) (work.ContextRecord, error) {

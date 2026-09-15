@@ -91,7 +91,7 @@
     {
       "id": "objective",
       "name": "Objective",
-      "definition": "A durable goal that groups work items."
+      "definition": "A durable goal that groups work items. It carries the edge, reason, actor and time of its most recent phase transition."
     },
     {
       "id": "output_profile",
@@ -782,6 +782,10 @@
       "statement": "A work item cannot depend on itself; hard prerequisite cycles are rejected."
     },
     {
+      "id": "objective_phase_moves_explicitly",
+      "statement": "An objective changes phase only through an explicit transition with a recorded reason and actor; recording work against it never advances the phase, and objectives are not claimed or leased."
+    },
+    {
       "id": "optimistic_concurrency",
       "statement": "Mutations use expected_version and reject mismatches without overwriting current state."
     },
@@ -898,8 +902,8 @@
   "manifest": {
     "schema_version": "1.0",
     "model_version": "1.1.0",
-    "content_digest": "b3bb5e1cb99510306f96af31b7a4c4db09785e45acf3ff9f6ad07bdb69d32bfa",
-    "source_digest": "c950000ba61a0a02f5b61f218d807a78bd50f18c8b25435b6035136c366ef4c5",
+    "content_digest": "7fda05a8960d2224caf324449974afdb0582514f5d2d84b2562f1a1ce45131d7",
+    "source_digest": "ad42e9b5692bf7fabf17112f335a3bb4a54df0f0712df85342b5fff1db2cd9a2",
     "bootstrap": "Throughline is a local, authoritative coordination state layer for domain-neutral work. It records intent, plans, work, outputs, validation, reuse, and delegated authority; it does not orchestrate agents or perform external effects. Capability does not imply Authority. Call get_semantic_model for details.",
     "available_sections": [
       "manifest",
@@ -912,12 +916,12 @@
     ],
     "section_counts": {
       "entities": 26,
-      "invariants": 13,
+      "invariants": 14,
       "lifecycles": 11,
       "relations": 23,
       "source_mappings": 19
     }
   },
-  "content_digest": "b3bb5e1cb99510306f96af31b7a4c4db09785e45acf3ff9f6ad07bdb69d32bfa",
-  "source_digest": "c950000ba61a0a02f5b61f218d807a78bd50f18c8b25435b6035136c366ef4c5"
+  "content_digest": "7fda05a8960d2224caf324449974afdb0582514f5d2d84b2562f1a1ce45131d7",
+  "source_digest": "ad42e9b5692bf7fabf17112f335a3bb4a54df0f0712df85342b5fff1db2cd9a2"
 }

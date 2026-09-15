@@ -24,19 +24,30 @@ SELECT EXISTS(
 }
 
 func (r *transactionRepository) UpdateObjective(ctx context.Context, objective work.Objective, expectedVersion int) error {
+	arguments := []any{objective.Title, objective.Description, objective.DesiredOutcome, objective.Phase, nullableString(string(objective.PriorPhase)),
+		objective.Priority, objective.Appetite.Value, objective.Appetite.Unit, objective.Appetite.Basis}
+	arguments = append(arguments, phaseTransitionColumns(objective.LastPhaseTransition)...)
+	arguments = append(arguments, nullableString(objective.UpdatedBy), objective.Version, formatTime(objective.UpdatedAt), objective.ID, expectedVersion)
 	result, err := r.transaction.ExecContext(ctx, `
 UPDATE objectives
 SET title = ?, description = ?, desired_outcome = ?, phase = ?, prior_phase = ?, priority = ?,
-    appetite_value = ?, appetite_unit = ?, appetite_basis = ?, updated_by = ?, version = ?, updated_at = ?
-WHERE id = ? AND version = ?`,
-		objective.Title, objective.Description, objective.DesiredOutcome, objective.Phase, nullableString(string(objective.PriorPhase)),
-		objective.Priority, objective.Appetite.Value, objective.Appetite.Unit, objective.Appetite.Basis, nullableString(objective.UpdatedBy),
-		objective.Version, formatTime(objective.UpdatedAt), objective.ID, expectedVersion,
-	)
+    appetite_value = ?, appetite_unit = ?, appetite_basis = ?,
+    phase_transition_from = ?, phase_transition_to = ?, phase_transition_reason = ?, phase_transition_by = ?, phase_transition_at = ?,
+    updated_by = ?, version = ?, updated_at = ?
+WHERE id = ? AND version = ?`, arguments...)
 	if err != nil {
 		return fmt.Errorf("update objective phase: %w", err)
 	}
 	return requireChanged(result)
+}
+
+// phaseTransitionColumns are the stored form of an objective's latest phase
+// transition; all five are NULL until the objective is first transitioned.
+func phaseTransitionColumns(transition *work.PhaseTransition) []any {
+	if transition == nil {
+		return []any{nil, nil, nil, nil, nil}
+	}
+	return []any{string(transition.From), string(transition.To), transition.Reason, transition.ActorID, formatTime(transition.At)}
 }
 
 func (r *transactionRepository) CreateContextRecord(ctx context.Context, record work.ContextRecord) error {

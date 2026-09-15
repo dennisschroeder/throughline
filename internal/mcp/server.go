@@ -1350,7 +1350,9 @@ type objectiveSummary struct {
 	Title          string              `json:"title"`
 	Phase          work.ObjectivePhase `json:"phase"`
 	DesiredOutcome string              `json:"desired_outcome"`
-	ItemCounts     map[string]int      `json:"item_counts"`
+	// LastPhaseTransition says why the objective is in its phase, beside it.
+	LastPhaseTransition *work.PhaseTransition `json:"last_phase_transition"`
+	ItemCounts          map[string]int        `json:"item_counts"`
 }
 
 func (a *adapter) listObjectives(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
@@ -1379,7 +1381,7 @@ func (a *adapter) listObjectives(ctx context.Context, service *app.Service, raw 
 		}
 		summaries = append(summaries, objectiveSummary{
 			ID: objective.ID, Key: objective.Key, Title: objective.Title, Phase: objective.Phase,
-			DesiredOutcome: objective.DesiredOutcome, ItemCounts: byStatus,
+			DesiredOutcome: objective.DesiredOutcome, LastPhaseTransition: objective.LastPhaseTransition, ItemCounts: byStatus,
 		})
 	}
 	return summaries, nil

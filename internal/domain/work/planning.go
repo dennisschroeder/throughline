@@ -140,9 +140,14 @@ func validContextStatus(kind ContextKind, status ContextStatus) bool {
 	}
 }
 
-func TransitionObjective(objective Objective, target ObjectivePhase, reason string, now time.Time) (Objective, error) {
-	if strings.TrimSpace(reason) == "" {
+func TransitionObjective(objective Objective, target ObjectivePhase, reason, actorID string, now time.Time) (Objective, error) {
+	reason = strings.TrimSpace(reason)
+	actorID = strings.TrimSpace(actorID)
+	if reason == "" {
 		return Objective{}, errors.New("objective transition requires a reason")
+	}
+	if actorID == "" {
+		return Objective{}, errors.New("objective transition requires an actor")
 	}
 	if !validObjectiveTransition(objective, target) {
 		return Objective{}, fmt.Errorf("objective cannot transition from %q to %q", objective.Phase, target)
@@ -152,7 +157,9 @@ func TransitionObjective(objective Objective, target ObjectivePhase, reason stri
 	} else if objective.Phase == ObjectivePaused {
 		objective.PriorPhase = ""
 	}
+	objective.LastPhaseTransition = &PhaseTransition{From: objective.Phase, To: target, Reason: reason, ActorID: actorID, At: now.UTC()}
 	objective.Phase = target
+	objective.UpdatedBy = actorID
 	objective.Version++
 	objective.UpdatedAt = now.UTC()
 	return objective, nil

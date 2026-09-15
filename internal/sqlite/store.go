@@ -435,7 +435,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 // the ready-work join, which previously listed its own columns and silently
 // stopped reading fields added later.
 var objectiveColumns = []string{"id", "key", "title", "description", "desired_outcome", "phase", "prior_phase", "priority",
-	"appetite_value", "appetite_unit", "appetite_basis", "updated_by", "version", "created_at", "updated_at"}
+	"appetite_value", "appetite_unit", "appetite_basis", "phase_transition_from", "phase_transition_to", "phase_transition_reason",
+	"phase_transition_by", "phase_transition_at", "updated_by", "version", "created_at", "updated_at"}
 
 var workItemColumns = []string{"id", "key", "objective_id", "plan_id", "parent_id", "title", "description", "kind", "commitment_state",
 	"execution_status", "priority", "estimated_scope", "measure_value", "measure_unit", "measure_basis",
@@ -477,14 +478,25 @@ func scanObjective(row scanner) (work.Objective, error) {
 // order, and the conversion to run once they are filled.
 func objectiveScanTargets(objective *work.Objective) ([]any, func() error) {
 	var createdAt, updatedAt, appetiteBasis string
-	var priorPhase, updatedBy sql.NullString
+	var priorPhase, updatedBy, transitionFrom, transitionTo, transitionReason, transitionBy, transitionAt sql.NullString
 	targets := []any{
 		&objective.ID, &objective.Key, &objective.Title, &objective.Description, &objective.DesiredOutcome,
 		&objective.Phase, &priorPhase, &objective.Priority, &objective.Appetite.Value, &objective.Appetite.Unit,
-		&appetiteBasis, &updatedBy, &objective.Version, &createdAt, &updatedAt,
+		&appetiteBasis, &transitionFrom, &transitionTo, &transitionReason, &transitionBy, &transitionAt,
+		&updatedBy, &objective.Version, &createdAt, &updatedAt,
 	}
 	return targets, func() error {
 		objective.Appetite.Basis = work.MeasureBasis(appetiteBasis)
+		if transitionAt.Valid {
+			at, err := parseTime(transitionAt.String)
+			if err != nil {
+				return err
+			}
+			objective.LastPhaseTransition = &work.PhaseTransition{
+				From: work.ObjectivePhase(transitionFrom.String), To: work.ObjectivePhase(transitionTo.String),
+				Reason: transitionReason.String, ActorID: transitionBy.String, At: at,
+			}
+		}
 		objective.PriorPhase = work.ObjectivePhase(priorPhase.String)
 		objective.UpdatedBy = updatedBy.String
 		var err error

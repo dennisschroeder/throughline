@@ -98,21 +98,21 @@ func TestObjectivePhaseTransitionPausesAndResumesPriorPhase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	paused, err := TransitionObjective(objective, ObjectivePaused, "Awaiting sponsor review.", now.Add(time.Hour))
+	paused, err := TransitionObjective(objective, ObjectivePaused, "Awaiting sponsor review.", "human:sponsor", now.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if paused.PriorPhase != ObjectivePlanning || paused.Version != 2 {
 		t.Fatalf("unexpected paused objective: %#v", paused)
 	}
-	resumed, err := TransitionObjective(paused, ObjectivePlanning, "Sponsor review completed.", now.Add(2*time.Hour))
+	resumed, err := TransitionObjective(paused, ObjectivePlanning, "Sponsor review completed.", "human:sponsor", now.Add(2*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resumed.Phase != ObjectivePlanning || resumed.PriorPhase != "" || resumed.Version != 3 {
 		t.Fatalf("unexpected resumed objective: %#v", resumed)
 	}
-	if _, err := TransitionObjective(objective, ObjectiveCompleted, "skip", now.Add(time.Hour)); err == nil {
+	if _, err := TransitionObjective(objective, ObjectiveCompleted, "skip", "human:sponsor", now.Add(time.Hour)); err == nil {
 		t.Fatal("expected invalid phase skip to be rejected")
 	}
 }
@@ -351,5 +351,24 @@ func TestQuestionDecodesRecordsStoredBeforeAttentionState(t *testing.T) {
 	}
 	if roundTrip.AttentionState != AttentionNeedsClarification || roundTrip.Status != QuestionUnsharp || len(roundTrip.BlocksWorkItems) != 1 {
 		t.Fatalf("round trip = %#v", roundTrip)
+	}
+}
+
+func TestTransitionObjectiveRecordsItsEdgeReasonAndActor(t *testing.T) {
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.FixedZone("test", 3600))
+	objective := Objective{ID: "o", Key: "OBJ", Title: "T", Phase: ObjectiveIdea, Priority: PriorityMedium, Version: 1}
+	if _, err := TransitionObjective(objective, ObjectiveDiscovery, "Worth exploring.", " ", now); err == nil {
+		t.Fatal("a transition without an actor was accepted")
+	}
+	transitioned, err := TransitionObjective(objective, ObjectiveDiscovery, " Worth exploring. ", " human:owner ", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := PhaseTransition{From: ObjectiveIdea, To: ObjectiveDiscovery, Reason: "Worth exploring.", ActorID: "human:owner", At: now.UTC()}
+	if transitioned.LastPhaseTransition == nil || *transitioned.LastPhaseTransition != want || transitioned.UpdatedBy != "human:owner" {
+		t.Fatalf("transition = %#v, updated by %q; want %#v", transitioned.LastPhaseTransition, transitioned.UpdatedBy, want)
+	}
+	if objective.LastPhaseTransition != nil {
+		t.Fatal("the original objective was modified")
 	}
 }
