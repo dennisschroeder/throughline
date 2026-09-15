@@ -286,8 +286,16 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 				if err != nil {
 					return work.WorkItem{}, err
 				}
+				flag, err := reviewRequirementChangeNeedsAttention(ctx, repository, item, requirements)
+				if err != nil {
+					return work.WorkItem{}, err
+				}
 				item.ReviewRequirements = requirements
 				changes = append(changes, "review requirements")
+				if flag && command.AttentionState == nil && item.AttentionState == work.AttentionNone {
+					item.AttentionState = work.AttentionNeedsHumanReview
+					changes = append(changes, "attention state")
+				}
 			}
 			seenCriteria := make(map[string]bool, len(command.AcceptanceCriterionResolutions))
 			waivedRequired := false
@@ -466,6 +474,37 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 
 func patchWorkItemHasChanges(command PatchWorkItemCommand) bool {
 	return command.Title != nil || command.Description != nil || command.ParentID != nil || command.Priority != nil || command.EstimatedScope != nil || command.Measure != nil || command.ExecutionPolicy != nil || command.AttentionState != nil || command.RequiredCapabilities != nil || command.ReviewRequirements != nil || len(command.AcceptanceCriterionResolutions) > 0 || len(command.AcceptanceCriteriaToAdd) > 0 || len(command.ExpectedOutputsToAdd) > 0
+}
+
+// reviewRequirementChangeNeedsAttention mirrors what waiving or adding a
+// required acceptance criterion does. Dropping a review that was not satisfied
+// lets done through without it, and declaring a new review on work already
+// done leaves a finished item with an unmet gate; either passes silently
+// unless someone is told.
+func reviewRequirementChangeNeedsAttention(ctx context.Context, repository ports.Repository, item work.WorkItem, next []work.ReviewRequirement) (bool, error) {
+	kept := make(map[work.ReviewRequirement]bool, len(next))
+	for _, requirement := range next {
+		kept[requirement] = true
+	}
+	current, err := repository.ReviewEvidence(ctx, item)
+	if err != nil {
+		return false, err
+	}
+	declared := make(map[work.ReviewRequirement]bool, len(current))
+	for _, evidence := range current {
+		declared[evidence.Requirement] = true
+		if !kept[evidence.Requirement] && evidence.State != work.ReviewEvidenceSatisfied {
+			return true, nil
+		}
+	}
+	if item.ExecutionStatus == work.StatusDone {
+		for _, requirement := range next {
+			if !declared[requirement] {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func normalizedCapabilities(capabilities []string) ([]string, error) {

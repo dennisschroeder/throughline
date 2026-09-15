@@ -499,3 +499,138 @@ func TestReadyWorkCarriesEveryObjectiveAndItemField(t *testing.T) {
 	}
 	t.Fatalf("item-a is not ready: %#v", ready)
 }
+
+// TestChangingReviewRequirementsRaisesAttentionWhenItHidesAnUnmetReview
+// mirrors the rule for waiving or adding a required acceptance criterion:
+// dropping a review that was not satisfied, or declaring one on work already
+// done, flags the item for a person instead of passing silently.
+func TestChangingReviewRequirementsRaisesAttentionWhenItHidesAnUnmetReview(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "review-attention.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	seedExecutableItems(t, ctx, database, "item-failed", "item-passed", "item-done", "item-open")
+	service := app.NewService(database.Store(), &testIDs{}, testClock{})
+	patch := func(id, key string, requirements []work.ReviewRequirement) work.WorkItem {
+		t.Helper()
+		item, err := service.GetWorkItem(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		patched, err := app.UnwrapMutation(service.PatchWorkItem(ctx, app.PatchWorkItemCommand{WorkItemID: id, ActorID: "human:owner", ExpectedVersion: item.WorkItem.Version, IdempotencyKey: key, ReviewRequirements: &requirements}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return patched
+	}
+	review := func(id string, verdict output.ValidationVerdict) {
+		t.Helper()
+		if _, err := service.RecordWorkItemValidation(ctx, app.RecordWorkItemValidationCommand{WorkItemID: id, CriterionRef: "design", ValidatorKind: output.ValidatorProbe, Verdict: verdict, VerifierActorID: "human:owner", IdempotencyKey: "review-" + id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	declared := []work.ReviewRequirement{{CriterionRef: "design", ValidatorKind: "probe"}}
+
+	patch("item-failed", "declare-failed", declared)
+	review("item-failed", output.VerdictFailed)
+	if cleared := patch("item-failed", "clear-failed", nil); cleared.AttentionState != work.AttentionNeedsHumanReview {
+		t.Fatalf("dropping a failed review requirement left attention %s", cleared.AttentionState)
+	}
+
+	patch("item-passed", "declare-passed", declared)
+	review("item-passed", output.VerdictPassed)
+	if cleared := patch("item-passed", "clear-passed", nil); cleared.AttentionState != work.AttentionNone {
+		t.Fatalf("dropping a satisfied review requirement raised attention %s", cleared.AttentionState)
+	}
+
+	if _, err := database.db.ExecContext(ctx, "UPDATE work_items SET execution_status = 'done' WHERE id = 'item-done'"); err != nil {
+		t.Fatal(err)
+	}
+	if added := patch("item-done", "declare-done", declared); added.AttentionState != work.AttentionNeedsHumanReview {
+		t.Fatalf("declaring a review on a done item left attention %s", added.AttentionState)
+	}
+	if added := patch("item-open", "declare-open", declared); added.AttentionState != work.AttentionNone {
+		t.Fatalf("declaring a review on open work raised attention %s", added.AttentionState)
+	}
+}
+
+// TestWorkOnAnotherItemDoesNotStaleAReview keeps staleness to the reviewed
+// item: progress recorded elsewhere says nothing about this item's work.
+func TestWorkOnAnotherItemDoesNotStaleAReview(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "review-isolation.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	seedExecutableItems(t, ctx, database, "item-a", "item-b")
+	service := app.NewService(database.Store(), &testIDs{}, testClock{})
+	requirements := []work.ReviewRequirement{{CriterionRef: "design", ValidatorKind: "probe"}}
+	if _, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{WorkItemID: "item-a", ActorID: "human:owner", ExpectedVersion: 1, IdempotencyKey: "declare", ReviewRequirements: &requirements}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RecordWorkItemValidation(ctx, app.RecordWorkItemValidationCommand{WorkItemID: "item-a", CriterionRef: "design", ValidatorKind: output.ValidatorProbe, Verdict: output.VerdictPassed, VerifierActorID: "human:owner", IdempotencyKey: "review"}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := app.UnwrapMutation(service.ClaimWorkItem(ctx, app.ClaimWorkItemCommand{WorkItemID: "item-b", ActorID: "human:owner", ExpectedVersion: 1, IdempotencyKey: "claim-b", LeaseDuration: time.Hour, TransitionToInProgress: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AppendProgress(ctx, app.AppendProgressCommand{WorkItemID: "item-b", ActorID: "human:owner", ExpectedVersion: claimed.WorkItem.Version, IdempotencyKey: "progress-b", Summary: "Unrelated work."}); err != nil {
+		t.Fatal(err)
+	}
+	item, err := service.GetWorkItem(ctx, "item-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(item.ReviewEvidence) != 1 || item.ReviewEvidence[0].State != work.ReviewEvidenceSatisfied {
+		t.Fatalf("item-a review after work on item-b = %#v, want satisfied", item.ReviewEvidence)
+	}
+}
+
+// TestOutputRevisionValidationKeepsItsDegradedFlag covers the other subject:
+// any validation may be marked degraded, not only a work-item review.
+func TestOutputRevisionValidationKeepsItsDegradedFlag(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "output-degraded.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	seedExecutableItems(t, ctx, database, "item-a")
+	service := app.NewService(database.Store(), &testIDs{}, testClock{})
+	if _, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{WorkItemID: "item-a", ActorID: "human:owner", ExpectedVersion: 1, IdempotencyKey: "output",
+		ExpectedOutputsToAdd: []app.ProposedExpectedOutput{{Name: "Doc", ProfileName: "structured_document", ProfileVersion: 1, Required: true, Ordinal: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	item, err := service.GetWorkItem(ctx, "item-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := app.UnwrapMutation(service.CreateOutputRevision(ctx, app.CreateOutputRevisionCommand{ExpectedOutputID: item.ExpectedOutputs[0].ExpectedOutput.ID, ActorID: "human:owner", IdempotencyKey: "revision",
+		Artifacts: []app.OutputArtifactInput{{Kind: "document", URI: "workspace:doc.md", Role: "primary"}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RecordValidation(ctx, app.RecordValidationCommand{OutputRevisionID: revision.ID, CriterionRef: "structure", ValidatorKind: output.ValidatorStructure, Verdict: output.VerdictPassed, VerifierActorID: "agent:validator", Degraded: true, IdempotencyKey: "validate"}); err != nil {
+		t.Fatal(err)
+	}
+	item, err = service.GetWorkItem(ctx, "item-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(item.OutputRevisions) != 1 || len(item.OutputRevisions[0].Validations) != 1 || !item.OutputRevisions[0].Validations[0].Degraded {
+		t.Fatalf("output revision validations = %#v, want one degraded record", item.OutputRevisions)
+	}
+}
