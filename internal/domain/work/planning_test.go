@@ -112,6 +112,10 @@ func TestObjectivePhaseTransitionPausesAndResumesPriorPhase(t *testing.T) {
 	if resumed.Phase != ObjectivePlanning || resumed.PriorPhase != "" || resumed.Version != 3 {
 		t.Fatalf("unexpected resumed objective: %#v", resumed)
 	}
+	if paused.LastPhaseTransition.From != ObjectivePlanning || paused.LastPhaseTransition.To != ObjectivePaused ||
+		resumed.LastPhaseTransition.From != ObjectivePaused || resumed.LastPhaseTransition.To != ObjectivePlanning {
+		t.Fatalf("pause and resume edges = %#v then %#v", paused.LastPhaseTransition, resumed.LastPhaseTransition)
+	}
 	if _, err := TransitionObjective(objective, ObjectiveCompleted, "skip", "human:sponsor", now.Add(time.Hour)); err == nil {
 		t.Fatal("expected invalid phase skip to be rejected")
 	}

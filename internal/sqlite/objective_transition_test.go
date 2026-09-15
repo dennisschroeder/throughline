@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/dennisschroeder/throughline/internal/app"
 	"github.com/dennisschroeder/throughline/internal/domain/work"
@@ -25,7 +26,8 @@ func TestObjectivePhaseTransitionReasonSurvivesRestart(t *testing.T) {
 	if err := database.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	service := app.NewService(database.Store(), &testIDs{}, testClock{})
+	clock := &advancingClock{now: time.Date(2026, 9, 15, 9, 0, 0, 0, time.UTC)}
+	service := app.NewService(database.Store(), &testIDs{}, clock)
 	objective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{
 		ActorID: "human:owner", IdempotencyKey: "objective", Key: "OBJ-WHY", Title: "Explains its phase", DesiredOutcome: "The reason is kept.", Phase: work.ObjectiveIdea,
 	}))
@@ -41,6 +43,8 @@ func TestObjectivePhaseTransitionReasonSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	clock.now = clock.now.Add(time.Hour)
+	transitionedAt := clock.now
 	planning, err := app.UnwrapMutation(service.TransitionObjective(ctx, app.TransitionObjectiveCommand{
 		ObjectiveID: objective.ID, TargetPhase: work.ObjectivePlanning, ActorID: "agent:planner", Reason: "No open question changes the plan's shape.", ExpectedVersion: discovery.Version, IdempotencyKey: "to-planning",
 	}))
@@ -52,6 +56,8 @@ func TestObjectivePhaseTransitionReasonSurvivesRestart(t *testing.T) {
 	}); err == nil {
 		t.Fatal("entering execution without an approved plan was accepted")
 	}
+	// A later patch must keep the transition's time, not take the patch's.
+	clock.now = clock.now.Add(time.Hour)
 	title := "Still explains its phase"
 	if _, err := service.PatchObjective(ctx, app.PatchObjectiveCommand{ObjectiveID: objective.ID, ActorID: "human:owner", IdempotencyKey: "rename", ExpectedVersion: planning.Version, Title: &title}); err != nil {
 		t.Fatal(err)
@@ -75,7 +81,7 @@ func TestObjectivePhaseTransitionReasonSurvivesRestart(t *testing.T) {
 	}
 	transition := objectiveContext.Objective.LastPhaseTransition
 	if transition == nil || transition.From != work.ObjectiveDiscovery || transition.To != work.ObjectivePlanning ||
-		transition.Reason != "No open question changes the plan's shape." || transition.ActorID != "agent:planner" || !transition.At.Equal(testClock{}.Now().UTC()) {
+		transition.Reason != "No open question changes the plan's shape." || transition.ActorID != "agent:planner" || !transition.At.Equal(transitionedAt) {
 		t.Fatalf("latest transition after reopening = %#v", transition)
 	}
 	if objectiveContext.Objective.Phase != work.ObjectivePlanning || objectiveContext.Objective.Title != title {
@@ -100,7 +106,7 @@ func TestObjectivePhaseTransitionReasonSurvivesRestart(t *testing.T) {
 	}
 	if len(history) != 2 ||
 		history[0]["from"] != "idea" || history[0]["to"] != "discovery" || history[0]["reason"] != "The idea survived the first exchange." || history[0]["actor"] != "human:owner" ||
-		history[1]["from"] != "discovery" || history[1]["to"] != "planning" || history[1]["actor"] != "agent:planner" {
+		history[1]["from"] != "discovery" || history[1]["to"] != "planning" || history[1]["reason"] != "No open question changes the plan's shape." || history[1]["actor"] != "agent:planner" {
 		t.Fatalf("phase history in the feed = %#v, want both transitions and not the refused one", history)
 	}
 }
@@ -196,3 +202,9 @@ func TestMigration0017LeavesEarlierObjectivesWithoutATransition(t *testing.T) {
 		t.Fatalf("first transition after migrating = %#v", resumed.LastPhaseTransition)
 	}
 }
+
+type advancingClock struct {
+	now time.Time
+}
+
+func (clock *advancingClock) Now() time.Time { return clock.now }

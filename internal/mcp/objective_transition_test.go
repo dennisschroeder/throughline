@@ -46,7 +46,8 @@ func TestObjectiveTransitionReasonOverTheWire(t *testing.T) {
 	check := func(source string, transition any) {
 		t.Helper()
 		fields, _ := transition.(map[string]any)
-		if fields["from"] != "idea" || fields["to"] != "discovery" || fields["reason"] != "Worth a first look." || fields["actor_id"] != "human:owner" || fields["at"] == nil {
+		at, _ := fields["at"].(string)
+		if fields["from"] != "idea" || fields["to"] != "discovery" || fields["reason"] != "Worth a first look." || fields["actor_id"] != "human:owner" || !strings.HasSuffix(at, "Z") {
 			t.Fatalf("%s last_phase_transition = %#v", source, transition)
 		}
 	}
