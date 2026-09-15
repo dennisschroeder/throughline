@@ -114,6 +114,6 @@
     {"id":"migration_objective_phase_transition","path":"internal/sqlite/migrations/0017_objective_phase_transition.sql","symbol":"ALTER TABLE objectives ADD COLUMN phase_transition_from"},
     {"id":"work_review_evidence","path":"internal/domain/work/review.go","symbol":"EvaluateReviewEvidence"},
     {"id":"mutation_effects","path":"internal/sqlite/effects.go","symbol":"effectTables"},
-    {"id":"capability_grant_cli","path":"internal/cli/cli.go","symbol":"runCapabilityGrant"}
+    {"id":"capability_grant_cli","path":"internal/cli/capability.go","symbol":"runCapabilityGrant"}
   ]
 }

@@ -219,3 +219,101 @@ func TestCapabilityGrantWaitsOutAWriterHoldingTheLock(t *testing.T) {
 		t.Fatalf("grant while another writer held the lock = exit %d, %q", code, stderr.String())
 	}
 }
+
+// TestCapabilityGrantRetryOnlyForTheLockAndWithinItsBudget pins the edges of
+// the busy retry: an error whose text merely contains SQLITE_BUSY is not a
+// lock, an exhausted budget and a cancelled context each say what happened,
+// and a human can grant twice in a row.
+func TestCapabilityGrantRetryOnlyForTheLockAndWithinItsBudget(t *testing.T) {
+	root, workspace := initWorkspaceWithActors(t)
+	ctx := context.Background()
+	database, err := throughlinesqlite.Open(ctx, workspace.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := app.NewService(database.Store(), app.UUIDv7Generator{}, app.SystemClock{})
+	if _, err := service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: "agent:SQLITE_BUSY", Kind: work.ActorTypeAgent, DisplayName: "Tricky"}, IdempotencyKey: "tricky"}); err != nil {
+		t.Fatal(err)
+	}
+	database.Close()
+	grant := func(runCtx context.Context, capability, granter string) (int, string, time.Duration) {
+		var stdout, stderr bytes.Buffer
+		started := time.Now()
+		code := Run(runCtx, []string{"capability", "grant", "--actor", "agent:worker", "--capability", capability, "--as", granter, root}, &stdout, &stderr)
+		return code, stderr.String(), time.Since(started)
+	}
+
+	if code, stderr, took := grant(ctx, "web_research", "agent:SQLITE_BUSY"); code == 0 || strings.Contains(stderr, "stayed locked") || took > 2*time.Second {
+		t.Fatalf("grant refused for a non-human whose id contains SQLITE_BUSY = exit %d after %s, %q; want an immediate refusal, not a lock retry", code, took, stderr)
+	}
+	if code, stderr, _ := grant(ctx, "web_research", "human:dennis"); code != 0 {
+		t.Fatalf("first grant = exit %d, %q", code, stderr)
+	}
+	if code, stderr, _ := grant(ctx, "citations", "human:dennis"); code != 0 || !capabilityHeld(t, workspace, "agent:worker", "citations") {
+		t.Fatalf("second grant by the same human = exit %d, %q", code, stderr)
+	}
+
+	holder, err := sql.Open("sqlite", workspace.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	holder.SetMaxOpenConns(1)
+	transaction, err := holder.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transaction.Rollback()
+	if _, err := transaction.Exec("UPDATE actors SET display_name = display_name WHERE id = 'human:dennis'"); err != nil {
+		t.Fatal(err)
+	}
+
+	previousRetries, previousBackoff := capabilityGrantBusyRetries, capabilityGrantBusyBackoff
+	t.Cleanup(func() { capabilityGrantBusyRetries, capabilityGrantBusyBackoff = previousRetries, previousBackoff })
+	capabilityGrantBusyRetries, capabilityGrantBusyBackoff = 2, 10*time.Millisecond
+	if code, stderr, _ := grant(ctx, "summaries", "human:dennis"); code == 0 || !strings.Contains(stderr, "stayed locked by another writer") {
+		t.Fatalf("grant after exhausting the retry budget = exit %d, %q", code, stderr)
+	}
+
+	capabilityGrantBusyRetries, capabilityGrantBusyBackoff = 1000, 50*time.Millisecond
+	cancelled, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+	if code, stderr, _ := grant(cancelled, "summaries", "human:dennis"); code == 0 || !strings.Contains(stderr, "interrupted while the workspace database was locked") {
+		t.Fatalf("grant cancelled during the retry = exit %d, %q", code, stderr)
+	}
+}
+
+// TestDoctorReportsASchemaBehindTheBinary makes the grant's remediation
+// discoverable before anyone runs the grant.
+func TestDoctorReportsASchemaBehindTheBinary(t *testing.T) {
+	root, workspace := initWorkspaceWithActors(t)
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previousWD) })
+	doctor := func() string {
+		var stdout, stderr bytes.Buffer
+		if code := Run(context.Background(), []string{"doctor", "--addr", "127.0.0.1:1"}, &stdout, &stderr); code != 0 {
+			t.Fatalf("doctor exited %d: %s", code, stderr.String())
+		}
+		return stdout.String()
+	}
+	if out := doctor(); !strings.Contains(out, "schema: current") {
+		t.Fatalf("doctor on a current workspace = %q", out)
+	}
+	db, err := sql.Open("sqlite", workspace.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("DELETE FROM schema_migrations WHERE version = (SELECT MAX(version) FROM schema_migrations)"); err != nil {
+		t.Fatal(err)
+	}
+	if out := doctor(); !strings.Contains(out, "schema: workspace database schema does not match") || !strings.Contains(out, "throughline daemon restart") {
+		t.Fatalf("doctor on a workspace behind the binary = %q", out)
+	}
+}

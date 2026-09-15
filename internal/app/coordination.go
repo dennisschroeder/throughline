@@ -143,7 +143,7 @@ func (s *Service) assignActorCapabilityMutation(ctx context.Context, command Ass
 			// An agent required to hold a capability must not be able to grant it to
 			// itself, or the requirement enforces nothing.
 			if granter.Kind != work.ActorTypeHuman {
-				return ActorCapability{}, fmt.Errorf("capability %s can only be granted by a registered human actor; %s is a %s", capability.Slug, granter.ID, granter.Kind)
+				return ActorCapability{}, fmt.Errorf("capability %s can only be granted by a registered human actor; %s has kind %s", capability.Slug, granter.ID, granter.Kind)
 			}
 			if err := repository.CreateCapability(ctx, capability); err != nil {
 				return ActorCapability{}, err

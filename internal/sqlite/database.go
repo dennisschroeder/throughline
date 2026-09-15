@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 const busyTimeoutMilliseconds = 5000
@@ -101,4 +101,12 @@ func ensurePermissions(path string) error {
 
 func (d *Database) Close() error {
 	return d.db.Close()
+}
+
+// IsBusy reports whether err is SQLite refusing a write because another
+// connection holds the lock. It reads the result code rather than the text,
+// which can contain stored data such as an actor id.
+func IsBusy(err error) bool {
+	var sqliteError *sqlite.Error
+	return errors.As(err, &sqliteError) && sqliteError.Code()&0xff == 5
 }
