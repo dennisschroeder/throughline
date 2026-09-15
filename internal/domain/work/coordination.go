@@ -439,9 +439,12 @@ type ClaimGateFacts struct {
 	HasOpenBlocker              bool
 	OutputRequirementsSatisfied bool
 	CapabilitiesSatisfied       bool
-	ApprovalSatisfied           bool
-	ActiveClaim                 *Claim
-	Now                         time.Time
+	// MissingCapabilities names what the actor lacks, so the rejection can say
+	// exactly what to grant and how.
+	MissingCapabilities []string
+	ApprovalSatisfied   bool
+	ActiveClaim         *Claim
+	Now                 time.Time
 }
 
 func EvaluateClaimGate(facts ClaimGateFacts) []ClaimRequirement {
@@ -459,7 +462,7 @@ func EvaluateClaimGate(facts ClaimGateFacts) []ClaimRequirement {
 		{ClaimRequirementNoBlockers, !facts.HasOpenBlocker, "work item has an open blocker"},
 		{ClaimRequirementOutputRequirements, facts.OutputRequirementsSatisfied, "output requirements are not satisfied"},
 		{ClaimRequirementActorKind, actorMatchesRequiredKind(facts.Actor.Kind, facts.RequiredActorKind), "actor kind is not eligible"},
-		{ClaimRequirementCapabilities, facts.CapabilitiesSatisfied, "actor does not satisfy required capabilities"},
+		{ClaimRequirementCapabilities, facts.CapabilitiesSatisfied, missingCapabilitiesMessage(facts.Actor.ID, facts.MissingCapabilities)},
 	} {
 		if !requirement.satisfied {
 			requirements = append(requirements, ClaimRequirement{requirement.code, requirement.message})
@@ -488,4 +491,19 @@ func actorMatchesRequiredKind(actorKind ActorType, requiredKind ActorKind) bool 
 	default:
 		return false
 	}
+}
+
+// missingCapabilitiesMessage gives the remediation with the rejection. Without
+// it the reachable workaround is clearing the requirement from the item, which
+// silently weakens a plan a human approved.
+func missingCapabilitiesMessage(actorID string, missing []string) string {
+	if len(missing) == 0 {
+		return "actor does not satisfy required capabilities"
+	}
+	commands := make([]string, 0, len(missing))
+	for _, capability := range missing {
+		commands = append(commands, fmt.Sprintf("throughline capability grant --actor %s --capability %s --as <human-actor-id>", actorID, capability))
+	}
+	return fmt.Sprintf("actor %s lacks required capabilities %s; a registered human can grant them with: %s",
+		actorID, strings.Join(missing, ", "), strings.Join(commands, " && "))
 }

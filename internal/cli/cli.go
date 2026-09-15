@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	protocol "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -65,6 +66,16 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "init":
 		if err := runInit(ctx, args[1:], stdout, stderr); err != nil {
 			fmt.Fprintf(stderr, "throughline init: %v\n", err)
+			return 1
+		}
+		return 0
+	case "capability":
+		if len(args) < 2 || args[1] != "grant" {
+			fmt.Fprintln(stderr, "usage: throughline capability grant --actor <actor-id> --capability <slug> --as <human-actor-id> [--description <text>] [workspace directory]")
+			return 2
+		}
+		if err := runCapabilityGrant(ctx, args[2:], stdout, stderr); err != nil {
+			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		return 0
@@ -768,6 +779,56 @@ func fetchHealth(ctx context.Context, addr string) (daemonhttp.HealthResponse, e
 // other MCP client would. Neither opens a workspace database, a registry, or any other
 // storage directly — domain-facing CLI commands are daemon clients, never provider
 // instantiators, per the accepted decision.
+// runCapabilityGrant assigns a capability as a human principal. It is a CLI
+// command and deliberately not an MCP tool: over MCP the only principal is the
+// agent itself, which could then grant itself whatever a claim requires. It
+// opens the workspace database directly and never migrates it; only the
+// daemon migrates, so a schema mismatch fails with the update-and-restart
+// remediation instead.
+func runCapabilityGrant(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("capability grant", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	actorID := flags.String("actor", "", "actor_id that receives the capability (required)")
+	slug := flags.String("capability", "", "capability slug to grant (required)")
+	granter := flags.String("as", "", "registered human actor_id granting it (required)")
+	description := flags.String("description", "", "description recorded for a capability that does not exist yet")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() > 1 {
+		return errors.New("expected at most one workspace directory")
+	}
+	if strings.TrimSpace(*actorID) == "" || strings.TrimSpace(*slug) == "" || strings.TrimSpace(*granter) == "" {
+		return errors.New("--actor, --capability and --as are required")
+	}
+	workspace, err := findWorkspace(optionalDirectory(flags.Args()))
+	if err != nil {
+		return err
+	}
+	database, err := throughlinesqlite.Open(ctx, workspace.DatabasePath)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+	if err := database.CheckSchemaCurrent(ctx); err != nil {
+		return err
+	}
+	ids := app.UUIDv7Generator{}
+	key, err := ids.New()
+	if err != nil {
+		return fmt.Errorf("generate idempotency key: %w", err)
+	}
+	service := app.NewService(database.Store(), ids, app.SystemClock{})
+	granted, err := app.UnwrapMutation(service.AssignActorCapability(ctx, app.AssignActorCapabilityCommand{
+		ActorID: *actorID, Capability: *slug, Description: *description, GrantedBy: *granter, IdempotencyKey: "cli-capability-grant-" + key,
+	}))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "granted capability %s to %s as %s\n", granted.Capability.Slug, granted.ActorID, strings.TrimSpace(*granter))
+	return nil
+}
+
 func runReady(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("ready", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -1065,5 +1126,5 @@ func runUnregister(ctx context.Context, args []string, stdout, stderr io.Writer)
 }
 
 func writeUsage(writer io.Writer) {
-	fmt.Fprintln(writer, "usage: throughline <init|unregister|setup|uninstall|ready|show|mcp|doctor|daemon <start|stop|restart|status|logs|rotate-credential>|version> [arguments]")
+	fmt.Fprintln(writer, "usage: throughline <init|unregister|setup|uninstall|ready|show|capability grant|mcp|doctor|daemon <start|stop|restart|status|logs|rotate-credential>|version> [arguments]")
 }

@@ -27,7 +27,7 @@ func TestCanonicalModelIncludesAllCoreCoordinationConcepts(t *testing.T) {
 			t.Fatalf("canonical model omits core concept %q", id)
 		}
 	}
-	if generated.ModelVersion != "1.1.0" {
-		t.Fatalf("semantic model version = %q, want 1.1.0", generated.ModelVersion)
+	if generated.ModelVersion != "1.2.0" {
+		t.Fatalf("semantic model version = %q, want 1.2.0", generated.ModelVersion)
 	}
 }

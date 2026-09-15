@@ -753,3 +753,49 @@ func TestReviewRequirementDeclarationsAreCheckedAndAttentionIsNotOverridden(t *t
 		t.Fatal("a review requirement naming an unsupported validator kind, which no record could ever match, was accepted")
 	}
 }
+
+// TestCapabilityRejectionNamesTheGrantCommand binds the remediation into the
+// claim error, as decision 01a07208 requires: without it the reachable
+// workaround is clearing the requirement from the item.
+func TestCapabilityRejectionNamesTheGrantCommand(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "capability-claim.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	seedExecutableItems(t, ctx, database, "item-a")
+	service := app.NewService(database.Store(), &testIDs{}, testClock{})
+	if _, err := service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: "agent:worker", Kind: work.ActorTypeAgent, DisplayName: "Worker"}, IdempotencyKey: "worker"}); err != nil {
+		t.Fatal(err)
+	}
+	capabilities := []string{"web_research", "citations"}
+	patched, err := app.UnwrapMutation(service.PatchWorkItem(ctx, app.PatchWorkItemCommand{WorkItemID: "item-a", ActorID: "human:owner", ExpectedVersion: 1, IdempotencyKey: "require", RequiredCapabilities: &capabilities}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AssignActorCapability(ctx, app.AssignActorCapabilityCommand{ActorID: "agent:worker", Capability: "citations", GrantedBy: "human:owner", IdempotencyKey: "grant-citations"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AssignActorCapability(ctx, app.AssignActorCapabilityCommand{ActorID: "agent:worker", Capability: "web_research", GrantedBy: "agent:worker", IdempotencyKey: "self-grant"}); err == nil {
+		t.Fatal("an agent granted itself a capability")
+	}
+	_, err = service.ClaimWorkItem(ctx, app.ClaimWorkItemCommand{WorkItemID: "item-a", ActorID: "agent:worker", ExpectedVersion: patched.Version, IdempotencyKey: "claim", LeaseDuration: time.Hour})
+	var gate app.ClaimGateError
+	if !errors.As(err, &gate) {
+		t.Fatalf("claim without capabilities = %v", err)
+	}
+	var message string
+	for _, requirement := range gate.Requirements {
+		if requirement.Code == work.ClaimRequirementCapabilities {
+			message = requirement.Message
+		}
+	}
+	want := "throughline capability grant --actor agent:worker --capability web_research --as <human-actor-id>"
+	if !strings.Contains(message, want) || strings.Contains(message, "--capability citations") {
+		t.Fatalf("capability rejection = %q, want only the missing web_research grant command", message)
+	}
+}

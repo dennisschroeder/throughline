@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "model_version": "1.1.0",
+  "model_version": "1.2.0",
   "bootstrap": "Throughline is a local, authoritative coordination state layer for domain-neutral work. It records intent, plans, work, outputs, validation, reuse, and delegated authority; it does not orchestrate agents or perform external effects. Capability does not imply Authority. Call get_semantic_model for details.",
   "entities": [
     {"id":"objective","name":"Objective","definition":"A durable goal that groups work items. It carries the edge, reason, actor and time of its most recent phase transition."},
@@ -103,6 +103,16 @@
     {"id":"migration_blockers","path":"internal/sqlite/migrations/0006_manual_blockers.sql","symbol":"CREATE TABLE manual_blockers"},
     {"id":"migration_profile_versions","path":"internal/sqlite/migrations/0007_output_profile_state_versions.sql","symbol":"ALTER TABLE output_profiles"},
     {"id":"migration_approval_versions","path":"internal/sqlite/migrations/0008_generic_approval_versions.sql","symbol":"ALTER TABLE approvals"},
-    {"id":"migration_idempotency","path":"internal/sqlite/migrations/0009_idempotency_without_actor_foreign_key.sql","symbol":"CREATE TABLE idempotency_records_new"}
+    {"id":"migration_idempotency","path":"internal/sqlite/migrations/0009_idempotency_without_actor_foreign_key.sql","symbol":"CREATE TABLE idempotency_records_new"},
+    {"id":"migration_relation_versions","path":"internal/sqlite/migrations/0011_relation_versions.sql","symbol":"ALTER TABLE decisions"},
+    {"id":"migration_criterion_supersession","path":"internal/sqlite/migrations/0012_acceptance_criterion_supersession.sql","symbol":"CREATE TABLE acceptance_criteria_new"},
+    {"id":"migration_priority_measure_context_kinds","path":"internal/sqlite/migrations/0013_priority_measure_context_kinds.sql","symbol":"ALTER TABLE objectives ADD COLUMN priority"},
+    {"id":"migration_activity_objective_binding","path":"internal/sqlite/migrations/0014_activity_objective_binding.sql","symbol":"ALTER TABLE activity ADD COLUMN objective_id"},
+    {"id":"migration_question_frontier_and_blocks","path":"internal/sqlite/migrations/0015_question_frontier_and_blocks.sql","symbol":"CREATE TABLE question_blocks"},
+    {"id":"migration_work_item_reviews","path":"internal/sqlite/migrations/0016_work_item_reviews.sql","symbol":"CREATE TABLE output_validations"},
+    {"id":"migration_objective_phase_transition","path":"internal/sqlite/migrations/0017_objective_phase_transition.sql","symbol":"ALTER TABLE objectives ADD COLUMN phase_transition_from"},
+    {"id":"work_review_evidence","path":"internal/domain/work/review.go","symbol":"EvaluateReviewEvidence"},
+    {"id":"mutation_effects","path":"internal/sqlite/effects.go","symbol":"effectTables"},
+    {"id":"capability_grant_cli","path":"internal/cli/cli.go","symbol":"runCapabilityGrant"}
   ]
 }

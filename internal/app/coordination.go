@@ -136,8 +136,14 @@ func (s *Service) assignActorCapabilityMutation(ctx context.Context, command Ass
 			if _, err := repository.Actor(ctx, command.ActorID); err != nil {
 				return ActorCapability{}, err
 			}
-			if _, err := repository.Actor(ctx, command.GrantedBy); err != nil {
+			granter, err := repository.Actor(ctx, command.GrantedBy)
+			if err != nil {
 				return ActorCapability{}, err
+			}
+			// An agent required to hold a capability must not be able to grant it to
+			// itself, or the requirement enforces nothing.
+			if granter.Kind != work.ActorTypeHuman {
+				return ActorCapability{}, fmt.Errorf("capability %s can only be granted by a registered human actor; %s is a %s", capability.Slug, granter.ID, granter.Kind)
 			}
 			if err := repository.CreateCapability(ctx, capability); err != nil {
 				return ActorCapability{}, err
@@ -449,6 +455,18 @@ func claimRequirements(ctx context.Context, repository ports.Repository, item wo
 	if err != nil {
 		return nil, err
 	}
+	var missingCapabilities []string
+	if !capabilitiesSatisfied {
+		for _, capability := range capabilities {
+			held, err := repository.ActorHasCapabilities(ctx, actor.ID, []string{capability})
+			if err != nil {
+				return nil, err
+			}
+			if !held {
+				missingCapabilities = append(missingCapabilities, capability)
+			}
+		}
+	}
 	approvalSatisfied, err := repository.WorkItemApprovalSatisfied(ctx, item.ID, actor.ID, now)
 	if err != nil {
 		return nil, err
@@ -457,7 +475,7 @@ func claimRequirements(ctx context.Context, repository ports.Repository, item wo
 		ObjectivePhase: objective.Phase, PlanApproved: planApproved, ItemCommitment: item.CommitmentState,
 		ExecutionStatus: executionStatus, ExecutionPolicy: item.ExecutionPolicy, RequiredActorKind: item.RequiredActorKind,
 		Actor: actor, HardDependenciesSatisfied: dependenciesSatisfied, HasOpenBlocker: hasOpenBlocker,
-		OutputRequirementsSatisfied: outputRequirementsSatisfied, CapabilitiesSatisfied: capabilitiesSatisfied,
+		OutputRequirementsSatisfied: outputRequirementsSatisfied, CapabilitiesSatisfied: capabilitiesSatisfied, MissingCapabilities: missingCapabilities,
 		ApprovalSatisfied: approvalSatisfied, ActiveClaim: activeClaim, Now: now,
 	}), nil
 }

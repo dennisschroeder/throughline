@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -82,8 +83,16 @@ func TestMigrateUpgradesEverySupportedPrefix(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			// Every released prefix is a database a non-daemon command may meet
+			// before the daemon has been restarted: it must be refused, not used.
+			if err := database.CheckSchemaCurrent(ctx); !errors.Is(err, ErrSchemaIncompatible) {
+				t.Fatalf("schema check before migrating from version %d = %v, want ErrSchemaIncompatible", prefix, err)
+			}
 			if err := database.Migrate(ctx); err != nil {
 				t.Fatal(err)
+			}
+			if err := database.CheckSchemaCurrent(ctx); err != nil {
+				t.Fatalf("schema check after migrating from version %d = %v", prefix, err)
 			}
 			var migrationCount int
 			if err := database.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil {

@@ -109,6 +109,18 @@ Archive install: download the new version's archive and checksums file (step 1 w
 `PATH` location. Your `.throughline/` workspace directory and its data are untouched by a binary
 upgrade.
 
+After any upgrade, restart the daemon so it runs the new binary and migrates each workspace
+database on first use:
+
+```bash
+throughline daemon restart
+```
+
+Only the daemon migrates. Commands that open a workspace database directly, such as
+`throughline capability grant`, check that the database has exactly the migrations their binary
+carries and refuse to run otherwise, naming this restart as the fix. Update the binary on every
+machine that runs commands against a workspace before restarting.
+
 ## 6. Setup: one managed daemon, once per machine
 
 ```bash
@@ -159,6 +171,7 @@ registers it in the per-user registry; it does not touch daemon or global client
 | `throughline doctor [--addr]` | Read-only: workspace, registry, and daemon health, each with a remediation pointer. |
 | `throughline ready --actor <id> [dir] [--addr]` | List ready work for an actor, via the daemon. |
 | `throughline show <id> [dir] [--addr]` | Print one work item's context, via the daemon. |
+| `throughline capability grant --actor <id> --capability <slug> --as <human-id> [--description text] [dir]` | Grant a capability as a registered human. Agents and services cannot grant, and no MCP tool does; a claim refused for a missing capability prints this command. Refuses to run against a database whose schema differs from its binary. |
 | `throughline uninstall [--addr]` | Stop the daemon, remove managed harness entries; workspace data and the registry are preserved. |
 | `throughline version` | Print the build version, commit, and date. |
 

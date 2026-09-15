@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
@@ -64,6 +65,41 @@ func (d *Database) installEffectCollector(ctx context.Context) error {
 	}
 	if err := transaction.Commit(); err != nil {
 		return fmt.Errorf("commit effect collector transaction: %w", err)
+	}
+	return nil
+}
+
+// ErrSchemaIncompatible reports a workspace database whose applied migrations
+// differ from the ones this binary carries.
+var ErrSchemaIncompatible = errors.New("workspace database schema does not match this throughline binary")
+
+// CheckSchemaCurrent verifies, without migrating anything, that the database
+// has exactly the migrations this binary carries. Commands that are not the
+// daemon use it: only the daemon migrates, so a mismatch means one of the two
+// binaries is out of date and the fix is to update and restart, never to
+// migrate from the side.
+func (d *Database) CheckSchemaCurrent(ctx context.Context) error {
+	migrations, err := loadMigrations()
+	if err != nil {
+		return err
+	}
+	var tables int
+	if err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").Scan(&tables); err != nil {
+		return fmt.Errorf("inspect schema: %w", err)
+	}
+	applied := map[int]string{}
+	if tables == 1 {
+		if applied, err = d.appliedMigrations(ctx); err != nil {
+			return err
+		}
+	}
+	latest := 0
+	for version := range applied {
+		latest = max(latest, version)
+	}
+	carried := migrations[len(migrations)-1].version
+	if err := validateMigrationHistory(migrations, applied); err != nil || len(applied) != len(migrations) {
+		return fmt.Errorf("%w: database is at migration %d, this binary carries %d; update throughline everywhere and restart the daemon (throughline daemon restart) so it migrates the workspace, then retry", ErrSchemaIncompatible, latest, carried)
 	}
 	return nil
 }
