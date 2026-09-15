@@ -25,6 +25,10 @@ func TestSemanticModelInitializationAndReadContract(t *testing.T) {
 		"Capability does not imply Authority",
 		"Throughline never performs external effects",
 		"get_semantic_model",
+		// Decision 01a0732e dropped the automatic idea-to-discovery advance and
+		// kept the obligation here instead; without it objectives sit in idea
+		// while work accumulates and nothing tells anyone to move them.
+		"Objective phases never move on their own",
 	} {
 		if !strings.Contains(instructions, required) {
 			t.Fatalf("initialization instructions omit %q: %s", required, instructions)

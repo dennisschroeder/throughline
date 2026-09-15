@@ -46,7 +46,7 @@ func TestObjectivePhaseTransitionReasonSurvivesRestart(t *testing.T) {
 	clock.now = clock.now.Add(time.Hour)
 	transitionedAt := clock.now
 	planning, err := app.UnwrapMutation(service.TransitionObjective(ctx, app.TransitionObjectiveCommand{
-		ObjectiveID: objective.ID, TargetPhase: work.ObjectivePlanning, ActorID: "agent:planner", Reason: "No open question changes the plan's shape.", ExpectedVersion: discovery.Version, IdempotencyKey: "to-planning",
+		ObjectiveID: objective.ID, TargetPhase: work.ObjectivePlanning, ActorID: "agent:planner", Reason: "  No open question changes the plan's shape. ", ExpectedVersion: discovery.Version, IdempotencyKey: "to-planning",
 	}))
 	if err != nil {
 		t.Fatal(err)

@@ -473,7 +473,9 @@ func TestReadyWorkCarriesEveryObjectiveAndItemField(t *testing.T) {
 	}
 	seedExecutableItems(t, ctx, database, "item-a")
 	for _, statement := range []string{
-		`UPDATE objectives SET priority = 'urgent', appetite_value = 3, appetite_unit = 'days', appetite_basis = 'estimated' WHERE id = 'objective-a'`,
+		`UPDATE objectives SET priority = 'urgent', appetite_value = 3, appetite_unit = 'days', appetite_basis = 'estimated',
+		   phase_transition_from = 'planning', phase_transition_to = 'execution', phase_transition_reason = 'Plan approved.',
+		   phase_transition_by = 'human:owner', phase_transition_at = '` + questionFixtureTime + `' WHERE id = 'objective-a'`,
 		`UPDATE work_items SET measure_value = 5, measure_unit = 'points', measure_basis = 'measured',
 		   review_requirements_json = '[{"criterion_ref":"design","validator_kind":"probe"}]' WHERE id = 'item-a'`,
 	} {
@@ -481,10 +483,22 @@ func TestReadyWorkCarriesEveryObjectiveAndItemField(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ready, err := app.NewService(database.Store(), &testIDs{}, testClock{}).ListReadyWork(ctx)
+	service := app.NewService(database.Store(), &testIDs{}, testClock{})
+	ready, err := service.ListReadyWork(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
+	wantTransition := func(source string, transition *work.PhaseTransition) {
+		t.Helper()
+		if transition == nil || transition.From != work.ObjectivePlanning || transition.To != work.ObjectiveExecution || transition.Reason != "Plan approved." || transition.ActorID != "human:owner" {
+			t.Fatalf("%s objective transition = %#v", source, transition)
+		}
+	}
+	detail, err := service.GetWorkItem(ctx, "item-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTransition("get_item", detail.Objective.LastPhaseTransition)
 	for _, entry := range ready {
 		if entry.WorkItem.ID != "item-a" {
 			continue
@@ -495,6 +509,7 @@ func TestReadyWorkCarriesEveryObjectiveAndItemField(t *testing.T) {
 		if entry.WorkItem.Measure != (work.Measure{Value: 5, Unit: "points", Basis: work.MeasureMeasured}) || len(entry.WorkItem.ReviewRequirements) != 1 {
 			t.Fatalf("ready item = %#v", entry.WorkItem)
 		}
+		wantTransition("list_ready_items", entry.Objective.LastPhaseTransition)
 		return
 	}
 	t.Fatalf("item-a is not ready: %#v", ready)
