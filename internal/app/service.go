@@ -479,8 +479,8 @@ func patchWorkItemHasChanges(command PatchWorkItemCommand) bool {
 // reviewRequirementChangeNeedsAttention mirrors what waiving or adding a
 // required acceptance criterion does. Dropping a review that was not satisfied
 // lets done through without it, and declaring a new review on work already
-// done leaves a finished item with an unmet gate; either passes silently
-// unless someone is told.
+// done changes what that completion claimed; either passes silently unless
+// someone is told.
 func reviewRequirementChangeNeedsAttention(ctx context.Context, repository ports.Repository, item work.WorkItem, next []work.ReviewRequirement) (bool, error) {
 	kept := make(map[work.ReviewRequirement]bool, len(next))
 	for _, requirement := range next {

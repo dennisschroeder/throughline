@@ -21,6 +21,7 @@ func TestEvaluateReviewEvidence(t *testing.T) {
 		{"waived", []ReviewRecordFact{record("r", "waived", false)}, ReviewEvidenceSatisfied, "r"},
 		{"failed", []ReviewRecordFact{record("r", "failed", false)}, ReviewEvidenceFailed, "r"},
 		{"passed then work recorded", []ReviewRecordFact{record("r", "passed", true)}, ReviewEvidenceStale, "r"},
+		{"failed then work recorded stays failed", []ReviewRecordFact{record("r", "failed", true)}, ReviewEvidenceFailed, "r"},
 		{"a later failure is not masked by an earlier pass", []ReviewRecordFact{record("r1", "passed", false), record("r2", "failed", false)}, ReviewEvidenceFailed, "r2"},
 		{"a later pass supersedes an earlier failure", []ReviewRecordFact{record("r1", "failed", false), record("r2", "passed", false)}, ReviewEvidenceSatisfied, "r2"},
 		{"a fresh pass after a stale one", []ReviewRecordFact{record("r1", "passed", true), record("r2", "passed", false)}, ReviewEvidenceSatisfied, "r2"},

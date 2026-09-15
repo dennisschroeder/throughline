@@ -634,3 +634,107 @@ func TestOutputRevisionValidationKeepsItsDegradedFlag(t *testing.T) {
 		t.Fatalf("output revision validations = %#v, want one degraded record", item.OutputRevisions)
 	}
 }
+
+// TestReviewBeforeMovingToReviewStillAllowsDone is the ordinary flow: the
+// review happens while the work is in progress, the item then moves to
+// review, and done follows. The move to review is not work and must not
+// stale the review.
+func TestReviewBeforeMovingToReviewStillAllowsDone(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "review-flow.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	seedExecutableItems(t, ctx, database, "item-a")
+	service := app.NewService(database.Store(), &testIDs{}, testClock{})
+	requirements := []work.ReviewRequirement{{CriterionRef: "design", ValidatorKind: "probe"}}
+	declared, err := app.UnwrapMutation(service.PatchWorkItem(ctx, app.PatchWorkItemCommand{WorkItemID: "item-a", ActorID: "human:owner", ExpectedVersion: 1, IdempotencyKey: "declare", ReviewRequirements: &requirements}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := app.UnwrapMutation(service.ClaimWorkItem(ctx, app.ClaimWorkItemCommand{WorkItemID: "item-a", ActorID: "human:owner", ExpectedVersion: declared.Version, IdempotencyKey: "claim", LeaseDuration: time.Hour, TransitionToInProgress: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RecordWorkItemValidation(ctx, app.RecordWorkItemValidationCommand{WorkItemID: "item-a", CriterionRef: "design", ValidatorKind: output.ValidatorProbe, Verdict: output.VerdictPassed, VerifierActorID: "human:owner", IdempotencyKey: "review"}); err != nil {
+		t.Fatal(err)
+	}
+	inReview, err := app.UnwrapMutation(service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: "item-a", TargetStatus: work.StatusReview, ActorID: "human:owner", Reason: "Reviewed.", ExpectedVersion: claimed.WorkItem.Version, IdempotencyKey: "to-review"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: "item-a", TargetStatus: work.StatusDone, ActorID: "human:owner", Reason: "Done.", ExpectedVersion: inReview.Version, IdempotencyKey: "to-done"}); err != nil {
+		t.Fatalf("done after reviewing in progress and moving to review: %v", err)
+	}
+}
+
+// TestReviewRequirementDeclarationsAreCheckedAndAttentionIsNotOverridden
+// covers what the attention rule must leave alone and what a declaration may
+// not name.
+func TestReviewRequirementDeclarationsAreCheckedAndAttentionIsNotOverridden(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "review-declarations.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	seedExecutableItems(t, ctx, database, "item-kept", "item-explicit", "item-flagged", "item-kind")
+	service := app.NewService(database.Store(), &testIDs{}, testClock{})
+	version := func(id string) int {
+		t.Helper()
+		item, err := service.GetWorkItem(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return item.WorkItem.Version
+	}
+	declare := func(id, key string, requirements []work.ReviewRequirement, attention *work.AttentionState) (work.WorkItem, error) {
+		t.Helper()
+		return app.UnwrapMutation(service.PatchWorkItem(ctx, app.PatchWorkItemCommand{WorkItemID: id, ActorID: "human:owner", ExpectedVersion: version(id), IdempotencyKey: id + "-" + key, ReviewRequirements: &requirements, AttentionState: attention}))
+	}
+	a := work.ReviewRequirement{CriterionRef: "a", ValidatorKind: "probe"}
+	b := work.ReviewRequirement{CriterionRef: "b", ValidatorKind: "probe"}
+	failed := func(id string) {
+		t.Helper()
+		if _, err := service.RecordWorkItemValidation(ctx, app.RecordWorkItemValidationCommand{WorkItemID: id, CriterionRef: "a", ValidatorKind: output.ValidatorProbe, Verdict: output.VerdictFailed, VerifierActorID: "human:owner", IdempotencyKey: "fail-" + id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := declare("item-kept", "one", []work.ReviewRequirement{a}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if grown, err := declare("item-kept", "two", []work.ReviewRequirement{a, b}, nil); err != nil || grown.AttentionState != work.AttentionNone {
+		t.Fatalf("keeping a missing review while adding another on open work = %#v, %v; want no attention", grown.AttentionState, err)
+	}
+
+	if _, err := declare("item-explicit", "one", []work.ReviewRequirement{a}, nil); err != nil {
+		t.Fatal(err)
+	}
+	failed("item-explicit")
+	// An explicit none is a person saying nobody needs to look, and is kept.
+	none := work.AttentionNone
+	if cleared, err := declare("item-explicit", "clear", nil, &none); err != nil || cleared.AttentionState != work.AttentionNone {
+		t.Fatalf("dropping a failed review while setting attention to none explicitly = %#v, %v; want none kept", cleared.AttentionState, err)
+	}
+
+	decision := work.AttentionNeedsHumanDecision
+	if _, err := declare("item-flagged", "one", []work.ReviewRequirement{a}, &decision); err != nil {
+		t.Fatal(err)
+	}
+	failed("item-flagged")
+	if cleared, err := declare("item-flagged", "clear", nil, nil); err != nil || cleared.AttentionState != work.AttentionNeedsHumanDecision {
+		t.Fatalf("dropping a failed review on an item already needing a decision = %#v, %v; want that state kept", cleared.AttentionState, err)
+	}
+
+	if _, err := declare("item-kind", "banana", []work.ReviewRequirement{{CriterionRef: "a", ValidatorKind: "banana"}}, nil); err == nil {
+		t.Fatal("a review requirement naming an unsupported validator kind, which no record could ever match, was accepted")
+	}
+}
