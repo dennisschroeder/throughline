@@ -705,6 +705,60 @@ progress followed by the move to review, still reaches done.
   `TestReviewRequirementsOverTheWire` (MCP), `TestDashboardExposesReviewEvidence` and
   `TestCardInReviewNamesTheUnsatisfiedReview`.
 
+### REP-10 REASON
+
+- Commits: `22bd77b` (implementation), then `fdc9336` and `3fd2a79`, each a response to a review
+  pass, at the 3-pass budget.
+- Claim: `01a0a646-22b0-7910-8635-8d5b81a555e1`. Decision: `01a0a646-5e4e-7b62-9242-c6b7ddfb2d9b`.
+- Final gate: all six repository commands exited zero on 2026-09-15 at `3fd2a79`, plus
+  `go test ./... -race -shuffle=on`.
+
+Implements triage decision `01a0732f`. `transition_objective` required a reason and then discarded
+it. The objective now carries `last_phase_transition` (from, to, reason, actor, time of its most
+recent transition), stored on the row by migration 0017 and returned by every read that returns
+the objective; each `objective.phase_changed` activity carries the from/to/reason payload
+work-item status changes already write, so the full history reads through the objective-filtered
+change feed REP-07 built. No history table was added. Objectives transitioned earlier keep a null
+transition rather than an edge recovered without its reason. The node looked at work-item
+transitions as the decision required and found no widening needed: `transition_item` has always
+kept its reason in the payload, and REP-09 gave `claim_item` the same. Criterion 2 (no automatic
+advance, no objective lease) is pinned by tests that recording work leaves an objective's phase
+alone and that no tool claims or advances one.
+
+#### Review
+
+Three passes, all degraded (same model family; no cross-provider reviewer available).
+
+| Pass | Mutants | Survived | Real defects found and fixed |
+|---|---|---|---|
+| 1 | 7 | 3 | 0; two doc inaccuracies |
+| 2 | 4 | 3 | 1 (the phase obligation missing from the server instructions) |
+| 3 | 10 | 1 (equivalent) | 0 |
+
+Pass 2's finding was not in the code this node wrote but in what decision `01a0732e` promised in
+exchange for dropping the automatic advance: the obligation to move the phase would be stated in
+the server instructions. It never was, so with the advance gone nothing told a session to move an
+objective out of idea. The instructions now say so and a test requires the sentence.
+
+#### Dispositions
+
+| Finding | Disposition |
+|---|---|
+| The dashboard shows the phase without its reason | Accepted: not among the decision's read paths; a UI follow-up if wanted |
+| An objective created directly in a later phase has a null transition | Accepted: `create_objective` takes no reason, and `objective.created` records the creation |
+| Gating the scan on `phase_transition_from` instead of `_at` survives | Rejected: equivalent, the five columns are always written together |
+
+#### Evidence
+
+- `TestObjectivePhaseTransitionReasonSurvivesRestart`: two transitions, a refused one and an
+  unrelated patch under an advancing clock, then a reopen; the latest transition keeps its edge,
+  trimmed reason, actor and time, and the feed holds exactly the two accepted transitions.
+- `TestRecordingWorkNeverAdvancesAnObjective`, `TestMigration0017LeavesEarlierObjectivesWithoutATransition`,
+  `TestObjectiveTransitionReasonOverTheWire` (transition response, `list_objectives`,
+  `get_objective_context`, UTC timestamp, the pinned objective tool list),
+  `TestReadyWorkCarriesEveryObjectiveAndItemField` (`get_item`, `list_ready_items`), and the
+  instructions assertion in `TestSemanticModelInitializationAndReadContract`.
+
 ## Feedback
 
 - REP-01 was estimated small but consumed the full five-pass review budget because file permissions
@@ -938,4 +992,18 @@ progress followed by the move to review, still reaches done.
   REP-06's three review passes found because the defect was a missing read in a query nobody
   changed.
 - **The claim held for a sixth node in a row.**
+
+### REP-10
+
+- **A decision that removes a mechanism and moves its duty elsewhere needs the new home checked,
+  not assumed.** `01a0732e` dropped the automatic advance on the explicit condition that the
+  obligation be stated in the server instructions. Nothing in this plan carried that condition as
+  a criterion, so it would have shipped unmet; pass 2 found it only because its brief quoted the
+  decision. Worth a standing plan-review question: for every "instead" in a decision, where is the
+  replacement, and which item's criteria check it?
+- **Small, well-bounded nodes converge fast.** No behavioural defect in the code written for the
+  node in any pass, and pass 3 found nothing. The design reused two things earlier nodes had built
+  (the objective-filtered feed from REP-07, the shared column lists from REP-09) instead of adding a
+  store.
+- **The claim held for a seventh node in a row.**
 
