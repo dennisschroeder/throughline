@@ -143,7 +143,7 @@ func (a *adapter) addTools(server *mcp.Server) {
 	a.add(server, "transition_item", "Transition a claimed work item through execution.", false, schemaFor[transitionItemInput]("id", "actor_id", "target_status", "expected_version", "idempotency_key"), a.transitionItem)
 	a.add(server, "define_expected_output", "Bind work to an exact active output profile.", false, schemaFor[expectedOutputInput]("work_item_id", "actor_id", "name", "profile_name", "profile_version", "expected_version", "idempotency_key"), a.defineExpectedOutput)
 	a.add(server, "create_output_revision", "Create an immutable output revision with artifact references.", false, schemaFor[outputRevisionInput]("expected_output_id", "actor_id", "idempotency_key", "artifacts"), a.createOutputRevision)
-	a.add(server, "record_validation", "Record validation evidence and re-evaluate acceptance.", false, schemaFor[validationInput]("output_revision_id", "actor_id", "idempotency_key", "criterion_ref", "validator_kind", "verdict"), a.recordValidation)
+	a.add(server, "record_validation", "Record validation evidence for an output revision and re-evaluate acceptance, or record a review of a work item (work_item_id) toward the review requirements it declares.", false, validationSchema(), a.recordValidation)
 	a.add(server, "add_output_requirement", "Require an accepted reusable output before work is ready.", false, schemaFor[outputRequirementInput]("work_item_id", "actor_id", "expected_version", "idempotency_key"), a.addOutputRequirement)
 	a.add(server, "attach_artifact", "Attach an immutable external reference to work.", false, schemaFor[artifactInput]("work_item_id", "actor_id", "expected_version", "idempotency_key", "kind", "uri"), a.attachArtifact)
 	a.add(server, "link_dependency", "Link a typed dependency within one objective.", false, schemaFor[dependencyInput]("work_item_id", "depends_on_work_item_id", "actor_id", "expected_version", "idempotency_key", "kind"), a.linkDependency)
@@ -698,8 +698,10 @@ func resultSchema(name string) map[string]any {
 		return schemaForResult[app.ProgressResult]()
 	case "define_expected_output":
 		return schemaForResult[output.ExpectedOutput]()
-	case "create_output_revision", "record_validation":
+	case "create_output_revision":
 		return schemaForResult[output.OutputRevision]()
+	case "record_validation":
+		return oneOf(schemaForResult[output.OutputRevision](), schemaForResult[output.ValidationRecord]())
 	case "add_output_requirement":
 		return schemaForResult[output.OutputRequirement]()
 	case "attach_artifact":
@@ -1674,7 +1676,7 @@ func (a *adapter) getItem(ctx context.Context, service *app.Service, raw json.Ra
 	selected := make(map[string]bool, len(in.Include))
 	for _, section := range in.Include {
 		section = strings.TrimSpace(section)
-		if !containsString([]string{"description", "plan", "context", "acceptance_criteria", "expected_outputs", "output_revisions", "validations", "required_outputs", "capabilities", "external_actions", "authority_grants", "dependencies", "claims", "progress", "decisions", "questions", "approvals", "artifacts", "activity"}, section) {
+		if !containsString([]string{"description", "plan", "context", "acceptance_criteria", "expected_outputs", "output_revisions", "validations", "review_evidence", "required_outputs", "capabilities", "external_actions", "authority_grants", "dependencies", "claims", "progress", "decisions", "questions", "approvals", "artifacts", "activity"}, section) {
 			return nil, fmt.Errorf("get_item include %q is not supported", section)
 		}
 		selected[section] = true
@@ -1715,6 +1717,9 @@ func (a *adapter) getItem(ctx context.Context, service *app.Service, raw json.Ra
 		}
 		if !selected["questions"] {
 			item.BlockingQuestions = nil
+		}
+		if !selected["review_evidence"] {
+			item.ReviewEvidence = nil
 		}
 	}
 	result := getItemResult{WorkItemContext: item}
@@ -2080,11 +2085,27 @@ type createItemInput struct {
 	ExecutionPolicy      work.ExecutionPolicy           `json:"execution_policy"`
 	RequiredActorKind    work.ActorKind                 `json:"required_actor_kind"`
 	RequiredCapabilities []string                       `json:"required_capabilities,omitempty"`
+	ReviewRequirements   []reviewRequirementInput       `json:"review_requirements,omitempty"`
 	AcceptanceCriteria   []planAcceptanceCriterionInput `json:"acceptance_criteria,omitempty"`
 	ExpectedOutputs      []planExpectedOutputInput      `json:"expected_outputs,omitempty"`
 	OutputRequirements   []planOutputRequirementInput   `json:"output_requirements,omitempty"`
 	ExternalActions      []planExternalActionInput      `json:"external_actions,omitempty"`
 	Dependencies         []createItemDependencyInput    `json:"dependencies,omitempty"`
+}
+
+// reviewRequirementInput declares one review done waits for: a work-item
+// validation with this criterion reference and validator kind.
+type reviewRequirementInput struct {
+	CriterionRef  string `json:"criterion_ref"`
+	ValidatorKind string `json:"validator_kind"`
+}
+
+func toReviewRequirements(inputs []reviewRequirementInput) []work.ReviewRequirement {
+	var requirements []work.ReviewRequirement
+	for _, input := range inputs {
+		requirements = append(requirements, work.ReviewRequirement(input))
+	}
+	return requirements
 }
 
 type createItemDependencyInput struct {
@@ -2106,7 +2127,7 @@ func (a *adapter) createItem(ctx context.Context, service *app.Service, raw json
 		ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, ObjectiveID: objectiveID, PlanID: in.PlanID, ParentID: in.ParentID,
 		Title: in.Title, Description: in.Description, Kind: in.Kind, CommitmentState: in.CommitmentState, ExecutionStatus: in.ExecutionStatus,
 		Priority: in.Priority, EstimatedScope: in.EstimatedScope, Measure: in.Measure.toMeasure(), ExecutionPolicy: in.ExecutionPolicy, RequiredActorKind: in.RequiredActorKind,
-		AttentionState: work.AttentionNone, RequiredCapabilities: in.RequiredCapabilities,
+		AttentionState: work.AttentionNone, RequiredCapabilities: in.RequiredCapabilities, ReviewRequirements: toReviewRequirements(in.ReviewRequirements),
 	}
 	if command.CommitmentState == "" {
 		command.CommitmentState = work.ItemProposed
@@ -2151,6 +2172,7 @@ type patchItemInput struct {
 	ExecutionPolicy                *work.ExecutionPolicy            `json:"execution_policy"`
 	AttentionState                 *work.AttentionState             `json:"attention_state"`
 	RequiredCapabilities           *[]string                        `json:"required_capabilities"`
+	ReviewRequirements             *[]reviewRequirementInput        `json:"review_requirements"`
 	AcceptanceCriterionResolutions []patchAcceptanceResolutionInput `json:"acceptance_criterion_resolutions"`
 	AcceptanceCriteriaToAdd        []patchAcceptanceAdditionInput   `json:"acceptance_criteria_to_add"`
 	ExpectedOutputsToAdd           []planExpectedOutputInput        `json:"expected_outputs_to_add"`
@@ -2175,6 +2197,12 @@ func patchItemSchema() map[string]any {
 	properties := result["properties"].(map[string]any)
 	properties["parent_id"] = map[string]any{"type": "string"}
 	properties["required_capabilities"] = map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+	properties["review_requirements"] = map[string]any{"type": "array", "items": map[string]any{
+		"type": "object", "properties": map[string]any{
+			"criterion_ref":  map[string]any{"type": "string"},
+			"validator_kind": map[string]any{"type": "string"},
+		}, "required": []string{"criterion_ref", "validator_kind"}, "additionalProperties": false,
+	}}
 	properties["acceptance_criterion_resolutions"] = map[string]any{"type": "array", "items": map[string]any{
 		"type": "object", "properties": map[string]any{
 			"criterion_id": map[string]any{"type": "string"},
@@ -2214,6 +2242,13 @@ func (a *adapter) patchItem(ctx context.Context, service *app.Service, raw json.
 	if in.Measure != nil {
 		measure := in.Measure.toMeasure()
 		command.Measure = &measure
+	}
+	if in.ReviewRequirements != nil {
+		requirements := toReviewRequirements(*in.ReviewRequirements)
+		if requirements == nil {
+			requirements = []work.ReviewRequirement{}
+		}
+		command.ReviewRequirements = &requirements
 	}
 	for _, resolution := range in.AcceptanceCriterionResolutions {
 		command.AcceptanceCriterionResolutions = append(command.AcceptanceCriterionResolutions, app.PatchAcceptanceCriterionResolution{CriterionID: resolution.CriterionID, Status: resolution.Status, Rationale: resolution.Rationale})
@@ -2514,6 +2549,7 @@ type planItemInput struct {
 	ExecutionPolicy      work.ExecutionPolicy           `json:"execution_policy"`
 	RequiredActorKind    work.ActorKind                 `json:"required_actor_kind"`
 	RequiredCapabilities []string                       `json:"required_capabilities,omitempty"`
+	ReviewRequirements   []reviewRequirementInput       `json:"review_requirements,omitempty"`
 	DependsOn            []string                       `json:"depends_on,omitempty"`
 	AcceptanceCriteria   []planAcceptanceCriterionInput `json:"acceptance_criteria,omitempty"`
 	ExpectedOutputs      []planExpectedOutputInput      `json:"expected_outputs,omitempty"`
@@ -2587,7 +2623,7 @@ func (a *adapter) proposePlan(ctx context.Context, service *app.Service, raw jso
 	}
 	items := make([]app.ProposedWorkItem, 0, len(in.Items))
 	for _, item := range in.Items {
-		converted := app.ProposedWorkItem{ClientRef: item.ClientRef, ParentRef: item.ParentRef, Key: item.Key, Title: item.Title, Description: item.Description, Kind: item.Kind, Priority: item.Priority, EstimatedScope: item.EstimatedScope, ExecutionPolicy: item.ExecutionPolicy, RequiredActorKind: item.RequiredActorKind, RequiredCapabilities: item.RequiredCapabilities, DependsOn: item.DependsOn}
+		converted := app.ProposedWorkItem{ClientRef: item.ClientRef, ParentRef: item.ParentRef, Key: item.Key, Title: item.Title, Description: item.Description, Kind: item.Kind, Priority: item.Priority, EstimatedScope: item.EstimatedScope, ExecutionPolicy: item.ExecutionPolicy, RequiredActorKind: item.RequiredActorKind, RequiredCapabilities: item.RequiredCapabilities, ReviewRequirements: toReviewRequirements(item.ReviewRequirements), DependsOn: item.DependsOn}
 		for _, criterion := range item.AcceptanceCriteria {
 			converted.AcceptanceCriteria = append(converted.AcceptanceCriteria, app.ProposedAcceptanceCriterion{Text: criterion.Text, Required: criterion.Required, Ordinal: criterion.Ordinal})
 		}
@@ -2969,6 +3005,7 @@ func (a *adapter) createOutputRevision(ctx context.Context, service *app.Service
 type validationInput struct {
 	workspaceInput
 	OutputRevisionID   string                   `json:"output_revision_id"`
+	WorkItemID         string                   `json:"work_item_id"`
 	ActorID            string                   `json:"actor_id"`
 	IdempotencyKey     string                   `json:"idempotency_key"`
 	CriterionRef       string                   `json:"criterion_ref"`
@@ -2976,6 +3013,17 @@ type validationInput struct {
 	Verdict            output.ValidationVerdict `json:"verdict"`
 	EvidenceArtifactID string                   `json:"evidence_artifact_id"`
 	Details            json.RawMessage          `json:"details"`
+	Degraded           bool                     `json:"degraded"`
+}
+
+func validationSchema() map[string]any {
+	result := schemaFor[validationInput]("actor_id", "idempotency_key", "criterion_ref", "validator_kind", "verdict")
+	result["x-runtime-branch"] = true
+	result["oneOf"] = []any{
+		map[string]any{"required": []string{"output_revision_id"}, "not": map[string]any{"required": []string{"work_item_id"}}},
+		map[string]any{"required": []string{"work_item_id"}, "not": map[string]any{"required": []string{"output_revision_id"}}},
+	}
+	return result
 }
 
 func (a *adapter) recordValidation(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
@@ -2983,7 +3031,14 @@ func (a *adapter) recordValidation(ctx context.Context, service *app.Service, ra
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	return service.RecordValidation(ctx, app.RecordValidationCommand{OutputRevisionID: in.OutputRevisionID, CriterionRef: in.CriterionRef, ValidatorKind: in.ValidatorKind, Verdict: in.Verdict, VerifierActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, EvidenceArtifactID: in.EvidenceArtifactID, Details: in.Details})
+	hasRevision, hasItem := strings.TrimSpace(in.OutputRevisionID) != "", strings.TrimSpace(in.WorkItemID) != ""
+	if hasRevision == hasItem {
+		return nil, errors.New("record_validation requires exactly one of output_revision_id or work_item_id")
+	}
+	if hasItem {
+		return service.RecordWorkItemValidation(ctx, app.RecordWorkItemValidationCommand{WorkItemID: in.WorkItemID, CriterionRef: in.CriterionRef, ValidatorKind: in.ValidatorKind, Verdict: in.Verdict, VerifierActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, EvidenceArtifactID: in.EvidenceArtifactID, Details: in.Details, Degraded: in.Degraded})
+	}
+	return service.RecordValidation(ctx, app.RecordValidationCommand{OutputRevisionID: in.OutputRevisionID, CriterionRef: in.CriterionRef, ValidatorKind: in.ValidatorKind, Verdict: in.Verdict, VerifierActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, EvidenceArtifactID: in.EvidenceArtifactID, Details: in.Details, Degraded: in.Degraded})
 }
 
 type outputRequirementInput struct {

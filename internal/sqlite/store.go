@@ -274,6 +274,10 @@ func (s *Store) getWorkItemContext(ctx context.Context, reader sqlReader, id str
 	if err != nil {
 		return ports.WorkItemContext{}, err
 	}
+	evidence, err := reviewEvidence(ctx, reader, item)
+	if err != nil {
+		return ports.WorkItemContext{}, err
+	}
 	return ports.WorkItemContext{
 		Objective:            objective,
 		Plan:                 plan,
@@ -289,6 +293,7 @@ func (s *Store) getWorkItemContext(ctx context.Context, reader sqlReader, id str
 		Artifacts:            artifacts,
 		ExternalActions:      externalActions,
 		BlockingQuestions:    blockingQuestions,
+		ReviewEvidence:       evidence,
 	}, nil
 }
 
@@ -364,8 +369,8 @@ func (r *transactionRepository) CreateWorkItem(ctx context.Context, item work.Wo
 INSERT INTO work_items
   (id, key, objective_id, plan_id, parent_id, title, description, kind, commitment_state,
    execution_status, priority, estimated_scope, measure_value, measure_unit, measure_basis,
-   execution_policy, required_actor_kind, attention_state, version, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+   execution_policy, required_actor_kind, attention_state, review_requirements_json, version, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ID,
 		item.Key,
 		item.ObjectiveID,
@@ -384,6 +389,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ExecutionPolicy,
 		item.RequiredActorKind,
 		item.AttentionState,
+		encodeReviewRequirements(item.ReviewRequirements),
 		item.Version,
 		formatTime(item.CreatedAt),
 		formatTime(item.UpdatedAt),
@@ -425,10 +431,17 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	return nil
 }
 
-const objectiveSelect = `
-SELECT id, key, title, description, desired_outcome, phase, prior_phase, priority,
-       appetite_value, appetite_unit, appetite_basis, updated_by, version, created_at, updated_at
-FROM objectives`
+// objectiveColumns and workItemColumns are shared by the plain selects and
+// the ready-work join, which previously listed its own columns and silently
+// stopped reading fields added later.
+var objectiveColumns = []string{"id", "key", "title", "description", "desired_outcome", "phase", "prior_phase", "priority",
+	"appetite_value", "appetite_unit", "appetite_basis", "updated_by", "version", "created_at", "updated_at"}
+
+var workItemColumns = []string{"id", "key", "objective_id", "plan_id", "parent_id", "title", "description", "kind", "commitment_state",
+	"execution_status", "priority", "estimated_scope", "measure_value", "measure_unit", "measure_basis",
+	"execution_policy", "required_actor_kind", "attention_state", "review_requirements_json", "version", "created_at", "updated_at"}
+
+var objectiveSelect = "SELECT " + strings.Join(objectiveColumns, ", ") + " FROM objectives"
 
 const planSelect = `
 SELECT id, objective_id, title, summary, revision, commitment_state,
@@ -436,11 +449,7 @@ SELECT id, objective_id, title, summary, revision, commitment_state,
        version, created_at, updated_at
 FROM plans`
 
-const workItemSelect = `
-SELECT id, key, objective_id, plan_id, parent_id, title, description, kind, commitment_state,
-       execution_status, priority, estimated_scope, measure_value, measure_unit, measure_basis,
-       execution_policy, required_actor_kind, attention_state, version, created_at, updated_at
-FROM work_items`
+var workItemSelect = "SELECT " + strings.Join(workItemColumns, ", ") + " FROM work_items"
 
 const profileSelect = `
 SELECT id, name, version, state_version, description, lifecycle_state, structure_json, semantics_json,
@@ -454,38 +463,37 @@ type scanner interface {
 
 func scanObjective(row scanner) (work.Objective, error) {
 	var objective work.Objective
-	var createdAt, updatedAt string
+	targets, finish := objectiveScanTargets(&objective)
+	if err := row.Scan(targets...); err != nil {
+		return work.Objective{}, err
+	}
+	if err := finish(); err != nil {
+		return work.Objective{}, err
+	}
+	return objective, nil
+}
+
+// objectiveScanTargets returns the destinations for objectiveColumns, in
+// order, and the conversion to run once they are filled.
+func objectiveScanTargets(objective *work.Objective) ([]any, func() error) {
+	var createdAt, updatedAt, appetiteBasis string
 	var priorPhase, updatedBy sql.NullString
-	var appetiteBasis string
-	if err := row.Scan(
-		&objective.ID,
-		&objective.Key,
-		&objective.Title,
-		&objective.Description,
-		&objective.DesiredOutcome,
-		&objective.Phase,
-		&priorPhase,
-		&objective.Priority,
-		&objective.Appetite.Value,
-		&objective.Appetite.Unit,
-		&appetiteBasis,
-		&updatedBy,
-		&objective.Version,
-		&createdAt,
-		&updatedAt,
-	); err != nil {
-		return work.Objective{}, err
+	targets := []any{
+		&objective.ID, &objective.Key, &objective.Title, &objective.Description, &objective.DesiredOutcome,
+		&objective.Phase, &priorPhase, &objective.Priority, &objective.Appetite.Value, &objective.Appetite.Unit,
+		&appetiteBasis, &updatedBy, &objective.Version, &createdAt, &updatedAt,
 	}
-	objective.Appetite.Basis = work.MeasureBasis(appetiteBasis)
-	objective.PriorPhase = work.ObjectivePhase(priorPhase.String)
-	objective.UpdatedBy = updatedBy.String
-	var err error
-	objective.CreatedAt, err = parseTime(createdAt)
-	if err != nil {
-		return work.Objective{}, err
+	return targets, func() error {
+		objective.Appetite.Basis = work.MeasureBasis(appetiteBasis)
+		objective.PriorPhase = work.ObjectivePhase(priorPhase.String)
+		objective.UpdatedBy = updatedBy.String
+		var err error
+		if objective.CreatedAt, err = parseTime(createdAt); err != nil {
+			return err
+		}
+		objective.UpdatedAt, err = parseTime(updatedAt)
+		return err
 	}
-	objective.UpdatedAt, err = parseTime(updatedAt)
-	return objective, err
 }
 
 func scanPlan(row scanner) (work.Plan, error) {
@@ -535,44 +543,67 @@ func scanPlan(row scanner) (work.Plan, error) {
 
 func scanWorkItem(row scanner) (work.WorkItem, error) {
 	var item work.WorkItem
+	targets, finish := workItemScanTargets(&item)
+	if err := row.Scan(targets...); err != nil {
+		return work.WorkItem{}, err
+	}
+	if err := finish(); err != nil {
+		return work.WorkItem{}, err
+	}
+	return item, nil
+}
+
+// workItemScanTargets returns the destinations for workItemColumns, in order,
+// and the conversion to run once they are filled.
+func workItemScanTargets(item *work.WorkItem) ([]any, func() error) {
 	var planID, parentID sql.NullString
-	var createdAt, updatedAt string
-	var measureBasis string
-	if err := row.Scan(
-		&item.ID,
-		&item.Key,
-		&item.ObjectiveID,
-		&planID,
-		&parentID,
-		&item.Title,
-		&item.Description,
-		&item.Kind,
-		&item.CommitmentState,
-		&item.ExecutionStatus,
-		&item.Priority,
-		&item.EstimatedScope,
-		&item.Measure.Value,
-		&item.Measure.Unit,
-		&measureBasis,
-		&item.ExecutionPolicy,
-		&item.RequiredActorKind,
-		&item.AttentionState,
-		&item.Version,
-		&createdAt,
-		&updatedAt,
-	); err != nil {
-		return work.WorkItem{}, err
+	var createdAt, updatedAt, measureBasis, reviewRequirements string
+	targets := []any{
+		&item.ID, &item.Key, &item.ObjectiveID, &planID, &parentID, &item.Title, &item.Description, &item.Kind,
+		&item.CommitmentState, &item.ExecutionStatus, &item.Priority, &item.EstimatedScope,
+		&item.Measure.Value, &item.Measure.Unit, &measureBasis, &item.ExecutionPolicy, &item.RequiredActorKind,
+		&item.AttentionState, &reviewRequirements, &item.Version, &createdAt, &updatedAt,
 	}
-	item.Measure.Basis = work.MeasureBasis(measureBasis)
-	item.PlanID = planID.String
-	item.ParentID = parentID.String
-	var err error
-	item.CreatedAt, err = parseTime(createdAt)
-	if err != nil {
-		return work.WorkItem{}, err
+	return targets, func() error {
+		item.Measure.Basis = work.MeasureBasis(measureBasis)
+		item.PlanID = planID.String
+		item.ParentID = parentID.String
+		var err error
+		if item.ReviewRequirements, err = decodeReviewRequirements(reviewRequirements); err != nil {
+			return err
+		}
+		if item.CreatedAt, err = parseTime(createdAt); err != nil {
+			return err
+		}
+		item.UpdatedAt, err = parseTime(updatedAt)
+		return err
 	}
-	item.UpdatedAt, err = parseTime(updatedAt)
-	return item, err
+}
+
+type storedReviewRequirement struct {
+	CriterionRef  string `json:"criterion_ref"`
+	ValidatorKind string `json:"validator_kind"`
+}
+
+func encodeReviewRequirements(requirements []work.ReviewRequirement) string {
+	stored := make([]storedReviewRequirement, 0, len(requirements))
+	for _, requirement := range requirements {
+		stored = append(stored, storedReviewRequirement(requirement))
+	}
+	encoded, _ := json.Marshal(stored)
+	return string(encoded)
+}
+
+func decodeReviewRequirements(encoded string) ([]work.ReviewRequirement, error) {
+	var stored []storedReviewRequirement
+	if err := json.Unmarshal([]byte(encoded), &stored); err != nil {
+		return nil, fmt.Errorf("decode review requirements: %w", err)
+	}
+	var requirements []work.ReviewRequirement
+	for _, requirement := range stored {
+		requirements = append(requirements, work.ReviewRequirement(requirement))
+	}
+	return requirements, nil
 }
 
 func scanProfile(row scanner) (output.Profile, error) {

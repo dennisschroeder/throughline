@@ -795,6 +795,10 @@ func (s *memoryStore) ListReadyWorkForActor(context.Context, string) ([]ports.Re
 	return nil, nil
 }
 
+func (s *memoryStore) ReviewEvidence(context.Context, work.WorkItem) ([]work.ReviewEvidence, error) {
+	return nil, nil
+}
+
 func (s *memoryStore) ListQuestionsNeedingAttention(context.Context) ([]work.Question, error) {
 	return nil, nil
 }

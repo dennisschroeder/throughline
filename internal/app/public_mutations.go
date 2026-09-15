@@ -279,6 +279,12 @@ func (s *Service) CreateOutputRevision(ctx context.Context, command CreateOutput
 	return finishMutation(capture, result, err)
 }
 
+func (s *Service) RecordWorkItemValidation(ctx context.Context, command RecordWorkItemValidationCommand) (Mutation[output.ValidationRecord], error) {
+	ctx, capture := beginMutation(ctx)
+	result, err := s.recordWorkItemValidationMutation(ctx, command)
+	return finishMutation(capture, result, err)
+}
+
 func (s *Service) RecordValidation(ctx context.Context, command RecordValidationCommand) (Mutation[output.OutputRevision], error) {
 	ctx, capture := beginMutation(ctx)
 	result, err := s.recordValidationMutation(ctx, command)

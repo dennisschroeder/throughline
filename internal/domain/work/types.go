@@ -184,9 +184,12 @@ type WorkItem struct {
 	ExecutionPolicy   ExecutionPolicy
 	RequiredActorKind ActorKind
 	AttentionState    AttentionState
-	Version           int
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	// ReviewRequirements are the reviews done waits for; none means the gate
+	// has nothing to check.
+	ReviewRequirements []ReviewRequirement
+	Version            int
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 func NewObjective(id, key, title, description, desiredOutcome string, phase ObjectivePhase, priority Priority, now time.Time) (Objective, error) {

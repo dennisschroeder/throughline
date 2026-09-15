@@ -256,9 +256,12 @@ func (s *Service) claimWorkItemMutation(ctx context.Context, command ClaimWorkIt
 				return ClaimResult{}, err
 			}
 			if command.TransitionToInProgress {
+				// The same from/to payload transition_item writes, so a return to
+				// in_progress is recognisable whichever path took it.
 				if err := s.recordActivity(ctx, repository, work.Activity{
 					EntityKind: "work_item", EntityID: item.ID, WorkItemID: item.ID, ActorID: actor.ID,
 					EventType: "work_item.status_changed", Summary: "Work item moved from ready to in_progress",
+					PayloadJSON: json.RawMessage(`{"from":"ready","to":"in_progress","reason":"claimed"}`),
 				}); err != nil {
 					return ClaimResult{}, err
 				}

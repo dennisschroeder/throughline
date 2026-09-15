@@ -123,6 +123,7 @@ type Repository interface {
 	UpdateOutputRevisionAcceptance(context.Context, output.OutputRevision) error
 	CreateValidationRecord(context.Context, output.ValidationRecord) error
 	ValidationRecords(ctx context.Context, outputRevisionID string) ([]output.ValidationRecord, error)
+	ReviewEvidence(ctx context.Context, item work.WorkItem) ([]work.ReviewEvidence, error)
 	CreateOutputRequirement(context.Context, output.OutputRequirement) error
 	OutputRequirementsSatisfied(ctx context.Context, workItemID string) (bool, error)
 	ExpectedOutputsSatisfied(ctx context.Context, workItemID string) (bool, error)
@@ -161,6 +162,8 @@ type WorkItemContext struct {
 	ExternalActions      []ExternalActionDetail
 	// BlockingQuestions are the unsharp or open questions holding this item.
 	BlockingQuestions []work.Question
+	// ReviewEvidence says how each review the item declares currently stands.
+	ReviewEvidence []work.ReviewEvidence
 }
 
 type OutputRevisionDetail struct {

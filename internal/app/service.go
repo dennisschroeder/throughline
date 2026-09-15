@@ -161,19 +161,22 @@ func (s *Service) patchObjectiveMutation(ctx context.Context, command PatchObjec
 }
 
 type PatchWorkItemCommand struct {
-	WorkItemID                     string
-	ActorID                        string
-	IdempotencyKey                 string
-	ExpectedVersion                int
-	Title                          *string
-	Description                    *string
-	ParentID                       *string
-	Priority                       *work.Priority
-	EstimatedScope                 *work.EstimatedScope
-	Measure                        *work.Measure
-	ExecutionPolicy                *work.ExecutionPolicy
-	AttentionState                 *work.AttentionState
-	RequiredCapabilities           *[]string
+	WorkItemID           string
+	ActorID              string
+	IdempotencyKey       string
+	ExpectedVersion      int
+	Title                *string
+	Description          *string
+	ParentID             *string
+	Priority             *work.Priority
+	EstimatedScope       *work.EstimatedScope
+	Measure              *work.Measure
+	ExecutionPolicy      *work.ExecutionPolicy
+	AttentionState       *work.AttentionState
+	RequiredCapabilities *[]string
+	// ReviewRequirements replaces the reviews the item declares; nil leaves
+	// them unchanged and an empty list removes them.
+	ReviewRequirements             *[]work.ReviewRequirement
 	AcceptanceCriterionResolutions []PatchAcceptanceCriterionResolution
 	// AcceptanceCriteriaToAdd appends conditions to an item that already exists.
 	// A criterion that names SupersedesID replaces one instead, which is the only
@@ -278,6 +281,14 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 				}
 				changes = append(changes, "required capabilities")
 			}
+			if command.ReviewRequirements != nil {
+				requirements, err := normalizeReviewRequirements(*command.ReviewRequirements)
+				if err != nil {
+					return work.WorkItem{}, err
+				}
+				item.ReviewRequirements = requirements
+				changes = append(changes, "review requirements")
+			}
 			seenCriteria := make(map[string]bool, len(command.AcceptanceCriterionResolutions))
 			waivedRequired := false
 			for _, resolution := range command.AcceptanceCriterionResolutions {
@@ -378,6 +389,13 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 				if err := repository.CreateAcceptanceCriterion(ctx, replacement); err != nil {
 					return work.WorkItem{}, err
 				}
+				if err := s.recordActivity(ctx, repository, work.Activity{
+					EntityKind: "acceptance_criterion", EntityID: replacement.ID, WorkItemID: item.ID, ActorID: command.ActorID,
+					EventType: "acceptance_criterion.added",
+					Summary:   fmt.Sprintf("Acceptance criterion %d added", replacement.Ordinal),
+				}); err != nil {
+					return work.WorkItem{}, err
+				}
 				activeOrdinals[replacement.Ordinal] = true
 			}
 			if len(command.AcceptanceCriterionResolutions) > 0 || len(command.AcceptanceCriteriaToAdd) > 0 {
@@ -442,7 +460,7 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 }
 
 func patchWorkItemHasChanges(command PatchWorkItemCommand) bool {
-	return command.Title != nil || command.Description != nil || command.ParentID != nil || command.Priority != nil || command.EstimatedScope != nil || command.Measure != nil || command.ExecutionPolicy != nil || command.AttentionState != nil || command.RequiredCapabilities != nil || len(command.AcceptanceCriterionResolutions) > 0 || len(command.AcceptanceCriteriaToAdd) > 0 || len(command.ExpectedOutputsToAdd) > 0
+	return command.Title != nil || command.Description != nil || command.ParentID != nil || command.Priority != nil || command.EstimatedScope != nil || command.Measure != nil || command.ExecutionPolicy != nil || command.AttentionState != nil || command.RequiredCapabilities != nil || command.ReviewRequirements != nil || len(command.AcceptanceCriterionResolutions) > 0 || len(command.AcceptanceCriteriaToAdd) > 0 || len(command.ExpectedOutputsToAdd) > 0
 }
 
 func normalizedCapabilities(capabilities []string) ([]string, error) {
@@ -660,6 +678,7 @@ type CreateWorkItemCommand struct {
 	RequiredActorKind    work.ActorKind
 	AttentionState       work.AttentionState
 	RequiredCapabilities []string
+	ReviewRequirements   []work.ReviewRequirement
 	AcceptanceCriteria   []ProposedAcceptanceCriterion
 	ExpectedOutputs      []ProposedExpectedOutput
 	OutputRequirements   []ProposedOutputRequirement
@@ -703,27 +722,32 @@ func (s *Service) createWorkItemMutation(ctx context.Context, command CreateWork
 	if command.RequiredActorKind == "" {
 		command.RequiredActorKind = work.ActorAny
 	}
+	reviewRequirements, err := normalizeReviewRequirements(command.ReviewRequirements)
+	if err != nil {
+		return work.WorkItem{}, err
+	}
 	id, err := s.ids.New()
 	if err != nil {
 		return work.WorkItem{}, fmt.Errorf("generate work item id: %w", err)
 	}
 	item, err := work.NewWorkItem(work.WorkItem{
-		ID:                id,
-		Key:               command.Key,
-		ObjectiveID:       command.ObjectiveID,
-		PlanID:            command.PlanID,
-		ParentID:          command.ParentID,
-		Title:             command.Title,
-		Description:       command.Description,
-		Kind:              command.Kind,
-		CommitmentState:   command.CommitmentState,
-		ExecutionStatus:   command.ExecutionStatus,
-		Priority:          command.Priority,
-		EstimatedScope:    command.EstimatedScope,
-		Measure:           command.Measure,
-		ExecutionPolicy:   command.ExecutionPolicy,
-		RequiredActorKind: command.RequiredActorKind,
-		AttentionState:    command.AttentionState,
+		ID:                 id,
+		Key:                command.Key,
+		ObjectiveID:        command.ObjectiveID,
+		PlanID:             command.PlanID,
+		ParentID:           command.ParentID,
+		Title:              command.Title,
+		Description:        command.Description,
+		Kind:               command.Kind,
+		CommitmentState:    command.CommitmentState,
+		ExecutionStatus:    command.ExecutionStatus,
+		Priority:           command.Priority,
+		EstimatedScope:     command.EstimatedScope,
+		Measure:            command.Measure,
+		ExecutionPolicy:    command.ExecutionPolicy,
+		RequiredActorKind:  command.RequiredActorKind,
+		AttentionState:     command.AttentionState,
+		ReviewRequirements: reviewRequirements,
 	}, s.clock.Now())
 	if err != nil {
 		return work.WorkItem{}, err

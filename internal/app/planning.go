@@ -553,6 +553,23 @@ func ensureWorkItemScope(ctx context.Context, repository ports.Repository, objec
 	return nil
 }
 
+// normalizeReviewRequirements checks declared reviews against the validator
+// kinds Throughline records. Successor use is evidence about an accepted
+// output being reused, never a review of a work item.
+func normalizeReviewRequirements(requirements []work.ReviewRequirement) ([]work.ReviewRequirement, error) {
+	normalized, err := work.NormalizeReviewRequirements(requirements)
+	if err != nil {
+		return nil, err
+	}
+	for _, requirement := range normalized {
+		kind := output.ValidatorKind(requirement.ValidatorKind)
+		if !kind.Supported() || kind == output.ValidatorSuccessorUse {
+			return nil, fmt.Errorf("review requirement validator kind %q is not a review kind", requirement.ValidatorKind)
+		}
+	}
+	return normalized, nil
+}
+
 // ensureBlockableWorkItem admits an explicit blocking link only to a work
 // item of the question's objective that can still be executed. A done or
 // cancelled item has no outgoing transition and a rejected or superseded one
@@ -601,6 +618,7 @@ type ProposedWorkItem struct {
 	ExecutionPolicy      work.ExecutionPolicy
 	RequiredActorKind    work.ActorKind
 	RequiredCapabilities []string
+	ReviewRequirements   []work.ReviewRequirement
 	DependsOn            []string
 	AcceptanceCriteria   []ProposedAcceptanceCriterion
 	ExpectedOutputs      []ProposedExpectedOutput
@@ -878,22 +896,27 @@ func (s *Service) generatePlanItems(commands []ProposedWorkItem, plan work.Plan,
 
 	items := make([]generatedPlanItem, 0, len(commands))
 	for _, command := range commands {
+		reviewRequirements, err := normalizeReviewRequirements(command.ReviewRequirements)
+		if err != nil {
+			return nil, err
+		}
 		item, err := work.NewWorkItem(work.WorkItem{
-			ID:                idsByRef[strings.TrimSpace(command.ClientRef)],
-			Key:               command.Key,
-			ObjectiveID:       plan.ObjectiveID,
-			PlanID:            plan.ID,
-			ParentID:          idsByRef[strings.TrimSpace(command.ParentRef)],
-			Title:             command.Title,
-			Description:       command.Description,
-			Kind:              command.Kind,
-			CommitmentState:   work.ItemProposed,
-			ExecutionStatus:   work.StatusBacklog,
-			Priority:          command.Priority,
-			EstimatedScope:    command.EstimatedScope,
-			ExecutionPolicy:   command.ExecutionPolicy,
-			RequiredActorKind: command.RequiredActorKind,
-			AttentionState:    work.AttentionNone,
+			ID:                 idsByRef[strings.TrimSpace(command.ClientRef)],
+			Key:                command.Key,
+			ObjectiveID:        plan.ObjectiveID,
+			PlanID:             plan.ID,
+			ParentID:           idsByRef[strings.TrimSpace(command.ParentRef)],
+			Title:              command.Title,
+			Description:        command.Description,
+			Kind:               command.Kind,
+			CommitmentState:    work.ItemProposed,
+			ExecutionStatus:    work.StatusBacklog,
+			Priority:           command.Priority,
+			EstimatedScope:     command.EstimatedScope,
+			ExecutionPolicy:    command.ExecutionPolicy,
+			RequiredActorKind:  command.RequiredActorKind,
+			AttentionState:     work.AttentionNone,
+			ReviewRequirements: reviewRequirements,
 		}, now)
 		if err != nil {
 			return nil, err

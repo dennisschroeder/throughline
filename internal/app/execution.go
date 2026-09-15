@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -120,13 +121,17 @@ func transitionRequirements(ctx context.Context, repository ports.Repository, ob
 	if err != nil {
 		return nil, err
 	}
+	evidence, err := repository.ReviewEvidence(ctx, item)
+	if err != nil {
+		return nil, err
+	}
 	return work.EvaluateTransitionGate(work.TransitionGateFacts{
 		ObjectivePhase: objective.Phase, PlanApproved: planApproved, ItemCommitment: item.CommitmentState,
 		CurrentStatus: item.ExecutionStatus, TargetStatus: target,
 		AcceptanceCriteriaSatisfied: criteriaSatisfied, HardDependenciesSatisfied: dependenciesSatisfied,
 		ExpectedOutputsSatisfied: expectedOutputsSatisfied, OutputRequirementsSatisfied: outputRequirementsSatisfied,
 		ExternalActionsSatisfied:    externalActionsSatisfied,
-		ReviewRequirementsSatisfied: true,
+		ReviewRequirementsSatisfied: work.ReviewRequirementsSatisfied(evidence),
 	}), nil
 }
 
@@ -517,6 +522,7 @@ type RecordValidationCommand struct {
 	VerifierActorID    string
 	EvidenceArtifactID string
 	Details            json.RawMessage
+	Degraded           bool
 	IdempotencyKey     string
 }
 
@@ -566,6 +572,7 @@ func (s *Service) recordValidationMutation(ctx context.Context, command RecordVa
 			if err != nil {
 				return output.OutputRevision{}, err
 			}
+			record.Degraded = command.Degraded
 			if err := repository.CreateValidationRecord(ctx, record); err != nil {
 				return output.OutputRevision{}, err
 			}
@@ -608,6 +615,82 @@ func (s *Service) recordValidationMutation(ctx context.Context, command RecordVa
 		return output.OutputRevision{}, fmt.Errorf("record validation: %w", err)
 	}
 	return revision, nil
+}
+
+type RecordWorkItemValidationCommand struct {
+	WorkItemID         string
+	CriterionRef       string
+	ValidatorKind      output.ValidatorKind
+	Verdict            output.ValidationVerdict
+	Score              *float64
+	VerifierActorID    string
+	EvidenceArtifactID string
+	Details            json.RawMessage
+	Degraded           bool
+	IdempotencyKey     string
+}
+
+// recordWorkItemValidationMutation records a review of a work item. It never
+// changes the item; whether the review satisfies what the item declares is
+// derived when the done gate or a reader asks.
+func (s *Service) recordWorkItemValidationMutation(ctx context.Context, command RecordWorkItemValidationCommand) (output.ValidationRecord, error) {
+	if replay, found, err := replayIdempotently[output.ValidationRecord](ctx, s, command.VerifierActorID, command.IdempotencyKey, "record_work_item_validation", command); err != nil {
+		return output.ValidationRecord{}, err
+	} else if found {
+		return replay, nil
+	}
+	id, err := s.ids.New()
+	if err != nil {
+		return output.ValidationRecord{}, fmt.Errorf("generate validation id: %w", err)
+	}
+	var recorded output.ValidationRecord
+	err = s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
+		result, err := executeIdempotently(ctx, s, repository, command.VerifierActorID, command.IdempotencyKey, "record_work_item_validation", command, func() (output.ValidationRecord, error) {
+			item, err := repository.WorkItem(ctx, command.WorkItemID)
+			if err != nil {
+				return output.ValidationRecord{}, err
+			}
+			if evidenceID := strings.TrimSpace(command.EvidenceArtifactID); evidenceID != "" {
+				artifacts, err := repository.Artifacts(ctx, item.ID)
+				if err != nil {
+					return output.ValidationRecord{}, err
+				}
+				if !slices.ContainsFunc(artifacts, func(artifact output.Artifact) bool { return artifact.ID == evidenceID }) {
+					return output.ValidationRecord{}, errors.New("review evidence artifact must be attached to the reviewed work item")
+				}
+			}
+			// Anchored before this record's own activity, so only work recorded
+			// afterwards can make the review stale.
+			sequence, err := repository.LatestActivitySequence(ctx)
+			if err != nil {
+				return output.ValidationRecord{}, err
+			}
+			record, err := output.NewWorkItemValidationRecord(id, item.ID, sequence, command.CriterionRef, command.ValidatorKind, command.Verdict, command.Score, command.VerifierActorID, command.EvidenceArtifactID, command.Details, command.Degraded, s.clock.Now())
+			if err != nil {
+				return output.ValidationRecord{}, err
+			}
+			if err := repository.CreateValidationRecord(ctx, record); err != nil {
+				return output.ValidationRecord{}, err
+			}
+			summary := fmt.Sprintf("%s review of %s recorded as %s", record.ValidatorKind, record.CriterionRef, record.Verdict)
+			if record.Degraded {
+				summary += " (degraded)"
+			}
+			if err := s.recordActivity(ctx, repository, work.Activity{
+				EntityKind: "validation_record", EntityID: record.ID, WorkItemID: item.ID, ActorID: command.VerifierActorID,
+				EventType: "work_item_validation.recorded", Summary: summary,
+			}); err != nil {
+				return output.ValidationRecord{}, err
+			}
+			return record, nil
+		})
+		recorded = result
+		return err
+	})
+	if err != nil {
+		return output.ValidationRecord{}, fmt.Errorf("record work item validation: %w", err)
+	}
+	return recorded, nil
 }
 
 type AddOutputRequirementCommand struct {

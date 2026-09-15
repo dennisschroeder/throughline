@@ -17,10 +17,11 @@ func (r *transactionRepository) UpdateWorkItem(ctx context.Context, item work.Wo
 	result, err := r.transaction.ExecContext(ctx, `
 UPDATE work_items SET title = ?, description = ?, parent_id = ?, priority = ?, estimated_scope = ?,
     measure_value = ?, measure_unit = ?, measure_basis = ?,
-    execution_policy = ?, required_actor_kind = ?, attention_state = ?, execution_status = ?, version = ?, updated_at = ?
+    execution_policy = ?, required_actor_kind = ?, attention_state = ?, review_requirements_json = ?, execution_status = ?, version = ?, updated_at = ?
 WHERE id = ? AND version = ?`, item.Title, item.Description, nullableString(item.ParentID), item.Priority, item.EstimatedScope,
 		item.Measure.Value, item.Measure.Unit, item.Measure.Basis,
-		item.ExecutionPolicy, item.RequiredActorKind, item.AttentionState, item.ExecutionStatus, item.Version, formatTime(item.UpdatedAt), item.ID, expectedVersion)
+		item.ExecutionPolicy, item.RequiredActorKind, item.AttentionState, encodeReviewRequirements(item.ReviewRequirements),
+		item.ExecutionStatus, item.Version, formatTime(item.UpdatedAt), item.ID, expectedVersion)
 	if err != nil {
 		return fmt.Errorf("update work item: %w", err)
 	}
@@ -300,11 +301,12 @@ WHERE id = ? AND acceptance_state = ? AND state_version = ?`, revision.Acceptanc
 func (r *transactionRepository) CreateValidationRecord(ctx context.Context, record output.ValidationRecord) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO output_validations
-  (id, output_revision_id, criterion_ref, validator_kind, verdict, score, verifier_actor_id,
-   evidence_artifact_id, details_json, created_at, version)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ID, record.OutputRevisionID, record.CriterionRef,
-		record.ValidatorKind, record.Verdict, nullableFloat(record.Score), record.VerifierActorID,
-		nullableString(record.EvidenceArtifactID), string(record.Details), formatTime(record.CreatedAt), record.Version)
+  (id, output_revision_id, work_item_id, criterion_ref, validator_kind, verdict, score, verifier_actor_id,
+   evidence_artifact_id, details_json, created_at, version, subject_sequence, degraded)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ID, nullableString(record.OutputRevisionID), nullableString(record.WorkItemID),
+		record.CriterionRef, record.ValidatorKind, record.Verdict, nullableFloat(record.Score), record.VerifierActorID,
+		nullableString(record.EvidenceArtifactID), string(record.Details), formatTime(record.CreatedAt), record.Version,
+		record.SubjectSequence, boolInt(record.Degraded))
 	if err != nil {
 		return fmt.Errorf("insert validation record: %w", err)
 	}
@@ -313,6 +315,56 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ID, record.OutputRevisionID, r
 
 func (r *transactionRepository) ValidationRecords(ctx context.Context, outputRevisionID string) ([]output.ValidationRecord, error) {
 	return listValidationRecords(ctx, r.transaction, outputRevisionID)
+}
+
+func (r *transactionRepository) ReviewEvidence(ctx context.Context, item work.WorkItem) ([]work.ReviewEvidence, error) {
+	return reviewEvidence(ctx, r.transaction, item)
+}
+
+// staleningWorkEvents are the recorded work after which a review of the item
+// no longer vouches for it. A return to in_progress is matched separately.
+// Claims, transitions to review or done, criterion resolutions and attention
+// are deliberately absent: they judge or schedule work rather than change it.
+const staleningWorkEvents = `'progress.appended', 'artifact.attached', 'output_revision.created',
+  'acceptance_criterion.added', 'acceptance_criterion.superseded', 'expected_output.defined', 'output_requirement.added'`
+
+// reviewEvidence reports how each review the item declares currently stands.
+func reviewEvidence(ctx context.Context, reader sqlReader, item work.WorkItem) ([]work.ReviewEvidence, error) {
+	if len(item.ReviewRequirements) == 0 {
+		return nil, nil
+	}
+	rows, err := reader.QueryContext(ctx, `
+SELECT validation.id, validation.criterion_ref, validation.validator_kind, validation.verdict, validation.degraded,
+       EXISTS (
+         SELECT 1 FROM activity
+         WHERE activity.work_item_id = validation.work_item_id
+           AND activity.sequence > validation.subject_sequence
+           AND (activity.event_type IN (`+staleningWorkEvents+`)
+                OR (activity.event_type = 'work_item.status_changed'
+                    AND json_extract(activity.payload_json, '$.to') = 'in_progress'))
+       )
+FROM output_validations validation
+WHERE validation.work_item_id = ?
+ORDER BY validation.rowid`, item.ID)
+	if err != nil {
+		return nil, fmt.Errorf("query review evidence: %w", err)
+	}
+	defer rows.Close()
+	var records []work.ReviewRecordFact
+	for rows.Next() {
+		var record work.ReviewRecordFact
+		var degraded, stale int
+		if err := rows.Scan(&record.ID, &record.CriterionRef, &record.ValidatorKind, &record.Verdict, &degraded, &stale); err != nil {
+			return nil, err
+		}
+		record.Degraded = degraded == 1
+		record.Stale = stale == 1
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return work.EvaluateReviewEvidence(item.ReviewRequirements, records), nil
 }
 
 func (r *transactionRepository) CreateOutputRequirement(ctx context.Context, requirement output.OutputRequirement) error {
@@ -693,8 +745,8 @@ SELECT id, work_item_id, required_output_revision_id, required_profile_name, ver
 FROM output_requirements`
 
 const validationSelect = `
-SELECT id, output_revision_id, criterion_ref, validator_kind, verdict, score, verifier_actor_id,
-       evidence_artifact_id, details_json, created_at, version
+SELECT id, output_revision_id, work_item_id, criterion_ref, validator_kind, verdict, score, verifier_actor_id,
+       evidence_artifact_id, details_json, created_at, version, subject_sequence, degraded
 FROM output_validations`
 
 const activitySelect = `
@@ -819,12 +871,17 @@ func scanOutputRequirement(row scanner) (output.OutputRequirement, error) {
 func scanValidationRecord(row scanner) (output.ValidationRecord, error) {
 	var record output.ValidationRecord
 	var score sql.NullFloat64
-	var evidence sql.NullString
+	var evidence, outputRevisionID, workItemID sql.NullString
 	var details, createdAt string
-	if err := row.Scan(&record.ID, &record.OutputRevisionID, &record.CriterionRef, &record.ValidatorKind,
-		&record.Verdict, &score, &record.VerifierActorID, &evidence, &details, &createdAt, &record.Version); err != nil {
+	var degraded int
+	if err := row.Scan(&record.ID, &outputRevisionID, &workItemID, &record.CriterionRef, &record.ValidatorKind,
+		&record.Verdict, &score, &record.VerifierActorID, &evidence, &details, &createdAt, &record.Version,
+		&record.SubjectSequence, &degraded); err != nil {
 		return output.ValidationRecord{}, err
 	}
+	record.OutputRevisionID = outputRevisionID.String
+	record.WorkItemID = workItemID.String
+	record.Degraded = degraded == 1
 	if score.Valid {
 		value := score.Float64
 		record.Score = &value
@@ -934,47 +991,34 @@ func nullableFloat(value *float64) any {
 }
 
 func prefixedObjectiveColumns(alias string) string {
-	return alias + `.id, ` + alias + `.key, ` + alias + `.title, ` + alias + `.description, ` +
-		alias + `.desired_outcome, ` + alias + `.phase, ` + alias + `.prior_phase, ` + alias + `.updated_by, ` +
-		alias + `.version, ` + alias + `.created_at, ` + alias + `.updated_at`
+	return prefixedColumns(alias, objectiveColumns)
 }
 
 func prefixedWorkItemColumns(alias string) string {
-	return alias + `.id, ` + alias + `.key, ` + alias + `.objective_id, ` + alias + `.plan_id, ` +
-		alias + `.parent_id, ` + alias + `.title, ` + alias + `.description, ` + alias + `.kind, ` +
-		alias + `.commitment_state, ` + alias + `.execution_status, ` + alias + `.priority, ` +
-		alias + `.estimated_scope, ` + alias + `.execution_policy, ` + alias + `.required_actor_kind, ` +
-		alias + `.attention_state, ` + alias + `.version, ` + alias + `.created_at, ` + alias + `.updated_at`
+	return prefixedColumns(alias, workItemColumns)
+}
+
+func prefixedColumns(alias string, columns []string) string {
+	prefixed := make([]string, len(columns))
+	for index, column := range columns {
+		prefixed[index] = alias + "." + column
+	}
+	return strings.Join(prefixed, ", ")
 }
 
 func scanReadyWorkItem(row scanner) (work.Objective, work.WorkItem, error) {
 	var objective work.Objective
 	var item work.WorkItem
-	var objectivePriorPhase, objectiveUpdatedBy, planID, parentID sql.NullString
-	var objectiveCreatedAt, objectiveUpdatedAt, itemCreatedAt, itemUpdatedAt string
-	if err := row.Scan(
-		&objective.ID, &objective.Key, &objective.Title, &objective.Description, &objective.DesiredOutcome,
-		&objective.Phase, &objectivePriorPhase, &objectiveUpdatedBy, &objective.Version, &objectiveCreatedAt, &objectiveUpdatedAt,
-		&item.ID, &item.Key, &item.ObjectiveID, &planID, &parentID, &item.Title, &item.Description, &item.Kind,
-		&item.CommitmentState, &item.ExecutionStatus, &item.Priority, &item.EstimatedScope, &item.ExecutionPolicy,
-		&item.RequiredActorKind, &item.AttentionState, &item.Version, &itemCreatedAt, &itemUpdatedAt,
-	); err != nil {
+	objectiveTargets, finishObjective := objectiveScanTargets(&objective)
+	itemTargets, finishItem := workItemScanTargets(&item)
+	if err := row.Scan(append(objectiveTargets, itemTargets...)...); err != nil {
 		return work.Objective{}, work.WorkItem{}, err
 	}
-	objective.PriorPhase = work.ObjectivePhase(objectivePriorPhase.String)
-	objective.UpdatedBy = objectiveUpdatedBy.String
-	item.PlanID = planID.String
-	item.ParentID = parentID.String
-	var err error
-	objective.CreatedAt, err = parseTime(objectiveCreatedAt)
-	if err == nil {
-		objective.UpdatedAt, err = parseTime(objectiveUpdatedAt)
+	if err := finishObjective(); err != nil {
+		return work.Objective{}, work.WorkItem{}, err
 	}
-	if err == nil {
-		item.CreatedAt, err = parseTime(itemCreatedAt)
+	if err := finishItem(); err != nil {
+		return work.Objective{}, work.WorkItem{}, err
 	}
-	if err == nil {
-		item.UpdatedAt, err = parseTime(itemUpdatedAt)
-	}
-	return objective, item, err
+	return objective, item, nil
 }

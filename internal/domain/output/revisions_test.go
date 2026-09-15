@@ -378,3 +378,32 @@ func activeProfile(validation json.RawMessage) Profile {
 		Validation:     validation,
 	}
 }
+
+func TestNewWorkItemValidationRecordBindsTheItemAsItsOnlySubject(t *testing.T) {
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	record, err := NewWorkItemValidationRecord("review-1", " item-1 ", 42, "code-review", ValidatorHumanReview, VerdictPassed, nil, "human:reviewer", "", json.RawMessage(`{"rationale":"Read the diff."}`), true, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.WorkItemID != "item-1" || record.OutputRevisionID != "" || record.SubjectSequence != 42 || !record.Degraded || record.Version != 1 {
+		t.Fatalf("work item review = %#v", record)
+	}
+	for name, build := range map[string]func() (ValidationRecord, error){
+		"no work item": func() (ValidationRecord, error) {
+			return NewWorkItemValidationRecord("r", " ", 1, "code-review", ValidatorProbe, VerdictPassed, nil, "agent:ci", "", nil, false, now)
+		},
+		"successor use": func() (ValidationRecord, error) {
+			return NewWorkItemValidationRecord("r", "item-1", 1, "code-review", ValidatorSuccessorUse, VerdictPassed, nil, "agent:ci", "", nil, false, now)
+		},
+		"negative sequence": func() (ValidationRecord, error) {
+			return NewWorkItemValidationRecord("r", "item-1", -1, "code-review", ValidatorProbe, VerdictPassed, nil, "agent:ci", "", nil, false, now)
+		},
+		"human review without rationale": func() (ValidationRecord, error) {
+			return NewWorkItemValidationRecord("r", "item-1", 1, "code-review", ValidatorHumanReview, VerdictPassed, nil, "human:reviewer", "", nil, false, now)
+		},
+	} {
+		if _, err := build(); err == nil {
+			t.Fatalf("%s was accepted", name)
+		}
+	}
+}

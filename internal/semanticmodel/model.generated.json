@@ -126,7 +126,7 @@
     {
       "id": "validation_record",
       "name": "ValidationRecord",
-      "definition": "An append-only verdict and evidence record for one output revision."
+      "definition": "An append-only verdict and evidence record whose subject is exactly one output revision or one work item. On a work item it is a review: it records that the work was checked, by whom, with what verdict and whether the pass was degraded, never how the review was performed."
     },
     {
       "id": "work_item",
@@ -247,6 +247,12 @@
       "id": "work_item_has_progress",
       "from": "work_item",
       "to": "progress",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "work_item_has_review",
+      "from": "work_item",
+      "to": "validation_record",
       "cardinality": "one_to_many"
     },
     {
@@ -760,6 +766,10 @@
       "statement": "At most one unexpired active claim exists per work item; claims are reclaimable leases."
     },
     {
+      "id": "declared_review_required",
+      "statement": "A work item that declares review requirements reaches done only when, for each, the latest work-item validation with the same criterion reference and validator kind passed or was waived and no work was recorded on the item after it; an item that declares none has no review requirement."
+    },
+    {
       "id": "execution_policy_not_authority",
       "statement": "Execution policy governs internal work autonomy and never grants authority for an ExternalAction."
     },
@@ -888,8 +898,8 @@
   "manifest": {
     "schema_version": "1.0",
     "model_version": "1.1.0",
-    "content_digest": "2439f77501a70d7e9d718f3f21b540c8f063dc91e5afe1c123d981956b8b0054",
-    "source_digest": "60dbc470fc961e064cdaf2cdfd0a47f3b955795ea1372d153899eb0e9b835b24",
+    "content_digest": "b3bb5e1cb99510306f96af31b7a4c4db09785e45acf3ff9f6ad07bdb69d32bfa",
+    "source_digest": "55e794dfefd5f94671628994fdf33b4bb5f308c689e1b9a7bf8909e91ee42d7b",
     "bootstrap": "Throughline is a local, authoritative coordination state layer for domain-neutral work. It records intent, plans, work, outputs, validation, reuse, and delegated authority; it does not orchestrate agents or perform external effects. Capability does not imply Authority. Call get_semantic_model for details.",
     "available_sections": [
       "manifest",
@@ -902,12 +912,12 @@
     ],
     "section_counts": {
       "entities": 26,
-      "invariants": 12,
+      "invariants": 13,
       "lifecycles": 11,
-      "relations": 22,
+      "relations": 23,
       "source_mappings": 19
     }
   },
-  "content_digest": "2439f77501a70d7e9d718f3f21b540c8f063dc91e5afe1c123d981956b8b0054",
-  "source_digest": "60dbc470fc961e064cdaf2cdfd0a47f3b955795ea1372d153899eb0e9b835b24"
+  "content_digest": "b3bb5e1cb99510306f96af31b7a4c4db09785e45acf3ff9f6ad07bdb69d32bfa",
+  "source_digest": "55e794dfefd5f94671628994fdf33b4bb5f308c689e1b9a7bf8909e91ee42d7b"
 }

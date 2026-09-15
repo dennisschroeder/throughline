@@ -773,7 +773,8 @@ CREATE TABLE output_requirements (
 
 CREATE TABLE output_validations (
   id TEXT PRIMARY KEY,
-  output_revision_id TEXT NOT NULL REFERENCES output_revisions(id) ON DELETE CASCADE,
+  output_revision_id TEXT REFERENCES output_revisions(id) ON DELETE CASCADE,
+  work_item_id TEXT REFERENCES work_items(id) ON DELETE CASCADE,
   criterion_ref TEXT,
   validator_kind TEXT NOT NULL CHECK (validator_kind IN ('structure', 'schema', 'evaluation', 'provenance', 'human_review', 'policy', 'probe', 'successor_use')),
   verdict TEXT NOT NULL CHECK (verdict IN ('passed', 'failed', 'waived')),
@@ -781,7 +782,10 @@ CREATE TABLE output_validations (
   verifier_actor_id TEXT REFERENCES actors(id),
   evidence_artifact_id TEXT REFERENCES artifacts(id) ON DELETE RESTRICT,
   details_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  subject_sequence INTEGER NOT NULL DEFAULT 0,
+  degraded INTEGER NOT NULL DEFAULT 0,
+  CHECK ((output_revision_id IS NOT NULL) + (work_item_id IS NOT NULL) = 1)
 );
 
 CREATE TABLE capabilities (
@@ -1348,6 +1352,10 @@ Bind one or more attached Artifacts to a new immutable OutputRevision. The reque
 Record an externally produced validation verdict against one exact OutputRevision and criterion. Throughline verifies the record shape and deterministically reevaluates the profile acceptance expression. It does not run the research, evaluation, shell probe, or human judgment itself. When all mandatory validations exist and pass (or are explicitly waived by authorized policy), the same transaction may mark the revision accepted and emit activity.
 
 Supported V1 validator kinds are `structure`, `schema`, `evaluation`, `provenance`, `human_review`, `policy`, `probe`, and `successor_use`. Human review must name the reviewer and immutable rubric/criterion; probe records include the external result and evidence rather than asking Throughline to execute a command.
+
+With `work_item_id` instead of `output_revision_id`, the record is a review of the work item itself, for work whose result is not an output revision. It never changes the item and returns the ValidationRecord. Any record may carry `degraded: true` for a pass that ran with less than its intended strength; that is information for readers and changes nothing the record satisfies. A review's evidence artifact, when given, must be attached to the reviewed item, and `successor_use` is not a review kind.
+
+A work item declares the reviews `done` waits for as `review_requirements`, each a `criterion_ref` and a `validator_kind`, on `create_item`, `propose_plan` items, or `patch_item` (which replaces the list). For each requirement the transition gate reads the latest work-item validation with exactly that criterion reference and kind: `passed` or `waived` satisfies it unless the record is stale; `failed`, stale or no record does not, and the gate reports `review_requirements`. A record is stale once later work is recorded on the item: progress, an attached artifact, a created output revision, an added or superseded acceptance criterion, a defined expected output, an added output requirement, or a status change back to `in_progress`. Claims, transitions to `review` or `done`, criterion resolutions, attention and other patches do not stale it. Throughline records that a review happened; how reviewers are chosen and how many passes run is the workflow's business. `get_item` (section `review_evidence`) and the dashboard report each requirement as `satisfied`, `missing`, `failed` or `stale`, with the deciding record and whether that pass was degraded.
 
 #### `list_outputs`
 

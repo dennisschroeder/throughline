@@ -152,6 +152,16 @@ func buildItemDetail(ctx context.Context, service *app.Service, id string, now t
 		}
 	}
 
+	for _, evidence := range item.ReviewEvidence {
+		detail.ReviewEvidence = append(detail.ReviewEvidence, reviewEvidenceView{
+			CriterionRef:       evidence.Requirement.CriterionRef,
+			ValidatorKind:      evidence.Requirement.ValidatorKind,
+			State:              string(evidence.State),
+			ValidationRecordID: evidence.ValidationRecordID,
+			Degraded:           evidence.Degraded,
+		})
+	}
+
 	for _, question := range item.BlockingQuestions {
 		detail.BlockingQuestions = append(detail.BlockingQuestions, blockingQuestionView{
 			QuestionID:     question.ID,
@@ -272,12 +282,15 @@ type itemDetail struct {
 	// BlockingQuestions are kept apart from DependsOn: a question is resolved by
 	// answering or waiving it, not by finishing another item.
 	BlockingQuestions []blockingQuestionView `json:"blocking_questions"`
-	Progress          []progressView         `json:"progress"`
-	ExpectedOutputs   []expectedOutputView   `json:"expected_outputs"`
-	OutputRevisions   []outputRevisionView   `json:"output_revisions"`
-	ExternalActions   []externalActionView   `json:"external_actions"`
-	Artifacts         []artifactView         `json:"artifacts"`
-	Claim             *claimView             `json:"claim,omitempty"`
+	// ReviewEvidence shows each declared review as satisfied, missing, failed
+	// or stale, so the reason done is refused is visible where the item is read.
+	ReviewEvidence  []reviewEvidenceView `json:"review_evidence"`
+	Progress        []progressView       `json:"progress"`
+	ExpectedOutputs []expectedOutputView `json:"expected_outputs"`
+	OutputRevisions []outputRevisionView `json:"output_revisions"`
+	ExternalActions []externalActionView `json:"external_actions"`
+	Artifacts       []artifactView       `json:"artifacts"`
+	Claim           *claimView           `json:"claim,omitempty"`
 	// ReadOnly is true when this item has no open gate — the drawer then shows the
 	// read-only footer ("No open gate on this item...") instead of decision buttons.
 	ReadOnly bool `json:"read_only"`
@@ -318,6 +331,14 @@ type dependencyView struct {
 	Note            string `json:"note,omitempty"`
 	ExecutionStatus string `json:"execution_status,omitempty"`
 	Satisfied       *bool  `json:"satisfied,omitempty"`
+}
+
+type reviewEvidenceView struct {
+	CriterionRef       string `json:"criterion_ref"`
+	ValidatorKind      string `json:"validator_kind"`
+	State              string `json:"state"`
+	ValidationRecordID string `json:"validation_record_id,omitempty"`
+	Degraded           bool   `json:"degraded"`
 }
 
 type blockingQuestionView struct {

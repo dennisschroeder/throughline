@@ -431,6 +431,10 @@ func buildCard(item ports.WorkItemContext, gatedWorkItem map[string]Gate, readyI
 			label += fmt.Sprintf(" (+%d more)", more)
 		}
 		card.Blocker = &CardBlocker{Code: "blocked_question", Label: label}
+	} else if evidence, ok := firstUnsatisfiedReview(item.ReviewEvidence); ok && wi.ExecutionStatus == work.StatusReview {
+		// An item in review whose declared review is missing, failed or stale
+		// cannot reach done; saying which, on the card, is the point of deriving it.
+		card.Blocker = &CardBlocker{Code: "review_evidence", Label: "done waits on review · " + evidence.Requirement.CriterionRef + " " + string(evidence.State)}
 	} else if wi.CommitmentState == work.ItemAccepted && objective.Phase == work.ObjectiveExecution &&
 		wi.ExecutionStatus != work.StatusDone && wi.ExecutionStatus != work.StatusCancelled && !readyIDs[wi.ID] {
 		card.Blocker = &CardBlocker{Code: "blocked_dependency", Label: "blocked · waiting on dependencies"}
@@ -520,4 +524,13 @@ func phaseNote(phase work.ObjectivePhase) string {
 	default:
 		return ""
 	}
+}
+
+func firstUnsatisfiedReview(evidence []work.ReviewEvidence) (work.ReviewEvidence, bool) {
+	for _, item := range evidence {
+		if item.State != work.ReviewEvidenceSatisfied {
+			return item, true
+		}
+	}
+	return work.ReviewEvidence{}, false
 }

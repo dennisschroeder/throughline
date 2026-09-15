@@ -226,8 +226,17 @@ const (
 )
 
 type ValidationRecord struct {
-	ID                 string
-	OutputRevisionID   string
+	ID string
+	// Exactly one subject is set: the output revision an artefact validation
+	// checked, or the work item a review checked.
+	OutputRevisionID string
+	WorkItemID       string
+	// SubjectSequence is the activity sequence current when a work-item review
+	// was recorded; work recorded on the item after it makes the review stale.
+	SubjectSequence int64
+	// Degraded marks a pass that ran with less than its intended strength. It
+	// is recorded for readers and never changes what the record satisfies.
+	Degraded           bool
 	Version            int
 	CriterionRef       string
 	ValidatorKind      ValidatorKind
@@ -240,12 +249,47 @@ type ValidationRecord struct {
 }
 
 func NewValidationRecord(id string, revision OutputRevision, criterionRef string, kind ValidatorKind, verdict ValidationVerdict, score *float64, verifierActorID, evidenceArtifactID string, details json.RawMessage, now time.Time) (ValidationRecord, error) {
+	if revision.ID == "" {
+		return ValidationRecord{}, errors.New("validation record requires id, output revision, and criterion reference")
+	}
+	record, err := newValidationRecord(id, criterionRef, kind, verdict, score, verifierActorID, evidenceArtifactID, details, now)
+	if err != nil {
+		return ValidationRecord{}, err
+	}
+	record.OutputRevisionID = revision.ID
+	return record, nil
+}
+
+// NewWorkItemValidationRecord records a review of a work item itself, for
+// work whose result is not an output revision.
+func NewWorkItemValidationRecord(id, workItemID string, subjectSequence int64, criterionRef string, kind ValidatorKind, verdict ValidationVerdict, score *float64, verifierActorID, evidenceArtifactID string, details json.RawMessage, degraded bool, now time.Time) (ValidationRecord, error) {
+	workItemID = strings.TrimSpace(workItemID)
+	if workItemID == "" {
+		return ValidationRecord{}, errors.New("work item validation requires a work item")
+	}
+	if subjectSequence < 0 {
+		return ValidationRecord{}, errors.New("work item validation subject sequence cannot be negative")
+	}
+	if kind == ValidatorSuccessorUse {
+		return ValidationRecord{}, errors.New("successor-use evidence applies to output revisions, not work items")
+	}
+	record, err := newValidationRecord(id, criterionRef, kind, verdict, score, verifierActorID, evidenceArtifactID, details, now)
+	if err != nil {
+		return ValidationRecord{}, err
+	}
+	record.WorkItemID = workItemID
+	record.SubjectSequence = subjectSequence
+	record.Degraded = degraded
+	return record, nil
+}
+
+func newValidationRecord(id, criterionRef string, kind ValidatorKind, verdict ValidationVerdict, score *float64, verifierActorID, evidenceArtifactID string, details json.RawMessage, now time.Time) (ValidationRecord, error) {
 	id = strings.TrimSpace(id)
 	criterionRef = strings.TrimSpace(criterionRef)
 	verifierActorID = strings.TrimSpace(verifierActorID)
 	evidenceArtifactID = strings.TrimSpace(evidenceArtifactID)
-	if id == "" || revision.ID == "" || criterionRef == "" {
-		return ValidationRecord{}, errors.New("validation record requires id, output revision, and criterion reference")
+	if id == "" || criterionRef == "" {
+		return ValidationRecord{}, errors.New("validation record requires id, subject, and criterion reference")
 	}
 	if !kind.supported() {
 		return ValidationRecord{}, fmt.Errorf("unsupported validator kind %q", kind)
@@ -287,7 +331,6 @@ func NewValidationRecord(id string, revision OutputRevision, criterionRef string
 	}
 	return ValidationRecord{
 		ID:                 id,
-		OutputRevisionID:   revision.ID,
 		Version:            1,
 		CriterionRef:       criterionRef,
 		ValidatorKind:      kind,
@@ -449,6 +492,11 @@ func latestValidationsForRevision(revisionID string, validations []ValidationRec
 		}
 	}
 	return latest
+}
+
+// Supported reports whether the kind is one Throughline records.
+func (kind ValidatorKind) Supported() bool {
+	return kind.supported()
 }
 
 func (kind ValidatorKind) supported() bool {
