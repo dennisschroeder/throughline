@@ -637,6 +637,74 @@ level. Each fix was followed by a test that decodes the old stored shape.
   `TestQuestionGatePreservesTheStoredAttentionState`,
   `TestQuestionBlockingAndAttentionOverTheWire` (MCP), and the two replay-decoding tests.
 
+### REP-09 REVIEW
+
+- Commits: `e491ecb` (implementation), then `eaf0173`, `34f8ffa` and `e29a914`, each a response to a
+  review pass, at the 3-pass budget.
+- Claim: `01a0a5f3-7ac6-73ff-9a75-5f4b39bd827c`. Decision: `01a0a5f4-81dc-7635-865d-36d5d90df3fa`.
+- Final gate: all six repository commands exited zero on 2026-09-15 at `e29a914`, plus
+  `go test ./... -race -shuffle=on`.
+
+Implements triage decision `01a07226-8f46`: Throughline records that a review happened, not how.
+`ReviewRequirementsSatisfied` was a literal `true`; it is now derived. A work item declares
+`review_requirements` (criterion reference and validator kind) on `create_item`, `propose_plan`
+and `patch_item`; `record_validation` accepts `work_item_id` beside `output_revision_id`, and any
+record may be `degraded`. For each requirement the gate reads the latest matching work-item
+validation: passed or waived satisfies it unless work was recorded on the item afterwards. Migration
+0016 rebuilds `output_validations` with exactly one subject. `get_item` and the dashboard drawer
+report each requirement as satisfied, missing, failed or stale, with the deciding record and its
+degraded flag, and a card in review names the review done waits on.
+
+The plan and the triage decision left "stale" undefined, which decides how strict the gate is in
+daily use; it went to Dennis as the one product question of this node. He chose staleness on later
+recorded work (progress, artifacts, output revisions, criterion and output-contract changes, a
+return to in_progress) over staleness only on rework or on any item mutation. Claims, the move to
+review or done and criterion resolutions deliberately do not stale a review, so the ordinary flow
+of review, resolve criteria, done keeps working.
+
+The node also repaired a REP-06 leftover the column refactor exposed: the ready-work join listed its
+own columns and had never read objective priority and appetite or item measure, so
+`list_ready_items` reported them unset. It now shares the column lists with the plain selects.
+
+#### Review
+
+Three passes, all degraded (same model family; no cross-provider reviewer available).
+
+| Pass | Mutants | Survived | Real defects found and fixed |
+|---|---|---|---|
+| 1 | 14 | 6 | 1 (`patch_item` expected outputs did not stale a review) |
+| 2 | 13 | 5 | 2 (dropping an unsatisfied requirement, or declaring one on a done item, raised no attention) |
+| 3 | 13 | 6 | 0 |
+
+Pass 1's defect was a second path to the same state change writing a different record:
+`define_expected_output` wrote `expected_output.defined`, `patch_item` creating the same kind of
+row did not, and staleness keyed on the record. Pass 2's two defects were the review-requirement
+analogue of a rule acceptance criteria already had (waiving or adding a required criterion flags
+the item); the rule existed, the new field had not been held against it. Pass 3 found only test
+gaps, the most important being that nothing asserted the ordinary flow, a review recorded in
+progress followed by the move to review, still reaches done.
+
+#### Dispositions
+
+| Finding | Disposition |
+|---|---|
+| Adding `Degraded` and `ReviewRequirements` changes command hashes, so a retry spanning the upgrade is refused | Covered by the separately filed hash-compatibility work from REP-08 |
+| Any verifier string, including an unregistered actor or a non-human `waived`, satisfies a `human_review` requirement | Rejected for this node: output validations share the gap, and which reader counts is workflow policy by the triage decision |
+| Removing `acceptance_criterion.superseded` from the staling events survives | Rejected: equivalent, every supersession also records `acceptance_criterion.added` |
+| Declaring a requirement on a done item flags it even when a matching pass already exists | Accepted as specified: the declaration changes what that completion claimed |
+
+#### Evidence
+
+- `TestDeclaredReviewRequirementsGateDone`: missing, wrong criterion, wrong kind, failed, a later
+  failure after a pass, degraded pass, stale after progress and after a return to in_progress and
+  after an added criterion, and resolution and claim renewal not staling; done only at the end.
+- `TestEveryKindOfRecordedWorkStalesAReview` (every staling step, plus a review recorded straight
+  after one not being stale), `TestClaimingIntoInProgressStalesAnEarlierReview`,
+  `TestWorkOnAnotherItemDoesNotStaleAReview`, `TestReviewBeforeMovingToReviewStillAllowsDone`.
+- `TestMigration0016KeepsOutputValidationsAndTheirProtection`, `TestReadyWorkCarriesEveryObjectiveAndItemField`,
+  `TestReviewRequirementsOverTheWire` (MCP), `TestDashboardExposesReviewEvidence` and
+  `TestCardInReviewNamesTheUnsatisfiedReview`.
+
 ## Feedback
 
 - REP-01 was estimated small but consumed the full five-pass review budget because file permissions
@@ -850,4 +918,24 @@ level. Each fix was followed by a test that decodes the old stored shape.
   The first REP-08 commit landed on a detached HEAD whose parent was the branch tip, so a
   fast-forward repaired it without loss; `git status -sb` after every commit is what caught it.
 - **The claim held for a fifth node in a row.**
+
+### REP-09
+
+- **The one real product question of the node was spotted before any code and asked once.** The
+  plan's gate said "stale" without defining it, and each plausible definition makes the gate
+  behave differently every day. Asking cost one exchange; guessing would have been baked into a
+  migration and every workflow that records reviews.
+- **A rule keyed on a record type is only as good as the discipline of every writer of that
+  record.** Pass 1's defect was not in the staleness query but in a second code path creating the
+  same kind of row without writing the same activity. The same shape appeared in REP-07 (activity
+  without a binding). Worth a standing review question: when a derived rule reads a record, list
+  every writer of the underlying state, not only the tool named after it.
+- **New fields should be held against the rules their siblings already obey.** Both pass-2 defects
+  were the acceptance-criterion attention rule not extended to review requirements. The rule was
+  one screen away in the same function.
+- **A refactor for this node repaired a defect from an earlier one.** Unifying the ready-work
+  column lists exposed that REP-06's fields had never reached `list_ready_items`, which none of
+  REP-06's three review passes found because the defect was a missing read in a query nobody
+  changed.
+- **The claim held for a sixth node in a row.**
 
