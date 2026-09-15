@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dennisschroeder/throughline/internal/app"
 	"github.com/dennisschroeder/throughline/internal/config"
@@ -128,8 +131,9 @@ func TestCapabilityGrantNeverMigratesAMismatchedSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := count()
-	if code, stderr := grant(); code == 0 || !strings.Contains(stderr, "restart the daemon") || !strings.Contains(stderr, "throughline daemon restart") {
-		t.Fatalf("grant against an older schema = exit %d, %q", code, stderr)
+	wantOlder := fmt.Sprintf("database is at migration %d, this binary carries %d", latest-1, latest)
+	if code, stderr := grant(); code == 0 || !strings.Contains(stderr, wantOlder) || !strings.Contains(stderr, "throughline daemon restart") || !strings.Contains(stderr, "open the workspace once through the daemon") {
+		t.Fatalf("grant against an older schema = exit %d, %q; want %q and the restart-then-open remediation", code, stderr, wantOlder)
 	}
 	if count() != before {
 		t.Fatal("the CLI migrated the workspace")
@@ -142,10 +146,76 @@ func TestCapabilityGrantNeverMigratesAMismatchedSchema(t *testing.T) {
 	if _, err := db.Exec("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, 'future.sql', '2026-09-15T00:00:00Z')", latest+1); err != nil {
 		t.Fatal(err)
 	}
-	if code, stderr := grant(); code == 0 || !strings.Contains(stderr, "update throughline") {
+	if code, stderr := grant(); code == 0 || !strings.Contains(stderr, fmt.Sprintf("applied migration %d (future.sql) is not recognized", latest+1)) || !strings.Contains(stderr, "same throughline release") {
 		t.Fatalf("grant against a newer schema = exit %d, %q", code, stderr)
+	}
+
+	// Same length, different history: a renamed migration is a different
+	// release, not an unmigrated one.
+	if _, err := db.Exec("DELETE FROM schema_migrations WHERE version = ?", latest+1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE schema_migrations SET name = 'renamed.sql' WHERE version = ?", latest); err != nil {
+		t.Fatal(err)
+	}
+	if code, stderr := grant(); code == 0 || !strings.Contains(stderr, "name mismatch") {
+		t.Fatalf("grant against a renamed migration = exit %d, %q", code, stderr)
 	}
 	if capabilityHeld(t, workspace, "agent:worker", "web_research") {
 		t.Fatal("a grant against a mismatched schema assigned the capability")
+	}
+}
+
+// TestCapabilityGrantRefusesAMissingDatabaseWithoutCreatingOne keeps a wrong
+// or unmounted database path from turning into an empty database that an
+// upgraded daemon would then migrate, hiding the missing data.
+func TestCapabilityGrantRefusesAMissingDatabaseWithoutCreatingOne(t *testing.T) {
+	root, workspace := initWorkspaceWithActors(t)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Remove(workspace.DatabasePath + suffix); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Run(context.Background(), []string{"capability", "grant", "--actor", "agent:worker", "--capability", "web_research", "--as", "human:dennis", root}, &stdout, &stderr); code == 0 || !strings.Contains(stderr.String(), "is not readable") {
+		t.Fatalf("grant with a missing database = exit %d, %q", code, stderr.String())
+	}
+	if _, err := os.Stat(workspace.DatabasePath); !os.IsNotExist(err) {
+		t.Fatalf("the grant created a database at %s: %v", workspace.DatabasePath, err)
+	}
+	stderr.Reset()
+	if code := Run(context.Background(), []string{"capability", "grant", "--actor", "agent:worker", "--capability", "web_research", "--as", "human:dennis", root, "extra"}, &stdout, &stderr); code == 0 || !strings.Contains(stderr.String(), "at most one workspace directory") {
+		t.Fatalf("grant with two directories = exit %d, %q", code, stderr.String())
+	}
+}
+
+// TestCapabilityGrantWaitsOutAWriterHoldingTheLock covers the daemon writing
+// while a person grants: the grant retries instead of failing at once.
+func TestCapabilityGrantWaitsOutAWriterHoldingTheLock(t *testing.T) {
+	root, workspace := initWorkspaceWithActors(t)
+	holder, err := sql.Open("sqlite", workspace.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	holder.SetMaxOpenConns(1)
+	transaction, err := holder.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transaction.Exec("UPDATE actors SET display_name = display_name WHERE id = 'human:dennis'"); err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(400 * time.Millisecond)
+		_ = transaction.Commit()
+		close(released)
+	}()
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"capability", "grant", "--actor", "agent:worker", "--capability", "web_research", "--as", "human:dennis", root}, &stdout, &stderr)
+	<-released
+	if code != 0 || !capabilityHeld(t, workspace, "agent:worker", "web_research") {
+		t.Fatalf("grant while another writer held the lock = exit %d, %q", code, stderr.String())
 	}
 }

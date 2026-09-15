@@ -502,8 +502,24 @@ func missingCapabilitiesMessage(actorID string, missing []string) string {
 	}
 	commands := make([]string, 0, len(missing))
 	for _, capability := range missing {
-		commands = append(commands, fmt.Sprintf("throughline capability grant --actor %s --capability %s --as <human-actor-id>", actorID, capability))
+		commands = append(commands, fmt.Sprintf("throughline capability grant --actor %s --capability %s --as <human-actor-id>", shellWord(actorID), shellWord(capability)))
 	}
 	return fmt.Sprintf("actor %s lacks required capabilities %s; a registered human can grant them with: %s",
 		actorID, strings.Join(missing, ", "), strings.Join(commands, " && "))
+}
+
+// shellWord quotes a value for a POSIX shell unless it is plainly safe, so a
+// remediation command can be pasted as printed.
+func shellWord(value string) string {
+	safe := value != ""
+	for _, character := range value {
+		if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("_-.:@/+", character)) {
+			safe = false
+			break
+		}
+	}
+	if safe {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }

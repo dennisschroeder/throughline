@@ -774,17 +774,14 @@ func fetchHealth(ctx context.Context, addr string) (daemonhttp.HealthResponse, e
 	return health, nil
 }
 
-// runReady and runShow are domain-facing commands: they discover the nearest workspace's
-// identity from its config.toml and call the daemon's MCP endpoint for it, exactly as any
-// other MCP client would. Neither opens a workspace database, a registry, or any other
-// storage directly — domain-facing CLI commands are daemon clients, never provider
-// instantiators, per the accepted decision.
 // runCapabilityGrant assigns a capability as a human principal. It is a CLI
 // command and deliberately not an MCP tool: over MCP the only principal is the
-// agent itself, which could then grant itself whatever a claim requires. It
-// opens the workspace database directly and never migrates it; only the
-// daemon migrates, so a schema mismatch fails with the update-and-restart
-// remediation instead.
+// agent itself, which could then grant itself whatever a claim requires. That
+// is also why it is the one domain command that opens a workspace database
+// instead of calling the daemon (ADR 0025 records the exception). It never
+// migrates; a schema mismatch fails with the update-and-restart remediation.
+// --as names the principal on the local machine's trust; it does not
+// authenticate one.
 func runCapabilityGrant(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("capability grant", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -805,6 +802,12 @@ func runCapabilityGrant(ctx context.Context, args []string, stdout, stderr io.Wr
 	if err != nil {
 		return err
 	}
+	// Opening creates a missing file, and an empty database would then read as
+	// merely unmigrated, sending the user to restart a daemon that would
+	// migrate the empty file and hide the missing data.
+	if _, err := os.Stat(workspace.DatabasePath); err != nil {
+		return fmt.Errorf("workspace database %s is not readable: %w", workspace.DatabasePath, err)
+	}
 	database, err := throughlinesqlite.Open(ctx, workspace.DatabasePath)
 	if err != nil {
 		return err
@@ -819,16 +822,44 @@ func runCapabilityGrant(ctx context.Context, args []string, stdout, stderr io.Wr
 		return fmt.Errorf("generate idempotency key: %w", err)
 	}
 	service := app.NewService(database.Store(), ids, app.SystemClock{})
-	granted, err := app.UnwrapMutation(service.AssignActorCapability(ctx, app.AssignActorCapabilityCommand{
+	command := app.AssignActorCapabilityCommand{
 		ActorID: *actorID, Capability: *slug, Description: *description, GrantedBy: *granter, IdempotencyKey: "cli-capability-grant-" + key,
-	}))
+	}
+	// The daemon may hold the write lock. A deferred transaction that finds it
+	// taken fails at once instead of waiting out the busy timeout, so the grant
+	// retries briefly; the same key makes a retry of a committed grant a replay.
+	var granted app.ActorCapability
+	for attempt := 0; ; attempt++ {
+		granted, err = app.UnwrapMutation(service.AssignActorCapability(ctx, command))
+		if err == nil || !strings.Contains(err.Error(), "SQLITE_BUSY") || attempt == capabilityGrantBusyRetries {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(capabilityGrantBusyBackoff):
+		}
+	}
 	if err != nil {
+		if strings.Contains(err.Error(), "SQLITE_BUSY") {
+			return fmt.Errorf("the workspace database stayed locked by another writer, most likely the daemon; retry shortly: %w", err)
+		}
 		return err
 	}
 	fmt.Fprintf(stdout, "granted capability %s to %s as %s\n", granted.Capability.Slug, granted.ActorID, strings.TrimSpace(*granter))
 	return nil
 }
 
+const (
+	capabilityGrantBusyRetries = 50
+	capabilityGrantBusyBackoff = 100 * time.Millisecond
+)
+
+// runReady and runShow are domain-facing commands: they discover the nearest workspace's
+// identity from its config.toml and call the daemon's MCP endpoint for it, exactly as any
+// other MCP client would. Neither opens a workspace database, a registry, or any other
+// storage directly — domain-facing CLI commands are daemon clients, never provider
+// instantiators, per the accepted decision.
 func runReady(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("ready", flag.ContinueOnError)
 	flags.SetOutput(stderr)

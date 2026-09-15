@@ -798,4 +798,26 @@ func TestCapabilityRejectionNamesTheGrantCommand(t *testing.T) {
 	if !strings.Contains(message, want) || strings.Contains(message, "--capability citations") {
 		t.Fatalf("capability rejection = %q, want only the missing web_research grant command", message)
 	}
+
+	// Every missing capability gets its own command, and an actor id a shell
+	// would split is quoted so the command can be pasted as printed.
+	if _, err := service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: "agent:claude code", Kind: work.ActorTypeAgent, DisplayName: "Spaced"}, IdempotencyKey: "spaced"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.ClaimWorkItem(ctx, app.ClaimWorkItemCommand{WorkItemID: "item-a", ActorID: "agent:claude code", ExpectedVersion: patched.Version, IdempotencyKey: "claim-spaced", LeaseDuration: time.Hour})
+	gate = app.ClaimGateError{}
+	if !errors.As(err, &gate) {
+		t.Fatalf("claim by the spaced actor = %v", err)
+	}
+	message = ""
+	for _, requirement := range gate.Requirements {
+		if requirement.Code == work.ClaimRequirementCapabilities {
+			message = requirement.Message
+		}
+	}
+	for _, capability := range []string{"web_research", "citations"} {
+		if !strings.Contains(message, "--actor 'agent:claude code' --capability "+capability+" --as <human-actor-id>") {
+			t.Fatalf("capability rejection for the spaced actor = %q, want a quoted command for %s", message, capability)
+		}
+	}
 }

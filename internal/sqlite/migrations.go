@@ -74,10 +74,10 @@ func (d *Database) installEffectCollector(ctx context.Context) error {
 var ErrSchemaIncompatible = errors.New("workspace database schema does not match this throughline binary")
 
 // CheckSchemaCurrent verifies, without migrating anything, that the database
-// has exactly the migrations this binary carries. Commands that are not the
-// daemon use it: only the daemon migrates, so a mismatch means one of the two
-// binaries is out of date and the fix is to update and restart, never to
-// migrate from the side.
+// has exactly the migrations this binary carries. Commands that write a
+// workspace outside the daemon use it: the daemon migrates, so a mismatch
+// means one of the two binaries is out of date and the fix is to update and
+// restart, never to migrate from the side.
 func (d *Database) CheckSchemaCurrent(ctx context.Context) error {
 	migrations, err := loadMigrations()
 	if err != nil {
@@ -98,10 +98,16 @@ func (d *Database) CheckSchemaCurrent(ctx context.Context) error {
 		latest = max(latest, version)
 	}
 	carried := migrations[len(migrations)-1].version
-	if err := validateMigrationHistory(migrations, applied); err != nil || len(applied) != len(migrations) {
-		return fmt.Errorf("%w: database is at migration %d, this binary carries %d; update throughline everywhere and restart the daemon (throughline daemon restart) so it migrates the workspace, then retry", ErrSchemaIncompatible, latest, carried)
+	if err := validateMigrationHistory(migrations, applied); err != nil {
+		return fmt.Errorf("%w: %v; this binary and the database disagree about applied migrations, so do not retry until both come from the same throughline release", ErrSchemaIncompatible, err)
 	}
-	return nil
+	if len(applied) == len(migrations) {
+		return nil
+	}
+	// The daemon migrates a workspace when a request first opens it after a
+	// restart, not when it starts, so the remediation has to include that
+	// first request or the retry fails the same way.
+	return fmt.Errorf("%w: database is at migration %d, this binary carries %d; the workspace has not been migrated by an updated daemon: update throughline, run throughline daemon restart, open the workspace once through the daemon (for example throughline show <item-id> in it), then retry", ErrSchemaIncompatible, latest, carried)
 }
 
 func (d *Database) ensureMigrationTable(ctx context.Context) error {
