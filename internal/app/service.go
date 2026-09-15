@@ -433,6 +433,11 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 				if err := repository.CreateExpectedOutput(ctx, expected); err != nil {
 					return work.WorkItem{}, err
 				}
+				// The same record define_expected_output writes: a review judged the
+				// work against the outputs it had, so one added here stales it.
+				if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "expected_output", EntityID: expected.ID, WorkItemID: item.ID, ActorID: command.ActorID, EventType: "expected_output.defined", Summary: fmt.Sprintf("Expected output %s defined", expected.Name)}); err != nil {
+					return work.WorkItem{}, err
+				}
 			}
 			if len(command.ExpectedOutputsToAdd) > 0 {
 				changes = append(changes, "expected outputs")

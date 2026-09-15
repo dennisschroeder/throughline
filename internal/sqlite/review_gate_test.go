@@ -354,3 +354,148 @@ func TestMigration0016KeepsOutputValidationsAndTheirProtection(t *testing.T) {
 		t.Fatalf("pre-existing item after migrating = requirements %#v, evidence %#v, revisions %#v", item.WorkItem.ReviewRequirements, item.ReviewEvidence, item.OutputRevisions)
 	}
 }
+
+// TestEveryKindOfRecordedWorkStalesAReview runs each work step the staleness
+// rule names, on an item whose declared review passed just before it, and
+// requires the review to be stale afterwards. A review recorded straight after
+// such a step is not stale: the step is what it reviewed.
+func TestEveryKindOfRecordedWorkStalesAReview(t *testing.T) {
+	steps := map[string]func(t *testing.T, ctx context.Context, service *app.Service, itemID string, version int){
+		"attach_artifact": func(t *testing.T, ctx context.Context, service *app.Service, itemID string, version int) {
+			if _, err := service.AttachArtifact(ctx, app.AttachArtifactCommand{WorkItemID: itemID, ActorID: "human:owner", ExpectedVersion: version, IdempotencyKey: "step", Kind: "report", URI: "workspace:report.md"}); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"define_expected_output": func(t *testing.T, ctx context.Context, service *app.Service, itemID string, version int) {
+			if _, err := service.DefineExpectedOutput(ctx, app.DefineExpectedOutputCommand{WorkItemID: itemID, ActorID: "human:owner", ExpectedVersion: version, IdempotencyKey: "step", Name: "Doc", ProfileName: "structured_document", ProfileVersion: 1, Required: true, Ordinal: 2}); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"patch_item expected output": func(t *testing.T, ctx context.Context, service *app.Service, itemID string, version int) {
+			if _, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{WorkItemID: itemID, ActorID: "human:owner", ExpectedVersion: version, IdempotencyKey: "step",
+				ExpectedOutputsToAdd: []app.ProposedExpectedOutput{{Name: "Doc", ProfileName: "structured_document", ProfileVersion: 1, Required: true, Ordinal: 2}}}); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"add_output_requirement": func(t *testing.T, ctx context.Context, service *app.Service, itemID string, version int) {
+			if _, err := service.AddOutputRequirement(ctx, app.AddOutputRequirementCommand{WorkItemID: itemID, ActorID: "human:owner", ExpectedVersion: version, IdempotencyKey: "step", RequiredProfileName: "structured_document", VersionConstraint: "=1", Required: false}); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"create_output_revision": func(t *testing.T, ctx context.Context, service *app.Service, itemID string, version int) {
+			item, err := service.GetWorkItem(ctx, itemID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.CreateOutputRevision(ctx, app.CreateOutputRevisionCommand{ExpectedOutputID: item.ExpectedOutputs[0].ExpectedOutput.ID, ActorID: "human:owner", IdempotencyKey: "step",
+				Artifacts: []app.OutputArtifactInput{{Kind: "document", URI: "workspace:existing.md", Role: "primary"}}}); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"superseding a criterion": func(t *testing.T, ctx context.Context, service *app.Service, itemID string, version int) {
+			item, err := service.GetWorkItem(ctx, itemID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{WorkItemID: itemID, ActorID: "human:owner", ExpectedVersion: version, IdempotencyKey: "step",
+				AcceptanceCriteriaToAdd: []app.PatchAcceptanceCriterionAddition{{Text: "Corrected.", Required: true, Ordinal: 1, SupersedesID: item.AcceptanceCriteria[0].ID, SupersessionReason: "Wrong condition."}}}); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for name, step := range steps {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			database, err := Open(ctx, filepath.Join(t.TempDir(), "stale.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			if err := database.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			seedExecutableItems(t, ctx, database, "item-a")
+			service := app.NewService(database.Store(), &testIDs{}, testClock{})
+			requirements := []work.ReviewRequirement{{CriterionRef: "design", ValidatorKind: "probe"}}
+			declared, err := app.UnwrapMutation(service.PatchWorkItem(ctx, app.PatchWorkItemCommand{WorkItemID: "item-a", ActorID: "human:owner", ExpectedVersion: 1, IdempotencyKey: "declare", ReviewRequirements: &requirements,
+				AcceptanceCriteriaToAdd: []app.PatchAcceptanceCriterionAddition{{Text: "Original.", Required: true, Ordinal: 1}},
+				ExpectedOutputsToAdd:    []app.ProposedExpectedOutput{{Name: "Existing", ProfileName: "structured_document", ProfileVersion: 1, Required: false, Ordinal: 1}}}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			claimed, err := app.UnwrapMutation(service.ClaimWorkItem(ctx, app.ClaimWorkItemCommand{WorkItemID: "item-a", ActorID: "human:owner", ExpectedVersion: declared.Version, IdempotencyKey: "claim", LeaseDuration: time.Hour, TransitionToInProgress: true}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			state := func() work.ReviewEvidenceState {
+				t.Helper()
+				item, err := service.GetWorkItem(ctx, "item-a")
+				if err != nil {
+					t.Fatal(err)
+				}
+				return item.ReviewEvidence[0].State
+			}
+			record := func(key string) {
+				t.Helper()
+				if _, err := service.RecordWorkItemValidation(ctx, app.RecordWorkItemValidationCommand{WorkItemID: "item-a", CriterionRef: "design", ValidatorKind: output.ValidatorProbe, Verdict: output.VerdictPassed, VerifierActorID: "human:owner", IdempotencyKey: key}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			record("before")
+			if got := state(); got != work.ReviewEvidenceSatisfied {
+				t.Fatalf("state before the step = %s", got)
+			}
+			step(t, ctx, service, "item-a", claimed.WorkItem.Version)
+			if got := state(); got != work.ReviewEvidenceStale {
+				t.Fatalf("state after %s = %s, want stale", name, got)
+			}
+			record("after")
+			if got := state(); got != work.ReviewEvidenceSatisfied {
+				t.Fatalf("a review recorded straight after %s = %s, want satisfied", name, got)
+			}
+		})
+	}
+}
+
+// TestReadyWorkCarriesEveryObjectiveAndItemField pins the ready-work join to
+// the same column lists as the plain selects. It listed its own columns and
+// had stopped reading objective priority and appetite and item measure when
+// those were added, so list_ready_items reported them as unset.
+func TestReadyWorkCarriesEveryObjectiveAndItemField(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "ready-fields.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	seedExecutableItems(t, ctx, database, "item-a")
+	for _, statement := range []string{
+		`UPDATE objectives SET priority = 'urgent', appetite_value = 3, appetite_unit = 'days', appetite_basis = 'estimated' WHERE id = 'objective-a'`,
+		`UPDATE work_items SET measure_value = 5, measure_unit = 'points', measure_basis = 'measured',
+		   review_requirements_json = '[{"criterion_ref":"design","validator_kind":"probe"}]' WHERE id = 'item-a'`,
+	} {
+		if _, err := database.db.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ready, err := app.NewService(database.Store(), &testIDs{}, testClock{}).ListReadyWork(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range ready {
+		if entry.WorkItem.ID != "item-a" {
+			continue
+		}
+		if entry.Objective.Priority != work.PriorityUrgent || entry.Objective.Appetite != (work.Measure{Value: 3, Unit: "days", Basis: work.MeasureEstimated}) {
+			t.Fatalf("ready objective = %#v", entry.Objective)
+		}
+		if entry.WorkItem.Measure != (work.Measure{Value: 5, Unit: "points", Basis: work.MeasureMeasured}) || len(entry.WorkItem.ReviewRequirements) != 1 {
+			t.Fatalf("ready item = %#v", entry.WorkItem)
+		}
+		return
+	}
+	t.Fatalf("item-a is not ready: %#v", ready)
+}

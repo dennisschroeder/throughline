@@ -40,6 +40,20 @@ func TestDashboardExposesReviewEvidence(t *testing.T) {
 	if len(detail.ReviewEvidence) != 1 || detail.ReviewEvidence[0].CriterionRef != "code-review" || detail.ReviewEvidence[0].ValidatorKind != "human_review" || detail.ReviewEvidence[0].State != "missing" {
 		t.Fatalf("drawer review evidence = %+v", detail.ReviewEvidence)
 	}
+
+	// A recorded review reaches the drawer with the state the gate derived and
+	// the record that decided it, not only the missing default.
+	recorded := h.call("record_validation", map[string]any{
+		"actor_id": actorID, "idempotency_key": "review", "work_item_id": itemID, "criterion_ref": "code-review",
+		"validator_kind": "human_review", "verdict": "failed", "details": map[string]any{"rationale": "Two findings open."}, "degraded": true,
+	})["result"].(map[string]any)
+	detail = itemDetail{}
+	if resp := h.getJSON("/dashboard/api/v1/item?id="+itemID, &detail); resp.StatusCode != http.StatusOK {
+		t.Fatalf("item detail status = %d", resp.StatusCode)
+	}
+	if len(detail.ReviewEvidence) != 1 || detail.ReviewEvidence[0].State != "failed" || detail.ReviewEvidence[0].ValidationRecordID != recorded["id"] || !detail.ReviewEvidence[0].Degraded {
+		t.Fatalf("drawer review evidence after a failed degraded review = %+v", detail.ReviewEvidence)
+	}
 }
 
 func TestCardInReviewNamesTheUnsatisfiedReview(t *testing.T) {
@@ -55,6 +69,14 @@ func TestCardInReviewNamesTheUnsatisfiedReview(t *testing.T) {
 	if card.Blocker == nil || card.Blocker.Code != "review_evidence" || !strings.Contains(card.Blocker.Label, "code-review stale") {
 		t.Fatalf("card in review with a stale review = %#v", card.Blocker)
 	}
+
+	// Only an item in review is waiting on its reviews to reach done; the same
+	// evidence on an item still being worked is not what holds it.
+	item.WorkItem.ExecutionStatus = work.StatusInProgress
+	if card := buildCard(item, map[string]Gate{}, map[string]bool{"item": true}, objective, "in_progress", time.Now()); card.Blocker != nil {
+		t.Fatalf("card in progress with a stale review = %#v, want no blocker", card.Blocker)
+	}
+	item.WorkItem.ExecutionStatus = work.StatusReview
 
 	item.ReviewEvidence[1].State = work.ReviewEvidenceSatisfied
 	if card := buildCard(item, map[string]Gate{}, map[string]bool{}, objective, "review", time.Now()); card.Blocker != nil && card.Blocker.Code == "review_evidence" {
