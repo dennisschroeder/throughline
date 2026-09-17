@@ -1076,3 +1076,137 @@ pass 2 failed roughly six runs in ten on unchanged code, which a single green su
   touched the mappings. Finalizing the contract was the first moment the drift became a gate issue.
 - **The claim held for an eighth node in a row, across a usage-limit interruption.**
 
+## Delivery
+
+Final gate on `d52b633` (2026-09-16/17), all seven commands over the whole repository, exact output
+quoted rather than summarized:
+
+```
+test -z "$(gofmt -l cmd internal)"                                    → clean, no diff
+go generate ./internal/semanticmodel && git diff --exit-code ...      → clean, model.generated.json unchanged
+go vet ./...                                                          → clean
+go test ./...                                                         → every package ok
+go build ./...                                                        → clean
+CGO_ENABLED=0 go build ./...                                          → clean
+go test ./... -race -shuffle=on                                       → every package ok, exit 0
+```
+
+PR [dennisschroeder/throughline#7](https://github.com/dennisschroeder/throughline/pull/7),
+`claude/remite-c146a7` → `main`, opened 2026-09-16. CI (`.github/workflows/ci.yml`, the same six
+gates) passed on the first push. `mergeStateStatus: CLEAN` throughout.
+
+**Independent cross-review, requested explicitly because nine of eleven nodes' own reviews were
+same-family and recorded degraded.** A handoff prompt sent the branch, the frozen graph, and the
+dispositions above to Codex. It reproduced three real behavioral defects, none previously flagged or
+dispositioned:
+
+1. `patch_item` refused a legitimate ordinal reuse when one addition in a batch superseded a
+   criterion off an ordinal and a later addition in the *same* batch claimed it: `activeOrdinals` was
+   built once from the pre-patch snapshot and never updated as earlier additions in the batch
+   superseded their way off an ordinal. Fixed in `685b357` by freeing the predecessor's ordinal the
+   moment a supersession is decided, not only for that addition's own collision check.
+2. `workspace:` URI normalization was not idempotent for a percent-encoded leading slash: the opaque
+   spelling (`workspace:%2Fdocs%2Freport.md`) decodes to the same leading slash the hierarchical
+   form's already-decoded `Path` carries, but only the hierarchical branch trimmed it, so
+   re-normalizing the function's own first output silently dropped the slash a second time. Fixed in
+   `9db965a` by trimming the decoded opaque path's leading slash the same way.
+3. `throughline doctor` was not read-only as documented: it resolved its workspace through
+   `config.Find`, which loads `config.toml` through the same permission-repairing path `throughline
+   init` uses, so every doctor run chmodded the workspace directory to 0700 and `config.toml` to
+   0600 regardless of what they were set to before. Fixed in `1d93cf9` by adding `FindReadOnly` /
+   `LoadReadOnly`, which never chmod, and pointing doctor at them.
+
+Each fix carries a regression test verified to fail against the pre-fix code (confirmed by stashing
+each fix, rerunning the specific test red, then restoring and rerunning green) before being folded
+into the final gate. Full gate rerun after all three fixes, same seven commands, same result: clean.
+Pushed as `685b357`, `9db965a`, `1d93cf9`; CI green again; merged by Dennis's explicit approval
+(`gh pr merge 7 --merge`) as `6822f36` on 2026-09-17T14:48:38Z. No unresolved review comments at
+merge time.
+
+**Release and installed-daemon smoke test**, run against Dennis's real workspaces (`~/.throughline`
+does not exist as a single directory; each of the eight registered workspaces carries its own
+per-root `.throughline/`). A full backup of all eight `.throughline/` directories plus the registry
+was taken first (`~/throughline-backup-20260917-165047`, 23 MB), per Dennis's confirmation.
+
+No release existed yet for the merge commit (installed binary was `v0.5.0` at `ca89e75`, well behind
+`6822f36`). Dennis chose to cut one rather than build from source locally, so `v0.6.0` was tagged at
+`6822f36` and pushed, triggering `.github/workflows/release.yml`: snapshot build, packaged-daemon
+smoke test, then the real GoReleaser run — green in 1m50s, publishing four platform archives and
+updating the Homebrew tap.
+
+- `brew upgrade dennisschroeder/throughline/throughline` → `0.5.0 -> 0.6.0`; `throughline version`
+  confirmed `v0.6.0 (commit 6822f36, ...)` — the exact merge commit.
+- `throughline daemon restart` → daemon reachable at `v0.6.0`. `throughline doctor` on this
+  session's own workspace immediately after restart: `schema: workspace database schema does not
+  match this throughline binary: database is at migration 10, this binary carries 17` — confirmed
+  the daemon does not migrate at restart. One `throughline ready --actor human:dennis` call (opens
+  the workspace) later, `throughline doctor` read `schema: current`. Confirms the lazy-migration
+  claim in `docs/install.md` exactly.
+- `board_overview` with `include_attention: true` returned `questions_needing_human_attention`
+  populated with two real open questions (from OBJ-MODEL-GAP-TRIAGE and this objective itself),
+  full text and state — after one transient client-side schema-validation error on the first call
+  that cleared on retry (this session's MCP connection predated the daemon restart).
+- `get_changes` for this objective returned planning records (`decision.recorded`,
+  `context_record.recorded`, `objective.phase_changed`) in the objective-filtered feed, confirming
+  REP-07.
+- `record_validation` with `work_item_id` **could not be verified in this session**: the connected
+  MCP client's cached input schema for this one tool still lacks `work_item_id` even after an
+  explicit reload, while `get_item` and `board_overview` return current data over the same
+  connection. This looks like a stale schema cached by the MCP client integration specifically for
+  this tool, not a server defect — `get_item` on the same work item shows `review_requirements` and
+  the REP-09 gate fields correctly. Not independently confirmed; flagged rather than assumed fixed.
+- `throughline capability grant`: refusal for a non-human granter confirmed
+  (`agent:claude-code` → `capability smoke_test can only be granted by a registered human actor;
+  agent:claude-code has kind agent`); success with `--as human:dennis` confirmed (`granted
+  capability smoke_test to agent:claude-code as human:dennis`). `throughline doctor` after both
+  calls still read `schema: current`, confirming the grant command never migrates.
+
+Objective transitioned `execution` → `evaluation` → `completed` (the model has no direct
+`execution → completed` edge; confirmed against the live `v1.2.0` semantic model's
+`objective_phase` lifecycle before transitioning). Both transitions carry Dennis as actor and a
+reason naming what was checked.
+
+### Delivery
+
+- **An independent, cross-family review pass at the delivery gate found real defects nine same-family
+  review loops had not.** All three of Codex's findings — the ordinal-supersession batch bug, the
+  URI leading-slash idempotency gap, and doctor's non-read-only config path — survived eleven work
+  items' worth of same-family review because every one of those passes shared the author's blind
+  spot on exactly the kind of input a fresh model tries first (a batch mixing supersession and
+  reuse, a round-tripped opaque URI, a permission check under a read-only contract). The frozen
+  graph named cross-provider review as unavailable throughout implementation and recorded every pass
+  degraded for it; it should have named an independent delivery-gate pass as the node that recovers
+  that cost, rather than leaving it to be requested ad hoc after the PR was already open.
+- **"The gate is green" and "the branch is correct" are different claims, and the graph's delivery
+  edge only checked the first.** The frozen delivery edge is `final gate → PR/CI → review comments →
+  safe merge`; nothing in it names a review pass distinct from whatever comments happen to arrive on
+  the PR. All three Codex findings would have merged silently without one, since none was caught by
+  CI (which runs the same six commands the implementation nodes already ran) or would plausibly have
+  surfaced as an unprompted PR comment.
+- **The lazy-migration claim needed operating, not just reading, to trust.** `docs/install.md` and
+  REP-11's remediation text both say a restart alone does not migrate; the pre-migration `doctor`
+  output confirming that (`database is at migration 10, this binary carries 17`) after a real
+  restart against a real seven-week-old workspace was materially more convincing than the same claim
+  read off a doc, and cost one extra CLI call to obtain.
+- **A stale MCP client schema is indistinguishable from a server defect until you check which side
+  changed.** `board_overview`'s output-schema failure resolved itself on retry; `record_validation`'s
+  input-schema gap (missing `work_item_id`) did not, even after an explicit reload. Chasing the first
+  one costs nothing; assuming the second one is a shipped bug without first confirming `get_item`
+  and `board_overview` return current data over the same connection would have filed a false defect
+  against code that had already been reviewed eleven times over. The distinction is worth a standing
+  habit at any delivery step touching a live MCP connection: before reporting a schema mismatch as a
+  server defect, retry once and cross-check a tool whose contract did not change.
+- **A local git checkout can drift far enough behind its own remote to make a real, merged field look
+  missing.** Grepping the main checkout for `QuestionsNeedingHumanAttention` came back empty and
+  briefly looked like a serious gap between REP-08's delivery annotation and the shipped code, before
+  `git status` showed the checkout was 62 commits behind `origin/main` — it had never been synced
+  after work moved to a dedicated worktree. Worth checking `git rev-parse HEAD` against
+  `origin/<branch>` before treating an absence in a local checkout as an absence in the codebase.
+- **Fast-forwarding a long-stale branch onto a shared remote can collide with untracked local work
+  that isn't yours to discard.** Bringing the six-week-stale main checkout current hit seven
+  untracked files (an unrelated dashboard-visualization objective's wireframes and plan) that would
+  have been overwritten by the merge. Diffing each byte-for-byte against the incoming committed
+  version before removing any of them confirmed no content would be lost; the same collision with an
+  actual divergence would have needed a different resolution entirely, and checking first is what
+  made that distinction available.
+
