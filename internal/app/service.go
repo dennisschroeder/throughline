@@ -353,11 +353,14 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 					}
 					predecessor = loaded
 				}
-				// A supersession only frees the ordinal it actually replaces. A
-				// replacement pointed at a different ordinal is a fresh
-				// collision, not the predecessor's slot reopening.
-				ordinalFreedBySupersession := supersedesID != "" && addition.Ordinal == predecessor.Ordinal
-				if activeOrdinals[addition.Ordinal] && !ordinalFreedBySupersession {
+				// A supersession frees the ordinal it actually replaces as
+				// soon as it is decided, not only for this addition's own
+				// collision check: a later addition in the same patch may
+				// want to reuse it, and the patch applies as one atomic set.
+				if supersedesID != "" {
+					delete(activeOrdinals, predecessor.Ordinal)
+				}
+				if activeOrdinals[addition.Ordinal] {
 					return work.WorkItem{}, fmt.Errorf("acceptance criterion ordinal %d is already in use; supersede that criterion or choose another ordinal", addition.Ordinal)
 				}
 				id, err := s.ids.New()

@@ -535,3 +535,51 @@ func TestTwoAdditionsInOneBatchCannotShareAnOrdinal(t *testing.T) {
 		t.Fatalf("error = %v, want a domain message rather than the driver's", err)
 	}
 }
+
+// TestSupersedingToADifferentOrdinalFreesItsOldOrdinalWithinTheSameBatch covers
+// a batch that both supersedes a criterion onto a new ordinal and reuses the
+// ordinal it vacated: activeOrdinals was built once from the pre-patch snapshot
+// and never updated as earlier additions in the same batch superseded their way
+// off an ordinal, so a later addition claiming that now-free ordinal was
+// refused as if the predecessor were still holding it.
+func TestSupersedingToADifferentOrdinalFreesItsOldOrdinalWithinTheSameBatch(t *testing.T) {
+	ctx, _, _, service, item, criteria := criteriaFixture(t, "free-ordinal-same-batch.db")
+	moved := criteria[0]
+
+	patched, err := service.PatchWorkItem(ctx, app.PatchWorkItemCommand{
+		WorkItemID: item.ID, ActorID: "human:owner", IdempotencyKey: "free-ordinal-same-batch",
+		ExpectedVersion: item.Version,
+		AcceptanceCriteriaToAdd: []app.PatchAcceptanceCriterionAddition{
+			{
+				Text: "Replacement moved to a fresh ordinal.", Required: true, Ordinal: 3,
+				SupersedesID: moved.ID, SupersessionReason: "Needed a different slot.",
+			},
+			{Text: "Reuses the ordinal the supersession just vacated.", Required: true, Ordinal: moved.Ordinal},
+		},
+	})
+	if err != nil {
+		t.Fatalf("superseding onto ordinal 3 and reusing ordinal %d in the same batch failed: %v", moved.Ordinal, err)
+	}
+
+	after, err := service.GetWorkItem(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinals := map[int]work.AcceptanceCriterionStatus{}
+	for _, criterion := range after.AcceptanceCriteria {
+		if criterion.ID == moved.ID {
+			if criterion.Status != work.AcceptanceSuperseded {
+				t.Fatalf("predecessor status = %q, want superseded", criterion.Status)
+			}
+			continue
+		}
+		ordinals[criterion.Ordinal] = criterion.Status
+	}
+	for _, ordinal := range []int{moved.Ordinal, 3} {
+		status, ok := ordinals[ordinal]
+		if !ok || status != work.AcceptancePending {
+			t.Fatalf("active criteria by ordinal = %#v, want pending criteria at %d and 3", ordinals, moved.Ordinal)
+		}
+	}
+	_ = patched
+}
