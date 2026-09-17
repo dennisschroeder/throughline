@@ -106,6 +106,36 @@ func TestNewArtifactNormalizesAWorkspaceReferenceIdempotently(t *testing.T) {
 	}
 }
 
+// TestNewArtifactNormalizesAPercentEncodedLeadingSlashIdempotently covers the
+// opaque spelling specifically: an opaque path decodes to a leading slash
+// (workspace:%2Fdocs%2Freport.md decodes to "/docs/report.md") the same way
+// the hierarchical form's already-decoded Path does, but only the
+// hierarchical branch trimmed that leading slash before this fix — so the
+// opaque form's first normalization produced "workspace:/docs/report.md",
+// and re-normalizing that output silently dropped the slash a second time
+// instead of returning it unchanged.
+func TestNewArtifactNormalizesAPercentEncodedLeadingSlashIdempotently(t *testing.T) {
+	now := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	first, err := NewArtifact(Artifact{
+		ID: "artifact-1", WorkItemID: "item-1", Kind: "document", URI: "workspace:%2Fdocs%2Freport.md", AttachedBy: "agent:writer",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.URI != "workspace:docs/report.md" {
+		t.Fatalf("normalized URI = %q, want the leading slash trimmed like the hierarchical form", first.URI)
+	}
+	second, err := NewArtifact(Artifact{
+		ID: "artifact-2", WorkItemID: "item-1", Kind: "document", URI: first.URI, AttachedBy: "agent:writer",
+	}, now)
+	if err != nil {
+		t.Fatalf("the URI this function returned was rejected by the same function: %v", err)
+	}
+	if second.URI != first.URI {
+		t.Fatalf("re-normalizing %q produced %q, want it unchanged", first.URI, second.URI)
+	}
+}
+
 // TestNewArtifactDeduplicatesWorkspaceReferencesAcrossSpellings is REP-05's
 // second criterion applied to the relative form: the opaque and hierarchical
 // spellings of a workspace: URI naming the same literal file must normalize

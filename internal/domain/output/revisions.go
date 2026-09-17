@@ -96,7 +96,13 @@ func normalizeArtifactURI(raw string) (string, error) {
 			if err != nil {
 				return "", errors.New("workspace-relative artifact URI is not validly percent-encoded")
 			}
-			relative = decoded
+			// The hierarchical spelling's Path is always leading-slash
+			// absolute and TrimPrefix'd below; a decoded opaque spelling
+			// (workspace:%2Fdocs) must lose the same leading slash, or the
+			// two spellings of one path normalize to different strings and
+			// the opaque form round-trips as its own hierarchical output,
+			// which then normalizes to something shorter than itself.
+			relative = strings.TrimPrefix(decoded, "/")
 		} else {
 			relative = strings.TrimPrefix(parsed.Path, "/")
 		}
