@@ -181,7 +181,7 @@ Use these names consistently in code, tool contracts, UI, and documentation.
 | **Plan** | A versioned proposal for achieving an objective. A plan can be draft, proposed, approved, rejected, or superseded; approval commits its accepted work items without executing them. |
 | **WorkItem** | The primary unit of proposed, executable, reviewable, or trackable work. It may describe research, writing, design, installation, configuration, integration, evaluation, approval, human action, or agent action—not only code. A task is a UI synonym only; do not conflate it with an MCP long-running tool task. |
 | **ContextRecord** | A typed authoritative context node: requirement, constraint, assumption, finding/evidence, risk, or success metric. Each kind has its own small lifecycle where needed. |
-| **AcceptanceCriterion** | A structured, individually stateful condition used to judge whether a work item is complete. |
+| **AcceptanceCriterion** | A structured, individually stateful condition used to judge whether a work item is complete. A criterion that turns out to be the wrong condition is superseded by a replacement rather than waived or edited: waiving records the condition as excused, editing destroys what was agreed, and superseding keeps both. |
 | **OutputProfile** | An immutable, versioned, governed definition of an output class. It specifies required structure, semantic meaning, validation expectations, and deterministic acceptance conditions. Built-ins are seeded data, not hardcoded domain branches. |
 | **ExpectedOutput** | A work-item-specific contract instance referencing an exact active OutputProfile version plus any narrower constraints. It describes what must be produced before work begins. |
 | **OutputRevision** | An immutable produced candidate binding one or more Artifacts to one ExpectedOutput and exact OutputProfile version. Material changes create a new revision; prior validation never carries forward implicitly. |
@@ -586,6 +586,7 @@ proposed ──► authorized ──► executing ──► succeeded
 #### Context-record lifecycles
 
 ```text
+AcceptanceCriterion: pending ──► satisfied | waived; any ──► superseded
 Question:   open ──► answered | waived
 Decision:   proposed ──► accepted ──► superseded
 Assumption: untested ──► validating ──► validated | invalidated ──► superseded
@@ -632,6 +633,10 @@ CREATE TABLE objectives (
   desired_outcome TEXT,
   phase TEXT NOT NULL CHECK (phase IN ('idea', 'discovery', 'planning', 'execution', 'evaluation', 'completed', 'paused', 'cancelled')),
   prior_phase TEXT,
+  priority TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
+  appetite_value REAL NOT NULL DEFAULT 0,
+  appetite_unit TEXT NOT NULL DEFAULT '',
+  appetite_basis TEXT NOT NULL DEFAULT '' CHECK (appetite_basis IN ('', 'estimated', 'measured')),
   version INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -670,6 +675,9 @@ CREATE TABLE work_items (
   execution_status TEXT NOT NULL CHECK (execution_status IN ('backlog', 'ready', 'in_progress', 'review', 'done', 'cancelled')),
   priority TEXT NOT NULL CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
   estimated_scope TEXT NOT NULL DEFAULT 'unknown' CHECK (estimated_scope IN ('xs', 'small', 'medium', 'large', 'unknown')),
+  measure_value REAL NOT NULL DEFAULT 0,
+  measure_unit TEXT NOT NULL DEFAULT '',
+  measure_basis TEXT NOT NULL DEFAULT '' CHECK (measure_basis IN ('', 'estimated', 'measured')),
   execution_policy TEXT NOT NULL DEFAULT 'approval_required' CHECK (execution_policy IN ('human_only', 'agent_may_propose', 'approval_required', 'autonomous_with_report')),
   required_actor_kind TEXT NOT NULL DEFAULT 'any' CHECK (required_actor_kind IN ('any', 'human', 'agent')),
   attention_state TEXT NOT NULL DEFAULT 'none' CHECK (attention_state IN ('none', 'needs_human_decision', 'needs_human_review', 'needs_clarification', 'intervention_required')),
@@ -685,7 +693,7 @@ CREATE TABLE context_records (
   id TEXT PRIMARY KEY,
   objective_id TEXT NOT NULL REFERENCES objectives(id) ON DELETE CASCADE,
   work_item_id TEXT REFERENCES work_items(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (kind IN ('requirement', 'constraint', 'assumption', 'finding', 'risk', 'success_metric')),
+  kind TEXT NOT NULL CHECK (kind IN ('requirement', 'constraint', 'assumption', 'finding', 'risk', 'success_metric', 'non_goal', 'affected')),
   title TEXT NOT NULL,
   body TEXT,
   status TEXT NOT NULL,
@@ -765,7 +773,8 @@ CREATE TABLE output_requirements (
 
 CREATE TABLE output_validations (
   id TEXT PRIMARY KEY,
-  output_revision_id TEXT NOT NULL REFERENCES output_revisions(id) ON DELETE CASCADE,
+  output_revision_id TEXT REFERENCES output_revisions(id) ON DELETE CASCADE,
+  work_item_id TEXT REFERENCES work_items(id) ON DELETE CASCADE,
   criterion_ref TEXT,
   validator_kind TEXT NOT NULL CHECK (validator_kind IN ('structure', 'schema', 'evaluation', 'provenance', 'human_review', 'policy', 'probe', 'successor_use')),
   verdict TEXT NOT NULL CHECK (verdict IN ('passed', 'failed', 'waived')),
@@ -773,7 +782,10 @@ CREATE TABLE output_validations (
   verifier_actor_id TEXT REFERENCES actors(id),
   evidence_artifact_id TEXT REFERENCES artifacts(id) ON DELETE RESTRICT,
   details_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  subject_sequence INTEGER NOT NULL DEFAULT 0,
+  degraded INTEGER NOT NULL DEFAULT 0,
+  CHECK ((output_revision_id IS NOT NULL) + (work_item_id IS NOT NULL) = 1)
 );
 
 CREATE TABLE capabilities (
@@ -875,12 +887,21 @@ CREATE TABLE questions (
   objective_id TEXT REFERENCES objectives(id) ON DELETE CASCADE,
   work_item_id TEXT REFERENCES work_items(id) ON DELETE CASCADE,
   question TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('open', 'answered', 'waived')),
+  status TEXT NOT NULL CHECK (status IN ('unsharp', 'open', 'answered', 'waived')),
   answer TEXT,
-  requires_human_attention INTEGER NOT NULL DEFAULT 0 CHECK (requires_human_attention IN (0, 1)),
+  attention_state TEXT NOT NULL DEFAULT 'none',
   created_at TEXT NOT NULL,
   resolved_at TEXT,
   CHECK (objective_id IS NOT NULL OR work_item_id IS NOT NULL)
+);
+
+CREATE TABLE question_blocks (
+  question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+  work_item_id TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (question_id, work_item_id)
 );
 
 CREATE TABLE external_actions (
@@ -1005,6 +1026,7 @@ CREATE TABLE activity (
   entity_kind TEXT NOT NULL,
   entity_id TEXT NOT NULL,
   work_item_id TEXT REFERENCES work_items(id) ON DELETE CASCADE,
+  objective_id TEXT REFERENCES objectives(id) ON DELETE CASCADE,
   actor_id TEXT REFERENCES actors(id),
   event_type TEXT NOT NULL,
   summary TEXT NOT NULL,
@@ -1038,6 +1060,7 @@ CREATE INDEX external_actions_by_item_state ON external_actions(work_item_id, st
 CREATE INDEX authority_grants_by_action_principal ON authority_grants(external_action_id, external_action_revision, principal_actor_id, revoked_at, expires_at);
 CREATE INDEX activity_by_sequence ON activity(sequence);
 CREATE INDEX activity_by_item_sequence ON activity(work_item_id, sequence);
+CREATE INDEX activity_by_objective_sequence ON activity(objective_id, sequence);
 ```
 
 Implementation notes:
@@ -1060,6 +1083,12 @@ one configured workspace may supply that workspace as the default. Responses alw
 resolved workspace. Arbitrary filesystem/database paths and mutable session-level workspace
 selection are forbidden; see ADR 0009.
 
+`resolve_workspace` (below) does not relax this: it takes a client-supplied path and answers only
+`workspace_id`, never a database or provider path, and never establishes a session-level default. A
+call still names its `workspace_id` explicitly, the same as before this tool existed; resolving one
+from a path is a separate, single-purpose lookup a client makes once and then addresses by identifier
+like any other caller.
+
 State changing calls carry:
 
 ```json
@@ -1072,6 +1101,31 @@ State changing calls carry:
 ```
 
 `expected_version` applies when an existing aggregate is changed. Inputs must be strict: reject unknown enum values and invalid shapes. Avoid “success: false” as a normal response when the MCP host can represent a tool error; return structured error content consistently.
+
+Every state-changing call answers with `effects` beside `workspace` and `result`:
+
+```json
+{
+  "workspace": { "id": "research-project", "change_cursor": "142" },
+  "result": { "...": "the operation's own return value" },
+  "effects": [
+    { "kind": "work_item", "id": "TH-42", "version": 18 },
+    { "kind": "acceptance_criterion", "id": "AC-3", "version": 2 },
+    { "kind": "work_item_capability", "id": "TH-42:web_research", "version": 1 }
+  ]
+}
+```
+
+`effects` names every entity the committed transaction changed, not only the one the tool returns, so a caller never has to infer collateral changes or reread the board to find them. Rules:
+
+- `version` is the version the transaction actually committed. A row written several times inside one transaction appears once, carrying its final version. A deleted row carries the last version it actually had; no version is invented past the delete.
+- An effect says *that* an entity changed, not *how*. There is no operation or tombstone member, so a delete is reported like any other change and a caller that refetches the entity finds it gone. Invalidate on an effect; do not treat one as proof the entity still exists.
+- Versioned relationships are included and use deterministic identifiers: `workItemID:slug` for a work-item capability, `actorID:slug` for an actor capability, `revisionID:artifactID` for an output-revision artifact, `questionID:workItemID` for a question block (kind `question_block`), and `actionID:revision` for an external-action revision.
+- Approval kinds stay distinguishable: `approval`, `action_approval`, and `execution_approval`.
+- Activity and idempotency rows are internal records, never effects. A mutation that only records activity legitimately returns `"effects": []`.
+- Order is stable: entities appear in the order the transaction first touched them.
+- A retry with the same `(actor_id, idempotency_key)` returns the original effects and performs no second write, across process restarts. A response stored before effects existed is upgraded only when its single changed entity is exactly reconstructible; otherwise the retry fails with `idempotency_replay_unupgradable` rather than guessing or re-executing.
+- Read-only tools carry no `effects` member at all, in their schema or their response.
 
 Common error shape:
 
@@ -1086,7 +1140,7 @@ Common error shape:
 }
 ```
 
-Recommended codes: `workspace_required`, `workspace_not_found`, `not_found`, `validation_failed`, `version_conflict`, `claim_conflict`, `claim_expired`, `transition_not_allowed`, `objective_phase_disallows_execution`, `plan_not_approved`, `approval_required`, `approval_stale`, `capability_mismatch`, `output_profile_inactive`, `output_contract_unsatisfied`, `output_revision_unaccepted`, `external_action_not_authorized`, `authority_grant_expired`, `authority_principal_mismatch`, `authorization_subject_mismatch`, `dependency_cycle`, `blocked`, `idempotency_key_reused_with_different_request`, `forbidden` (reserved for an authenticated future layer).
+Recommended codes: `workspace_required`, `workspace_not_found`, `not_found`, `validation_failed`, `version_conflict`, `claim_conflict`, `claim_expired`, `transition_not_allowed`, `objective_phase_disallows_execution`, `plan_not_approved`, `approval_required`, `approval_stale`, `capability_mismatch`, `output_profile_inactive`, `output_contract_unsatisfied`, `output_revision_unaccepted`, `external_action_not_authorized`, `authority_grant_expired`, `authority_principal_mismatch`, `authorization_subject_mismatch`, `dependency_cycle`, `blocked`, `idempotency_key_reused_with_different_request`, `idempotency_replay_unupgradable`, `forbidden` (reserved for an authenticated future layer).
 
 Set MCP tool annotations accurately as advisory host hints: read tools `readOnlyHint: true`; mutations `readOnlyHint: false`; only declare `idempotentHint: true` where the server’s idempotency design genuinely guarantees it. Do not mistake annotations for authorization or data integrity.
 
@@ -1100,6 +1154,7 @@ board_overview
 list_items
 list_ready_items
 get_item
+list_objectives
 get_objective_context
 get_changes
 list_output_profiles
@@ -1118,6 +1173,8 @@ record_context
 record_decision
 ask_question
 answer_question
+sharpen_question
+link_question_blocker
 request_approval
 resolve_approval
 request_attention
@@ -1154,11 +1211,28 @@ record_external_action_execution
 
 This is more than the initial 14 tools, but not breadth for its own sake: without these additions, objectives, decisions, questions, approvals, assumptions, plan proposals, governed outputs, validation, and delegated authority exist in the schema yet cannot be managed cleanly through MCP. Where tool-count testing shows model confusion, combine mechanically similar context mutations behind strict operation enums; do not collapse distinct domain concepts. MCP is one adapter over these use cases, not the place where profiles or authority “live”; CLI and UI must call the same application services.
 
+### Addressing an objective
+
+`objective_id` accepts either an objective's identifier or the readable key it is known by, on every
+tool that takes the field, so a caller resuming from notes can address an objective by the name it
+was written down under. Identifiers win over keys where a reference could be read as either; keys are
+unique per workspace and are never rewritten, so a reference that resolves once resolves the same way
+forever.
+
+A reference that resolves to no objective is `not_found`, including where the field is only a filter:
+answering "no work here" for an objective that does not exist is a wrong answer rather than an empty
+one. A `version_conflict` raised on an objective addressed by key still carries the `current` block,
+since the version it names is the whole point of that error.
+
 ### Objective, plan, and context tools
 
 #### `create_objective`, `patch_objective`, `transition_objective`
 
 Create and evolve durable intent. An objective includes title, desired outcome, initial phase, requirements/constraints/success metrics, and audit fields. `transition_objective` validates phase gates; entering execution requires an approved plan or a recorded authorized exception.
+
+A transition requires a reason and an actor, and both are kept. The objective carries `last_phase_transition` — `from`, `to`, `reason`, `actor_id` and `at` of its most recent transition — in every read that returns the objective, including `transition_objective`, `get_objective_context`, `list_objectives`, `get_item` and `list_ready_items`. It is null until the objective's first transition; for objectives transitioned before reasons were stored it stays null, because those reasons were discarded and cannot be recovered. Every transition's `objective.phase_changed` activity carries `{"from", "to", "reason"}`, so the full history is read through `get_changes` for the objective. A refused transition records neither. Phases move only by explicit transition: recording questions, decisions or context never advances an objective, and objectives are not claimed or leased.
+
+An objective also carries `priority` (the same `low`/`medium`/`high`/`urgent` vocabulary a work item uses, defaulting to `medium`) and `appetite`, an optional `Measure` — a `value`, an opaque `unit` never interpreted or compared across units, and a `basis` of `estimated` or `measured` — stating what the work is worth spending, set before it starts. Priority orders parked ideas; it is not a lifecycle phase, since nothing gates an objective's entry into discovery the way a dependency or approval gates a work item's readiness.
 
 #### `propose_plan`, `review_plan`
 
@@ -1211,15 +1285,19 @@ Create and evolve durable intent. An objective includes title, desired outcome, 
 
 #### `record_context`
 
-Creates or supersedes one `requirement`, `constraint`, `assumption`, `finding`, `risk`, or `success_metric`. Assumptions include confidence and validation state; findings may include source/evidence references. It never accepts raw chain-of-thought.
+Creates or supersedes one `requirement`, `constraint`, `assumption`, `finding`, `risk`, `success_metric`, `non_goal`, or `affected`. Assumptions include confidence and validation state; findings may include source/evidence references. `non_goal` records something the work deliberately excludes — a constraint restricts how the work is done, a non-goal says what it is not. `affected` records who or what surface the work lands on, covering both audience and blast radius under one domain-neutral kind rather than software-specific "affected users and systems." Both follow the same proposed -> accepted -> waived lifecycle as `requirement`/`constraint`/`risk`. It never accepts raw chain-of-thought.
 
-#### `record_decision`, `ask_question`, `answer_question`
+#### `record_decision`, `ask_question`, `answer_question`, `sharpen_question`, `link_question_blocker`
 
-Maintain durable decision memory. Decisions include outcome, rationale, alternatives, deciding actor, and optional supersession. Questions can block work and request human attention; answers are audited and may clear linked blockers.
+Maintain durable decision memory. Decisions include outcome, rationale, alternatives, deciding actor, and optional supersession.
+
+A question is `unsharp` while an in-scope area is visible but cannot yet be phrased, `open` once phrased, then `answered` or `waived`. `ask_question` creates it as `open` by default or as `unsharp`; `sharpen_question` replaces the text with the phrasing and moves it to `open`, recording the graduation as its own event. Only an open question can be answered; an unsharp or open one can be waived with a reason. Keeping unphrased areas distinct stops "every open question answered" from reading as discovery complete.
+
+A question blocks work only through explicit links. `ask_question` takes `blocks_item_ids`, `link_question_blocker` adds a link to an unresolved question later, and a question asked with a `work_item_id` is always linked to that item. While the question is unsharp or open, every linked item cannot be claimed and is not ready; answering or waiving it clears all of them. Links are never removed, so nothing but resolution clears the block. A question stores the attention state requested for it (`attention_state`); `requires_human_attention: true` on `ask_question` is accepted as `needs_human_decision` for older callers.
 
 #### `request_approval`, `resolve_approval`, `request_attention`
 
-Approvals target a plan, work item, OutputProfile proposal, OutputRevision, or exact ExternalAction revision. Attention is orthogonal and may point to a question, decision, review, clarification, or intervention. Approval resolution requires an actor and rationale; revocation is a new audited state change and re-blocks dependent work.
+Approvals target a plan, work item, OutputProfile proposal, OutputRevision, or exact ExternalAction revision. Attention is orthogonal and targets a work item or a question, which stores the requested state. `review`, `clarification` and `intervention` are attention states, not targets, and `decision` is an immutable record with no state to hold; all four are rejected. To revisit a settled decision, supersede it or raise a question that blocks the work it bears on. Approval resolution requires an actor and rationale; revocation is a new audited state change and re-blocks dependent work.
 
 For ExternalAction approval, the request must bind `external_action_id`, `revision`, `approved_for_actor_id`, current `authorization_subject_hash`, constraints, and optional expiry. Approval atomically creates an AuthorityGrant. Revocation atomically revokes the corresponding grant. If the current hash or revision differs at resolution time, return `approval_stale`; never broaden or silently regenerate the request.
 
@@ -1277,9 +1355,31 @@ Record an externally produced validation verdict against one exact OutputRevisio
 
 Supported V1 validator kinds are `structure`, `schema`, `evaluation`, `provenance`, `human_review`, `policy`, `probe`, and `successor_use`. Human review must name the reviewer and immutable rubric/criterion; probe records include the external result and evidence rather than asking Throughline to execute a command.
 
+With `work_item_id` instead of `output_revision_id`, the record is a review of the work item itself, for work whose result is not an output revision. It never changes the item and returns the ValidationRecord. Any record may carry `degraded: true` for a pass that ran with less than its intended strength; that is information for readers and changes nothing the record satisfies. A review's evidence artifact, when given, must be attached to the reviewed item, and `successor_use` is not a review kind.
+
+A work item declares the reviews `done` waits for as `review_requirements`, each a `criterion_ref` and a `validator_kind`, on `create_item`, `propose_plan` items, or `patch_item` (which replaces the list). For each requirement the transition gate reads the latest work-item validation with exactly that criterion reference and kind: `passed` or `waived` satisfies it unless the record is stale; `failed`, stale or no record does not, and the gate reports `review_requirements_satisfied`. A record is stale once later work is recorded on the item: progress, an attached artifact, a created output revision, an added or superseded acceptance criterion, a defined expected output, an added output requirement, or a status change back to `in_progress`. Claims, transitions to `review` or `done`, criterion resolutions, attention and other patches do not stale it. Like waiving or adding a required acceptance criterion, a patch that drops a review requirement which was not satisfied, or declares a new one on a done item, sets `needs_human_review` when the item has no attention state. Throughline records that a review happened; how reviewers are chosen and how many passes run is the workflow's business. `get_item` (section `review_evidence`) and the dashboard report each requirement as `satisfied`, `missing`, `failed` or `stale`, with the deciding record and whether that pass was degraded.
+
 #### `list_outputs`
 
 Discover bounded accepted outputs for reuse by `profile_name`, version constraint, objective, producer, or recency. It is a structured query over authoritative rows, not semantic search or a package registry. `propose_plan` and `create_item` may declare `requires_outputs` by exact revision or profile/version constraint.
+
+#### `resolve_workspace`
+
+**Purpose:** learn a `workspace_id` from a filesystem path, for a client that knows its own working
+directory but cannot read `.throughline/config.toml` itself.
+
+Domain-neutral, not workspace-scoped, and the one tool besides `get_semantic_model` that takes no
+`workspace_id`. Input is `{ "path": "/abs/or/relative/path" }`; output is `{ "workspace_id": "..." }`.
+Resolution walks upward from `path` to the nearest ancestor directory whose canonical root is a
+registered workspace and returns that workspace's identifier — never a list of what else is
+registered, and never enumerating the registry to find it. A path with no registered ancestor at all
+returns `workspace_not_found`; a path whose nearest ancestor is registered but has not finished
+initialization returns `workspace_pending` (retryable, since finishing `init` resolves it).
+
+The daemon has no notion of a client's current directory on its own — routing already runs solely
+through an explicit `workspace_id` (see ADR 0016/0017) — so this is the inversion: the one side that
+does know its own path passes it, and the daemon does the one comparison it alone is positioned to
+make, against `canonical_root`.
 
 ### External actions and delegated authority
 
@@ -1333,7 +1433,7 @@ Record `start`, `succeed`, or `fail` for one exact action revision, principal, a
 // output
 {
   "workspace": { "id": "local", "change_cursor": "142" },
-  "objectives": { "discovery": 1, "planning": 1, "execution": 2, "evaluation": 0 },
+  "objectives": { "discovery": 1, "planning": 1, "execution": 2 },
   "plans_needing_review": 1,
   "output_profiles_needing_review": 1,
   "external_actions_needing_authority": 2,
@@ -1343,11 +1443,32 @@ Record `start`, `succeed`, or `fail` for one exact action revision, principal, a
   ],
   "needs_human_attention": [
     { "id": "TH-51", "attention_state": "needs_human_decision", "title": "Choose persistence policy" }
+  ],
+  "questions_needing_human_attention": [
+    { "id": "...", "text": "Who owns final review?", "status": "open", "attention_state": "needs_human_review" }
   ]
 }
 ```
 
-`blocked` is a derived overview count, not necessarily a stored status.
+With `include_attention`, `needs_human_attention` lists flagged work items and `questions_needing_human_attention` lists unsharp or open questions whose stored attention state is not `none`. They are separate fields so the first keeps its element type.
+
+`objectives` counts objectives per phase, read from the objectives themselves, so an objective that
+has no work items yet is still counted and still visible to the one call an agent orients with. A
+phase no objective is in is absent rather than present and zero. `counts` counts work items per
+execution status. `blocked` is a derived overview count, not necessarily a stored status.
+
+#### `list_objectives`
+
+**Purpose:** enumerate what the workspace is trying to achieve, before choosing any of it.
+
+Returns every objective, including one that has no work items yet — which is exactly the objective
+someone has just created and wants to reach. Each row carries both forms of address (`id` and `key`),
+`title`, `phase`, `desired_outcome`, and `item_counts`, a map from execution status to how many work
+items the objective holds. A status with no items is absent rather than present and zero, and an
+objective with no items reports an empty map.
+
+Deriving this list from the work items instead — which every read path used to do — cannot represent
+an objective that has none, and reports the phase of each *item* rather than of each objective.
 
 #### `list_items`
 
@@ -1386,7 +1507,7 @@ Accept actor ID so an agent’s own unexpired claim can remain visible. Exclude 
 // input
 {
   "id": "TH-42",
-  "include": ["description", "plan", "context", "acceptance_criteria", "expected_outputs", "output_revisions", "validations", "required_outputs", "capabilities", "external_actions", "authority_grants", "dependencies", "claims", "progress", "decisions", "questions", "approvals", "artifacts", "activity"],
+  "include": ["description", "plan", "context", "acceptance_criteria", "expected_outputs", "output_revisions", "validations", "review_evidence", "required_outputs", "capabilities", "external_actions", "authority_grants", "dependencies", "claims", "progress", "decisions", "questions", "approvals", "artifacts", "activity"],
   "activity_limit": 20
 }
 ```
@@ -1406,7 +1527,7 @@ Return stable item fields, version, derived blockers, and only requested optiona
 }
 ```
 
-V1 is selection-based and size-bounded, not semantically generated: return objective phase, requirements/constraints/success metrics, accepted decisions, active assumptions with validation state, findings/evidence, open questions/approvals, approved-plan revision, actor-relevant ready/claimed work, accepted/reusable outputs, current external-action authorization summaries for that actor, recent changes, and relevant artifact metadata. A later context compiler may add token budgeting and relevance ranking, but it must remain explainable and cite source records.
+V1 is selection-based and size-bounded, not semantically generated: return objective phase, requirements/constraints/success metrics, accepted decisions, active assumptions with validation state, findings/evidence, unresolved questions (the `open_questions` section carries unsharp as well as open ones)/approvals, approved-plan revision, actor-relevant ready/claimed work, accepted/reusable outputs, current external-action authorization summaries for that actor, recent changes, and relevant artifact metadata. A later context compiler may add token budgeting and relevance ranking, but it must remain explainable and cite source records.
 
 #### `get_changes`
 
@@ -1419,8 +1540,8 @@ V1 is selection-based and size-bounded, not semantically generated: return objec
 // output
 {
   "changes": [
-    { "sequence": 143, "item_id": "TH-42", "event_type": "status_changed", "summary": "Moved to review", "created_at": "..." },
-    { "sequence": 144, "item_id": "TH-51", "event_type": "attention_requested", "summary": "Human decision needed", "created_at": "..." }
+    { "sequence": 143, "entity_kind": "work_item", "entity_id": "...", "work_item_id": "...", "objective_id": "...", "event_type": "work_item.status_changed", "summary": "Work item moved from in_progress to review", "created_at": "..." },
+    { "sequence": 144, "entity_kind": "decision", "entity_id": "...", "work_item_id": "", "objective_id": "...", "event_type": "decision.recorded", "summary": "Decision recorded", "created_at": "..." }
   ],
   "next_cursor": "144",
   "has_more": false
@@ -1429,11 +1550,15 @@ V1 is selection-based and size-bounded, not semantically generated: return objec
 
 Use an opaque monotonic activity sequence as the initial cursor. Define retention/compaction policy before any deletion exists.
 
+`objective_id` accepts an objective id or key and matches on the row's objective binding, when it has one: the objective's own events, its plans and their approvals, the questions, decisions and context records recorded against it, and every event of its work items. Rows without a binding appear only in the unfiltered feed: workspace-level events (actor registration and capabilities, output profiles and their approvals), and attention requests recorded before those requests were narrowed to work items and questions. Rows written before the binding existed were backfilled by migration without changing their sequence.
+
 ### Work tools
 
 #### `create_item`
 
 Creates one work item under a required objective, with optional plan/parent, structured criteria, profile-backed ExpectedOutputs, OutputRequirements, capabilities, anticipated ExternalActions, and initial dependencies. Creating an already accepted/ready item requires an approved-plan context or an explicitly authorized direct-work exception; otherwise default to `proposed` + `backlog`. Validate all references, active profile versions, output constraints, and dependency cycles in a transaction. Return the full compact item and `version: 1`.
+
+A work item may also carry `measure`, an optional `Measure` (`value`, opaque `unit`, `basis` of `estimated` or `measured`) beside the existing coarse `estimated_scope` hint. The two answer different questions and neither replaces the other: `estimated_scope` sorts unlike work against a small fixed vocabulary; `measure` states an actual quantity in whatever unit the domain uses, and is never interpreted, compared across units, or gated on. `patch_item` accepts the same field to set or correct it after creation.
 
 ```json
 {
@@ -1536,6 +1661,17 @@ Deletes a specific typed edge, requires expected version of the dependent item, 
 #### `attach_artifact`
 
 Adds a typed external reference to an item. Input includes `kind`, `uri`, optional `title`/small metadata, actor, idempotency key, expected version. Duplicates must be idempotent for the same URI/kind.
+
+`uri` is normally an absolute URI (`https://`, `file://`, or any other scheme). A `workspace:`-scheme
+URI is the one exception: it names a path relative to the workspace's canonical root, e.g.
+`workspace:docs/report.md`, and is the form that survives a worktree being deleted, a branch merging,
+or the workspace being cloned or relocated elsewhere — an absolute path or URL into any of those does
+not. Throughline validates that the path stays inside the root (no `..` segment may climb above it)
+and normalizes it, but never resolves it to a real file itself; a consumer that needs the absolute
+path joins the relative form onto whatever root it independently knows. The path component of every
+URI, relative or absolute, is normalized before comparison, so two differently-spelled references to
+the same resource (`file:///a/./b.md` and `file:///a/b.md`) are recognized as the same artifact by the
+idempotent-duplicate rule above rather than creating a second row.
 
 ### Deliberately later tools
 
@@ -1819,7 +1955,9 @@ Rules:
 - Plan draft/proposal/approval/rejection/supersession and atomic commitment of included work.
 - Context-record lifecycles, especially assumption invalidation, decision supersession, approval revocation, and their downstream blockers/attention.
 - Every status transition, including all invalid paths and gate messages.
-- Acceptance criterion completion/waiver rules.
+- Acceptance criterion completion/waiver rules, and supersession: the predecessor keeps its text and
+  any verdict already recorded against it, the replacement carries the link and the reason, and only
+  criteria that are still active block completion or count towards progress.
 - OutputProfile proposal/activation/rejection/supersession and immutability of active versions.
 - ExpectedOutput narrowing rules; an instance cannot weaken its profile.
 - OutputRevision immutability, revision isolation, validation/waiver rules, deterministic acceptance, and reuse/version compatibility.

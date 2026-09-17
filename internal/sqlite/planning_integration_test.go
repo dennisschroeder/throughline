@@ -23,11 +23,11 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := app.NewService(database.Store(), &planningIDs{}, &planningClock{})
-	if _, err := service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: "agent:planner", Kind: work.ActorTypeAgent, DisplayName: "Planner"}, IdempotencyKey: "register-planner"}); err != nil {
+	if _, err := app.UnwrapMutation(service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: "agent:planner", Kind: work.ActorTypeAgent, DisplayName: "Planner"}, IdempotencyKey: "register-planner"})); err != nil {
 		t.Fatal(err)
 	}
 
-	objective, err := service.CreateObjective(ctx, app.CreateObjectiveCommand{
+	objective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{
 		ActorID:        "human:sponsor",
 		IdempotencyKey: "create-objective-planning",
 		Key:            "OBJ-SKILL-RESEARCH",
@@ -35,7 +35,7 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 		Description:    "Research existing methods and design a reusable skill without executing external actions.",
 		DesiredOutcome: "An approved plan with explicit evidence and output contracts.",
 		Phase:          work.ObjectivePlanning,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 		{ObjectiveID: objective.ID, ActorID: "agent:researcher", IdempotencyKey: "record-finding", Kind: work.ContextFinding, Title: "Provenance rubrics are reusable", Body: "A rubric can be applied across dossiers.", Status: work.ContextRecorded, SourceURI: "https://example.test/provenance"},
 		{ObjectiveID: objective.ID, ActorID: "human:sponsor", IdempotencyKey: "record-success-metric", Kind: work.ContextSuccessMetric, Title: "Independent recovery", Body: "A new agent can recover the approved intent and plan.", Status: work.ContextUntested},
 	} {
-		record, err := service.RecordContext(ctx, command)
+		record, err := app.UnwrapMutation(service.RecordContext(ctx, command))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -59,72 +59,72 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 			assumption = record
 		}
 	}
-	validating, err := service.TransitionContext(ctx, app.TransitionContextCommand{
+	validating, err := app.UnwrapMutation(service.TransitionContext(ctx, app.TransitionContextCommand{
 		ContextRecordID: assumption.ID, ActorID: "agent:researcher", IdempotencyKey: "transition-assumption-validating", TargetStatus: work.ContextValidating, ExpectedVersion: 1,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.TransitionContext(ctx, app.TransitionContextCommand{
+	if _, err := app.UnwrapMutation(service.TransitionContext(ctx, app.TransitionContextCommand{
 		ContextRecordID: validating.ID, ActorID: "agent:researcher", IdempotencyKey: "transition-assumption-invalidated", TargetStatus: work.ContextInvalidated, ExpectedVersion: 2,
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.RecordContext(ctx, app.RecordContextCommand{
+	if _, err := app.UnwrapMutation(service.RecordContext(ctx, app.RecordContextCommand{
 		ObjectiveID: objective.ID, ActorID: "human:sponsor", Kind: work.ContextRequirement,
 		IdempotencyKey: "supersede-requirement",
 		Title:          "Source-linked claims and uncertainty", Body: "Every material claim names its source and uncertainty.",
 		Status: work.ContextAccepted, SupersedesID: requirement.ID,
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
-	question, err := service.AskQuestion(ctx, app.AskQuestionCommand{
-		ObjectiveID: objective.ID, ActorID: "agent:planner", IdempotencyKey: "ask-reviewer-question", Question: "Which audience owns final review?", RequiresHumanAttention: true,
-	})
+	question, err := app.UnwrapMutation(service.AskQuestion(ctx, app.AskQuestionCommand{
+		ObjectiveID: objective.ID, ActorID: "agent:planner", IdempotencyKey: "ask-reviewer-question", Question: "Which audience owns final review?", AttentionState: work.AttentionNeedsHumanDecision,
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.AnswerQuestion(ctx, app.AnswerQuestionCommand{
+	if _, err := app.UnwrapMutation(service.AnswerQuestion(ctx, app.AnswerQuestionCommand{
 		QuestionID: question.ID, ActorID: "human:sponsor", IdempotencyKey: "answer-reviewer-question", Answer: "The research operations lead.", ExpectedVersion: 1,
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
-	waivedQuestion, err := service.AskQuestion(ctx, app.AskQuestionCommand{
+	waivedQuestion, err := app.UnwrapMutation(service.AskQuestion(ctx, app.AskQuestionCommand{
 		ObjectiveID: objective.ID, ActorID: "agent:planner", IdempotencyKey: "ask-transcript-question", Question: "Should the skill include raw transcripts?",
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.WaiveQuestion(ctx, app.WaiveQuestionCommand{
+	if _, err := app.UnwrapMutation(service.WaiveQuestion(ctx, app.WaiveQuestionCommand{
 		QuestionID: waivedQuestion.ID, ActorID: "human:sponsor", IdempotencyKey: "waive-transcript-question", Reason: "Raw transcripts are outside the output contract.", ExpectedVersion: 1,
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
-	decision, err := service.RecordDecision(ctx, app.RecordDecisionCommand{
+	decision, err := app.UnwrapMutation(service.RecordDecision(ctx, app.RecordDecisionCommand{
 		ObjectiveID: objective.ID, ActorID: "human:sponsor", IdempotencyKey: "record-rubric-decision", Title: "Use a reusable rubric", Decision: "Ship the provenance rubric with the skill.", Rationale: "It makes later reviews consistent.", Alternatives: []string{"Keep the rubric in chat"},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.RecordDecision(ctx, app.RecordDecisionCommand{
+	if _, err := app.UnwrapMutation(service.RecordDecision(ctx, app.RecordDecisionCommand{
 		ObjectiveID: objective.ID, ActorID: "human:sponsor", IdempotencyKey: "supersede-rubric-decision", Title: "Use a reusable rubric and uncertainty scale",
 		Decision: "Ship the provenance rubric and uncertainty scale with the skill.", Rationale: "This corrects the accepted decision with a more complete review contract.",
 		Alternatives: []string{"Rubric only"}, SupersedesID: decision.ID,
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
 
-	proposedProfile, err := service.ProposeOutputProfile(ctx, app.ProposeOutputProfileCommand{
+	proposedProfile, err := app.UnwrapMutation(service.ProposeOutputProfile(ctx, app.ProposeOutputProfileCommand{
 		ActorID: "agent:designer", IdempotencyKey: "propose-evidence-map", Name: "evidence_map", Version: 1, Description: "A claim-to-source evidence map.",
 		Structure: json.RawMessage(`{"required":["claims","sources"]}`), Semantics: json.RawMessage(`{"claims_require_sources":true}`), Validation: json.RawMessage(`{"required":[{"kind":"human_review"}]}`),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if proposedProfile.LifecycleState != output.ProfileProposed {
 		t.Fatalf("profile state = %q", proposedProfile.LifecycleState)
 	}
-	if _, err := service.ProposePlan(ctx, app.ProposePlanCommand{
+	if _, err := app.UnwrapMutation(service.ProposePlan(ctx, app.ProposePlanCommand{
 		ObjectiveID: objective.ID,
 		ActorID:     "agent:planner", IdempotencyKey: "propose-premature-plan",
 		Title:    "Premature profile use",
@@ -134,80 +134,80 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 			ExpectedOutputs: []app.ProposedExpectedOutput{{Name: "Evidence map", ProfileName: "evidence_map", ProfileVersion: 1, Required: true, Ordinal: 1}},
 		}},
-	}); err == nil {
+	})); err == nil {
 		t.Fatal("expected proposed output profile to be unusable")
 	}
-	if _, err := service.ReviewOutputProfile(ctx, app.ReviewOutputProfileCommand{
+	if _, err := app.UnwrapMutation(service.ReviewOutputProfile(ctx, app.ReviewOutputProfileCommand{
 		ProfileID: proposedProfile.ID, ReviewerActorID: "human:sponsor", IdempotencyKey: "review-evidence-map-v1", ExpectedVersion: 1, Decision: output.ProfileActive, Reason: "The contract is domain-neutral and reviewable.",
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ProposeOutputProfile(ctx, app.ProposeOutputProfileCommand{
+	if _, err := app.UnwrapMutation(service.ProposeOutputProfile(ctx, app.ProposeOutputProfileCommand{
 		ActorID: "agent:designer", IdempotencyKey: "propose-invalid-evidence-map-v2", Name: "evidence_map", Version: 2, Description: "Missing predecessor.",
 		Structure: json.RawMessage(`{"required":["claims"]}`), Semantics: json.RawMessage(`{}`), Validation: json.RawMessage(`{}`),
-	}); err == nil {
+	})); err == nil {
 		t.Fatal("expected a later profile version without a predecessor to be rejected")
 	}
-	profileV2, err := service.ProposeOutputProfile(ctx, app.ProposeOutputProfileCommand{
+	profileV2, err := app.UnwrapMutation(service.ProposeOutputProfile(ctx, app.ProposeOutputProfileCommand{
 		ActorID: "agent:designer", IdempotencyKey: "propose-evidence-map-v2", Name: "evidence_map", Version: 2, Description: "An evidence map with explicit uncertainty.", Supersedes: "evidence_map/v1",
 		Structure: json.RawMessage(`{"required":["claims","sources","uncertainty"]}`), Semantics: json.RawMessage(`{"claims_require_sources":true}`), Validation: json.RawMessage(`{"required":[{"kind":"human_review"}]}`),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ReviewOutputProfile(ctx, app.ReviewOutputProfileCommand{
+	if _, err := app.UnwrapMutation(service.ReviewOutputProfile(ctx, app.ReviewOutputProfileCommand{
 		ProfileID: profileV2.ID, ReviewerActorID: "human:sponsor", IdempotencyKey: "review-evidence-map-v2", ExpectedVersion: 1, Decision: output.ProfileActive, Reason: "The successor makes uncertainty explicit.",
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
-	baseRubric, err := service.ProposeOutputProfile(ctx, app.ProposeOutputProfileCommand{
+	baseRubric, err := app.UnwrapMutation(service.ProposeOutputProfile(ctx, app.ProposeOutputProfileCommand{
 		ActorID: "agent:designer", IdempotencyKey: "propose-review-rubric-v1", Name: "review_rubric", Version: 1, Description: "A reviewed scoring rubric.",
 		Structure: json.RawMessage(`{"required":["criteria"]}`), Semantics: json.RawMessage(`{}`), Validation: json.RawMessage(`{}`),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ReviewOutputProfile(ctx, app.ReviewOutputProfileCommand{
+	if _, err := app.UnwrapMutation(service.ReviewOutputProfile(ctx, app.ReviewOutputProfileCommand{
 		ProfileID: baseRubric.ID, ReviewerActorID: "human:sponsor", IdempotencyKey: "review-review-rubric-v1", ExpectedVersion: 1, Decision: output.ProfileActive, Reason: "The base rubric is usable.",
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
-	rejectedRubric, err := service.ProposeOutputProfile(ctx, app.ProposeOutputProfileCommand{
+	rejectedRubric, err := app.UnwrapMutation(service.ProposeOutputProfile(ctx, app.ProposeOutputProfileCommand{
 		ActorID: "agent:designer", IdempotencyKey: "propose-review-rubric-v2", Name: "review_rubric", Version: 2, Description: "A rejected rubric revision.", SupersedesID: baseRubric.ID,
 		Structure: json.RawMessage(`{"required":["criteria","weights"]}`), Semantics: json.RawMessage(`{}`), Validation: json.RawMessage(`{}`),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ReviewOutputProfile(ctx, app.ReviewOutputProfileCommand{
+	if _, err := app.UnwrapMutation(service.ReviewOutputProfile(ctx, app.ReviewOutputProfileCommand{
 		ProfileID: rejectedRubric.ID, ReviewerActorID: "human:sponsor", IdempotencyKey: "review-review-rubric-v2", ExpectedVersion: 1, Decision: output.ProfileRejected, Reason: "The weights were underspecified.",
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
-	replacementRubric, err := service.ProposeOutputProfile(ctx, app.ProposeOutputProfileCommand{
+	replacementRubric, err := app.UnwrapMutation(service.ProposeOutputProfile(ctx, app.ProposeOutputProfileCommand{
 		ActorID: "agent:designer", IdempotencyKey: "propose-review-rubric-v3", Name: "review_rubric", Version: 3, Description: "A corrected rubric revision.", SupersedesID: baseRubric.ID,
 		Structure: json.RawMessage(`{"required":["criteria","scoring"]}`), Semantics: json.RawMessage(`{}`), Validation: json.RawMessage(`{}`),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ReviewOutputProfile(ctx, app.ReviewOutputProfileCommand{
+	if _, err := app.UnwrapMutation(service.ReviewOutputProfile(ctx, app.ReviewOutputProfileCommand{
 		ProfileID: replacementRubric.ID, ReviewerActorID: "human:sponsor", IdempotencyKey: "review-review-rubric-v3", ExpectedVersion: 1, Decision: output.ProfileActive, Reason: "The corrected successor is complete.",
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ProposePlan(ctx, app.ProposePlanCommand{
+	if _, err := app.UnwrapMutation(service.ProposePlan(ctx, app.ProposePlanCommand{
 		ObjectiveID: objective.ID, ActorID: "agent:planner", Title: "Stale profile plan", Revision: 1,
 		Items: []app.ProposedWorkItem{{
 			ClientRef: "stale", Key: "TH-STALE", Title: "Use the superseded profile", Kind: "research",
 			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 			ExpectedOutputs: []app.ProposedExpectedOutput{{Name: "Evidence map", ProfileName: "evidence_map", ProfileVersion: 1, Required: true, Ordinal: 1}},
 		}},
-	}); err == nil {
+	})); err == nil {
 		t.Fatal("expected superseded output profile to be unusable")
 	}
 
-	planContext, err := service.ProposePlan(ctx, app.ProposePlanCommand{
+	planContext, err := app.UnwrapMutation(service.ProposePlan(ctx, app.ProposePlanCommand{
 		ObjectiveID: objective.ID,
 		ActorID:     "agent:planner", IdempotencyKey: "propose-main-plan",
 		Title:    "Source-auditing skill plan",
@@ -234,7 +234,7 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 				ExternalActions:      []app.ProposedExternalAction{{Required: true, Title: "Install the reviewed skill", Rationale: "Installation is an externally authorized effect.", AuthorizationSubject: json.RawMessage(`{"action_type":"tool.install","target":{"tool":"throughline"},"arguments":[],"scope":{},"permissions":["filesystem.write"],"credential_requirements":[],"constraints":{}}`)}},
 			},
 		},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,19 +246,19 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 			t.Fatalf("item %s was committed before review", item.WorkItem.Key)
 		}
 	}
-	if _, err := service.TransitionObjective(ctx, app.TransitionObjectiveCommand{
+	if _, err := app.UnwrapMutation(service.TransitionObjective(ctx, app.TransitionObjectiveCommand{
 		ObjectiveID: objective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:sponsor", IdempotencyKey: "reject-premature-objective-transition", Reason: "Start approved work.", ExpectedVersion: 1,
-	}); err == nil {
+	})); err == nil {
 		t.Fatal("expected execution transition before plan approval to be rejected")
 	}
-	if _, err := service.ReviewPlan(ctx, app.ReviewPlanCommand{
+	if _, err := app.UnwrapMutation(service.ReviewPlan(ctx, app.ReviewPlanCommand{
 		PlanID: planContext.Plan.ID, ReviewerActorID: "human:sponsor", IdempotencyKey: "review-main-plan", Decision: work.PlanApproved, Reason: "The scope, capabilities, and outputs are explicit.", ExpectedVersion: 1,
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.TransitionObjective(ctx, app.TransitionObjectiveCommand{
+	if _, err := app.UnwrapMutation(service.TransitionObjective(ctx, app.TransitionObjectiveCommand{
 		ObjectiveID: objective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:sponsor", IdempotencyKey: "transition-main-objective", Reason: "Start approved work.", ExpectedVersion: 1,
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
 
@@ -332,7 +332,7 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 	if rubricStates[1] != output.ProfileSuperseded || rubricStates[2] != output.ProfileRejected || rubricStates[3] != output.ProfileActive {
 		t.Fatalf("rejected profile replacement history = %#v", rubricStates)
 	}
-	replacement, err := service.ProposePlan(ctx, app.ProposePlanCommand{
+	replacement, err := app.UnwrapMutation(service.ProposePlan(ctx, app.ProposePlanCommand{
 		ObjectiveID: objective.ID, ActorID: "agent:planner", IdempotencyKey: "propose-replacement-plan", Title: "Source-auditing skill plan v2", Summary: "Refine the approved plan.", Revision: 2,
 		Items: []app.ProposedWorkItem{{
 			ClientRef: "refine", Key: "TH-REFINE", Title: "Refine the source-auditing skill", Kind: "skill_design",
@@ -340,13 +340,13 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 			RequiredCapabilities: []string{"skill_design"},
 			ExpectedOutputs:      []app.ProposedExpectedOutput{{Name: "Refined skill", ProfileName: "skill_package", ProfileVersion: 1, Required: true, Ordinal: 1}},
 		}},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ReviewPlan(ctx, app.ReviewPlanCommand{
+	if _, err := app.UnwrapMutation(service.ReviewPlan(ctx, app.ReviewPlanCommand{
 		PlanID: replacement.Plan.ID, ReviewerActorID: "human:sponsor", IdempotencyKey: "review-replacement-plan", Decision: work.PlanApproved, Reason: "The new revision replaces the earlier scope.", ExpectedVersion: 1,
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
 	replacedContext, err := service.GetObjectiveContext(ctx, objective.ID)
@@ -364,27 +364,27 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 	if planStates[1] != work.PlanSuperseded || planStates[2] != work.PlanApproved || itemStatesByRevision[1] != work.ItemSuperseded || itemStatesByRevision[2] != work.ItemAccepted {
 		t.Fatalf("plan replacement states = plans %#v, items %#v", planStates, itemStatesByRevision)
 	}
-	otherObjective, err := service.CreateObjective(ctx, app.CreateObjectiveCommand{
+	otherObjective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{
 		ActorID: "human:sponsor", IdempotencyKey: "create-other-objective",
 		Key: "OBJ-OTHER", Title: "Unrelated objective", DesiredOutcome: "Keep graph edges consistent.", Phase: work.ObjectivePlanning,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.RecordContext(ctx, app.RecordContextCommand{
+	if _, err := app.UnwrapMutation(service.RecordContext(ctx, app.RecordContextCommand{
 		ObjectiveID: otherObjective.ID, WorkItemID: itemIDs["TH-SKILL"], ActorID: "agent:planner", IdempotencyKey: "invalid-cross-objective-context",
 		Kind: work.ContextFinding, Title: "Cross-objective context", Status: work.ContextRecorded,
-	}); err == nil {
+	})); err == nil {
 		t.Fatal("expected cross-objective context record to be rejected")
 	}
-	if _, err := service.AskQuestion(ctx, app.AskQuestionCommand{
+	if _, err := app.UnwrapMutation(service.AskQuestion(ctx, app.AskQuestionCommand{
 		ObjectiveID: otherObjective.ID, WorkItemID: itemIDs["TH-SKILL"], ActorID: "agent:planner", IdempotencyKey: "invalid-cross-objective-question", Question: "Cross-objective question?",
-	}); err == nil {
+	})); err == nil {
 		t.Fatal("expected cross-objective question to be rejected")
 	}
-	if _, err := service.RecordDecision(ctx, app.RecordDecisionCommand{
+	if _, err := app.UnwrapMutation(service.RecordDecision(ctx, app.RecordDecisionCommand{
 		ObjectiveID: otherObjective.ID, WorkItemID: itemIDs["TH-SKILL"], ActorID: "human:sponsor", IdempotencyKey: "invalid-cross-objective-decision", Title: "Cross-objective decision", Decision: "Reject the invalid edge.",
-	}); err == nil {
+	})); err == nil {
 		t.Fatal("expected cross-objective decision to be rejected")
 	}
 }

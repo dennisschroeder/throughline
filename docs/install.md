@@ -109,6 +109,19 @@ Archive install: download the new version's archive and checksums file (step 1 w
 `PATH` location. Your `.throughline/` workspace directory and its data are untouched by a binary
 upgrade.
 
+After any upgrade, restart the daemon so it runs the new binary:
+
+```bash
+throughline daemon restart
+```
+
+The daemon migrates a workspace database the first time a request opens that workspace after the
+restart, not when it starts. `throughline init` on an existing workspace also migrates it. Nothing
+else does: `throughline capability grant`, which opens the database directly, checks that the
+database has exactly the migrations its binary carries and refuses to run otherwise. After an
+upgrade, open each workspace once through the daemon (for example `throughline show <item-id>` in
+it) before granting capabilities there.
+
 ## 6. Setup: one managed daemon, once per machine
 
 ```bash
@@ -159,6 +172,7 @@ registers it in the per-user registry; it does not touch daemon or global client
 | `throughline doctor [--addr]` | Read-only: workspace, registry, and daemon health, each with a remediation pointer. |
 | `throughline ready --actor <id> [dir] [--addr]` | List ready work for an actor, via the daemon. |
 | `throughline show <id> [dir] [--addr]` | Print one work item's context, via the daemon. |
+| `throughline capability grant --actor <id> --capability <slug> --as <human-id> [--description text] [dir]` | Grant a capability as a registered human. Agents and services cannot grant, and no MCP tool does; a claim refused for a missing capability prints this command. Refuses to run against a database whose schema differs from its binary. `--as` names a registered human on the trust of the local user running the command; it is not authentication, so the boundary is who can run commands on the machine. |
 | `throughline uninstall [--addr]` | Stop the daemon, remove managed harness entries; workspace data and the registry are preserved. |
 | `throughline version` | Print the build version, commit, and date. |
 

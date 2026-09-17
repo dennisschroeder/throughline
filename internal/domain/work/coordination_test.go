@@ -170,3 +170,18 @@ func claimCodes(requirements []ClaimRequirement) []ClaimRequirementCode {
 	}
 	return codes
 }
+
+func TestShellWordQuotesAnythingAShellWouldSplitOrDrop(t *testing.T) {
+	for value, want := range map[string]string{
+		"agent:worker":      "agent:worker",
+		"web_research":      "web_research",
+		"":                  "''",
+		"agent:claude code": "'agent:claude code'",
+		"it's":              `'it'"'"'s'`,
+		"a;rm":              "'a;rm'",
+	} {
+		if got := shellWord(value); got != want {
+			t.Fatalf("shellWord(%q) = %s, want %s", value, got, want)
+		}
+	}
+}

@@ -171,6 +171,15 @@ func (r *fakeRegistry) Lookup(_ context.Context, workspaceID string) (registry.W
 	return target, nil
 }
 
+func (r *fakeRegistry) LookupByCanonicalRoot(_ context.Context, canonicalRoot string) (registry.WorkspaceTarget, error) {
+	for _, target := range r.targets {
+		if target.CanonicalRoot == canonicalRoot {
+			return target, nil
+		}
+	}
+	return registry.WorkspaceTarget{}, registry.ErrWorkspaceNotFound
+}
+
 func TestMintTokenRejectsUnroutableWorkspace(t *testing.T) {
 	h := newTestHarness(t)
 	body, _ := json.Marshal(mintRequest{WorkspaceID: "does-not-exist", ActorID: "agent:x"})
@@ -380,5 +389,130 @@ func TestItemDetailHandlerServesReadOnlyItem(t *testing.T) {
 	}
 	if !detail.ReadOnly {
 		t.Fatalf("expected read_only=true for an item with no open gate, got %+v", detail.WorkItem)
+	}
+}
+
+// TestSwitcherListsAndSelectsAnObjectiveWithNoWorkItems is REP-03's second
+// criterion on the server side. The switcher payload used to be derived from the
+// work items, so an objective a person had just created was missing from the
+// list and could not be selected until it had its first item.
+func TestSwitcherListsAndSelectsAnObjectiveWithNoWorkItems(t *testing.T) {
+	h := newTestHarness(t)
+	withPlan, _ := h.setupObjectiveWithOpenPlan()
+	h.login("human:reviewer")
+
+	created := h.call("create_objective", map[string]any{
+		"actor_id": "human:reviewer", "idempotency_key": "switcher-empty", "key": "OBJ-SWITCHER-EMPTY",
+		"title": "Just created, no work yet", "desired_outcome": "Selectable straight away", "phase": "discovery",
+	})
+	emptyID := created["result"].(map[string]any)["id"].(string)
+
+	var resp ObjectivesResponse
+	if status := h.getJSON("/dashboard/api/v1/objectives", &resp).StatusCode; status != http.StatusOK {
+		t.Fatalf("objectives status = %d", status)
+	}
+	if len(resp.Objectives) != 2 {
+		t.Fatalf("objectives = %+v, want both the planned and the empty one", resp.Objectives)
+	}
+	var empty *ObjectiveSummary
+	for index := range resp.Objectives {
+		if resp.Objectives[index].ID == emptyID {
+			empty = &resp.Objectives[index]
+		}
+	}
+	if empty == nil {
+		t.Fatalf("the objective with no work items is absent from the switcher: %+v", resp.Objectives)
+	}
+	if empty.ItemCount != 0 || empty.Phase != "discovery" || empty.Title != "Just created, no work yet" {
+		t.Fatalf("empty objective summary = %+v", *empty)
+	}
+
+	// Selecting it must produce a real snapshot rather than an error, and must
+	// mark it current rather than the objective that happens to have work.
+	var selected ObjectivesResponse
+	if status := h.getJSON("/dashboard/api/v1/objectives?objective_id="+emptyID, &selected).StatusCode; status != http.StatusOK {
+		t.Fatalf("objectives status when selecting the empty objective = %d", status)
+	}
+	for _, summary := range selected.Objectives {
+		if summary.Current != (summary.ID == emptyID) {
+			t.Fatalf("current flag = %+v, want only the selected objective marked current", summary)
+		}
+	}
+	var snapshot LoopSnapshot
+	if status := h.getJSON("/dashboard/api/v1/loop?objective_id="+emptyID, &snapshot).StatusCode; status != http.StatusOK {
+		t.Fatalf("loop status for the empty objective = %d", status)
+	}
+	if snapshot.Objective.ID != emptyID {
+		t.Fatalf("loop snapshot objective = %+v, want the empty one", snapshot.Objective)
+	}
+	if withPlan == emptyID {
+		t.Fatal("test setup collapsed the two objectives")
+	}
+}
+
+// TestAutoResolvePrefersAnObjectiveThatHoldsWork pins the switcher's fallback.
+// Making empty objectives visible also entered them into the "most blocking
+// gates" contest, and a just-created objective is trivially the most recently
+// updated one, so with nothing gated it won every time: opening the dashboard
+// right after creating an objective showed an empty board.
+func TestAutoResolvePrefersAnObjectiveThatHoldsWork(t *testing.T) {
+	h := newTestHarness(t)
+	h.login("human:reviewer")
+	withWork := h.call("create_objective", map[string]any{
+		"actor_id": "human:reviewer", "idempotency_key": "auto-with-work", "key": "OBJ-AUTO-WORK",
+		"title": "Holds work", "desired_outcome": "Should be the default", "phase": "planning",
+	})["result"].(map[string]any)["id"].(string)
+	h.call("create_item", map[string]any{
+		"actor_id": "human:reviewer", "idempotency_key": "auto-item", "key": "TH-AUTO",
+		"objective_id": withWork, "title": "The only work in the workspace", "kind": "research",
+	})
+	// Created afterwards, so it is the most recently updated objective.
+	empty := h.call("create_objective", map[string]any{
+		"actor_id": "human:reviewer", "idempotency_key": "auto-empty", "key": "OBJ-AUTO-EMPTY",
+		"title": "Created later, holds nothing", "desired_outcome": "Should not be the default", "phase": "discovery",
+	})["result"].(map[string]any)["id"].(string)
+
+	var snapshot LoopSnapshot
+	if status := h.getJSON("/dashboard/api/v1/loop", &snapshot).StatusCode; status != http.StatusOK {
+		t.Fatalf("loop status with no objective_id = %d", status)
+	}
+	if snapshot.Objective.ID == empty {
+		t.Fatal("the dashboard defaulted to the objective that was just created and holds nothing")
+	}
+	if snapshot.Objective.ID != withWork {
+		t.Fatalf("auto-resolved objective = %q, want the one holding work (%q)", snapshot.Objective.ID, withWork)
+	}
+}
+
+// TestDashboardAddressesAnObjectiveByKey covers the other half of addressability:
+// list_objectives prints keys, so a key pasted into the dashboard URL has to
+// select rather than fall through to an internal error.
+func TestDashboardAddressesAnObjectiveByKey(t *testing.T) {
+	h := newTestHarness(t)
+	h.login("human:reviewer")
+	created := h.call("create_objective", map[string]any{
+		"actor_id": "human:reviewer", "idempotency_key": "dash-by-key", "key": "OBJ-DASH-KEY",
+		"title": "Addressed by key", "desired_outcome": "Selectable by the name written down", "phase": "discovery",
+	})["result"].(map[string]any)["id"].(string)
+
+	var snapshot LoopSnapshot
+	if status := h.getJSON("/dashboard/api/v1/loop?objective_id=OBJ-DASH-KEY", &snapshot).StatusCode; status != http.StatusOK {
+		t.Fatalf("loop status addressed by key = %d", status)
+	}
+	if snapshot.Objective.ID != created {
+		t.Fatalf("loop snapshot = %+v, want the objective addressed by key", snapshot.Objective)
+	}
+	var listed ObjectivesResponse
+	if status := h.getJSON("/dashboard/api/v1/objectives?objective_id=OBJ-DASH-KEY", &listed).StatusCode; status != http.StatusOK {
+		t.Fatalf("objectives status addressed by key = %d", status)
+	}
+	for _, summary := range listed.Objectives {
+		if summary.Current != (summary.ID == created) {
+			t.Fatalf("current marker = %+v, want the key-addressed objective marked", summary)
+		}
+	}
+	// An unknown reference is a 404, not an internal error.
+	if status := h.get("/dashboard/api/v1/loop?objective_id=OBJ-NO-SUCH-THING").StatusCode; status != http.StatusNotFound {
+		t.Fatalf("loop status for an unknown objective = %d, want 404", status)
 	}
 }

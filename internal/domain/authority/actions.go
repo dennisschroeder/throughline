@@ -110,6 +110,7 @@ type ExternalAction struct {
 type ExternalActionRevision struct {
 	ExternalActionID         string
 	Revision                 int
+	Version                  int
 	AuthorizationSubject     json.RawMessage
 	AuthorizationSubjectHash string
 	ProposedBy               string
@@ -156,6 +157,7 @@ func NewExternalActionRevision(externalActionID string, revision int, rawSubject
 	return ExternalActionRevision{
 		ExternalActionID:         externalActionID,
 		Revision:                 revision,
+		Version:                  1,
 		AuthorizationSubject:     append(json.RawMessage(nil), subject.JSON...),
 		AuthorizationSubjectHash: subject.Hash,
 		ProposedBy:               proposedBy,
@@ -224,9 +226,28 @@ func TransitionExternalAction(action ExternalAction, target ExternalActionState,
 	return action, nil
 }
 
+// WithdrawExternalActionAuthority records that an action's authority was taken
+// away. An action still waiting to run expires, so the read model stops
+// advertising authority that no longer exists. An action already executing or
+// finished keeps its lifecycle state — 'executing' has no edge to 'expired',
+// and refusing the withdrawal there would leave the grant valid exactly when
+// someone is revoking it. Either way the action changed, so its version rises.
+func WithdrawExternalActionAuthority(action ExternalAction, now time.Time) ExternalAction {
+	if action.State == ActionAuthorized {
+		expired, err := TransitionExternalAction(action, ActionExpired, now)
+		if err == nil {
+			return expired
+		}
+	}
+	action.Version++
+	action.UpdatedAt = now.UTC()
+	return action
+}
+
 type AuthorityGrant struct {
 	ID                       string
 	ExternalActionID         string
+	Version                  int
 	ActionRevision           int
 	PrincipalActorID         string
 	AuthorizationSubjectHash string
@@ -251,6 +272,7 @@ const (
 type ActionApproval struct {
 	ID                       string
 	ExternalActionID         string
+	Version                  int
 	ExternalActionRevision   int
 	ApprovedForActorID       string
 	AuthorizationSubjectHash string
@@ -288,6 +310,7 @@ func NewActionApproval(approval ActionApproval, revision ExternalActionRevision,
 		approval.ExpiresAt = &expiresAt
 	}
 	approval.ExternalActionID = revision.ExternalActionID
+	approval.Version = 1
 	approval.ExternalActionRevision = revision.Revision
 	approval.AuthorizationSubjectHash = revision.AuthorizationSubjectHash
 	approval.Constraints = constraints
@@ -313,6 +336,7 @@ func ResolveActionApproval(approval ActionApproval, decision ApprovalStatus, act
 	}
 	resolvedAt := now.UTC()
 	approval.Status = decision
+	approval.Version++
 	approval.ResolvedBy = actor
 	approval.ResolvedAt = &resolvedAt
 	approval.Rationale = rationale
@@ -330,6 +354,7 @@ func RevokeActionApproval(approval ActionApproval, actor, rationale string, now 
 	}
 	resolvedAt := now.UTC()
 	approval.Status = ApprovalRevoked
+	approval.Version++
 	approval.ResolvedBy = actor
 	approval.ResolvedAt = &resolvedAt
 	approval.Rationale = rationale
@@ -363,6 +388,7 @@ func NewAuthorityGrant(grant AuthorityGrant, revision ExternalActionRevision, no
 	}
 	grant.ExternalActionID = revision.ExternalActionID
 	grant.ActionRevision = revision.Revision
+	grant.Version = 1
 	grant.AuthorizationSubjectHash = revision.AuthorizationSubjectHash
 	grant.Constraints = constraints
 	grant.GrantedAt = now.UTC()
@@ -382,6 +408,7 @@ func RevokeAuthorityGrant(grant AuthorityGrant, revokedBy string, now time.Time)
 	revokedAt := now.UTC()
 	grant.RevokedBy = revokedBy
 	grant.RevokedAt = &revokedAt
+	grant.Version++
 	return grant, nil
 }
 
@@ -452,6 +479,7 @@ func CheckAuthorization(action ExternalAction, revision ExternalActionRevision, 
 type ExternalActionExecution struct {
 	ID               string
 	ExternalActionID string
+	Version          int
 	ActionRevision   int
 	PrincipalActorID string
 	AuthorityGrantID string
@@ -475,6 +503,7 @@ func NewExternalActionExecution(id string, action ExternalAction, revision Exter
 	return ExternalActionExecution{
 		ID:               id,
 		ExternalActionID: action.ID,
+		Version:          1,
 		ActionRevision:   revision.Revision,
 		PrincipalActorID: principalActorID,
 		AuthorityGrantID: authorityGrantID,
@@ -505,6 +534,7 @@ func CompleteExternalActionExecution(execution ExternalActionExecution, target E
 	execution.Result = normalizedResult
 	execution.EvidenceIDs = normalizedEvidence
 	execution.FinishedAt = now.UTC()
+	execution.Version++
 	return execution, nil
 }
 

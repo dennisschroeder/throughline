@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -20,18 +21,18 @@ func TestRepositoryIndependentSkillDesignSlice(t *testing.T) {
 	service := NewService(store, &sequenceIDs{}, clock)
 	ctx := context.Background()
 
-	objective, err := service.CreateObjective(ctx, CreateObjectiveCommand{
+	objective, err := UnwrapMutation(service.CreateObjective(ctx, CreateObjectiveCommand{
 		ActorID:        "human:owner",
 		IdempotencyKey: "objective",
 		Key:            "OBJ-SKILL",
 		Title:          "Design a reusable interview-synthesis skill",
 		DesiredOutcome: "A reviewed skill package that turns interview notes into a source-linked synthesis.",
 		Phase:          work.ObjectivePlanning,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := service.CreatePlan(ctx, CreatePlanCommand{
+	plan, err := UnwrapMutation(service.CreatePlan(ctx, CreatePlanCommand{
 		ActorID:         "human:owner",
 		IdempotencyKey:  "plan",
 		ObjectiveID:     objective.ID,
@@ -39,11 +40,11 @@ func TestRepositoryIndependentSkillDesignSlice(t *testing.T) {
 		Summary:         "Define the inputs, synthesis method, output contract, and evaluation rubric.",
 		Revision:        1,
 		CommitmentState: work.PlanDraft,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	item, err := service.CreateWorkItem(ctx, CreateWorkItemCommand{
+	item, err := UnwrapMutation(service.CreateWorkItem(ctx, CreateWorkItemCommand{
 		ActorID:           "human:owner",
 		IdempotencyKey:    "item",
 		Key:               "TH-1",
@@ -59,11 +60,11 @@ func TestRepositoryIndependentSkillDesignSlice(t *testing.T) {
 		ExecutionPolicy:   work.PolicyAgentMayPropose,
 		RequiredActorKind: work.ActorAny,
 		AttentionState:    work.AttentionNeedsHumanReview,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.DefineExpectedOutput(ctx, DefineExpectedOutputCommand{
+	_, err = UnwrapMutation(service.DefineExpectedOutput(ctx, DefineExpectedOutputCommand{
 		ActorID:         "human:owner",
 		WorkItemID:      item.ID,
 		Name:            "Installable interview-synthesis skill",
@@ -75,7 +76,7 @@ func TestRepositoryIndependentSkillDesignSlice(t *testing.T) {
 		Ordinal:         1,
 		ExpectedVersion: item.Version,
 		IdempotencyKey:  "define-skill-output",
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,9 +100,9 @@ func TestRepositoryIndependentSkillDesignSlice(t *testing.T) {
 func TestServiceRequiresIdempotencyKey(t *testing.T) {
 	clock := fixedClock{value: time.Date(2026, 8, 21, 12, 30, 0, 0, time.UTC)}
 	service := NewService(newMemoryStore(clock.value), &sequenceIDs{}, clock)
-	_, err := service.CreateObjective(context.Background(), CreateObjectiveCommand{
+	_, err := UnwrapMutation(service.CreateObjective(context.Background(), CreateObjectiveCommand{
 		ActorID: "human:owner", Key: "OBJ-KEY", Title: "Require durable mutation keys", DesiredOutcome: "No mutation bypass", Phase: work.ObjectiveIdea,
-	})
+	}))
 	if err == nil || !strings.Contains(err.Error(), "idempotency key") {
 		t.Fatalf("expected missing idempotency key error, got %v", err)
 	}
@@ -112,14 +113,14 @@ func TestCreatePlanOnlyCreatesDrafts(t *testing.T) {
 	store := newMemoryStore(clock.value)
 	store.objectives["objective"] = work.Objective{ID: "objective"}
 	service := NewService(store, &sequenceIDs{}, clock)
-	_, err := service.CreatePlan(context.Background(), CreatePlanCommand{
+	_, err := UnwrapMutation(service.CreatePlan(context.Background(), CreatePlanCommand{
 		ActorID:         "human:owner",
 		IdempotencyKey:  "premature-plan",
 		ObjectiveID:     "objective",
 		Title:           "Premature plan",
 		Revision:        1,
 		CommitmentState: work.PlanProposed,
-	})
+	}))
 	if err == nil {
 		t.Fatal("expected proposed plan creation without proposal audit to be rejected")
 	}
@@ -136,13 +137,13 @@ func TestCreateWorkItemAcceptedReadyRequiresApprovedExecutionContext(t *testing.
 		CommitmentState: work.ItemAccepted, ExecutionStatus: work.StatusReady, Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
 		ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny, AttentionState: work.AttentionNone,
 	}
-	if _, err := service.CreateWorkItem(context.Background(), command); err == nil {
+	if _, err := UnwrapMutation(service.CreateWorkItem(context.Background(), command)); err == nil {
 		t.Fatal("expected accepted ready work item outside execution to be rejected")
 	}
 	objective := store.objectives["objective"]
 	objective.Phase = work.ObjectiveExecution
 	store.objectives[objective.ID] = objective
-	item, err := service.CreateWorkItem(context.Background(), command)
+	item, err := UnwrapMutation(service.CreateWorkItem(context.Background(), command))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,14 +157,14 @@ func TestCreateObjectiveCannotStartInExecution(t *testing.T) {
 	store := newMemoryStore(clock.value)
 	service := NewService(store, &sequenceIDs{}, clock)
 
-	_, err := service.CreateObjective(context.Background(), CreateObjectiveCommand{
+	_, err := UnwrapMutation(service.CreateObjective(context.Background(), CreateObjectiveCommand{
 		ActorID:        "human:owner",
 		IdempotencyKey: "premature-objective",
 		Key:            "OBJ-PREMATURE",
 		Title:          "Premature objective",
 		DesiredOutcome: "Execution without an approved handoff",
 		Phase:          work.ObjectiveExecution,
-	})
+	}))
 	if err == nil {
 		t.Fatal("expected objective creation in execution to be rejected")
 	}
@@ -179,33 +180,41 @@ func TestRequestAttentionPersistsObjectiveScopedTargetAssociation(t *testing.T) 
 	store.decisions["decision"] = work.Decision{ID: "decision", ObjectiveID: "objective", Title: "Use the local store", Outcome: "SQLite", Status: work.DecisionAccepted, DecidedBy: "human:owner"}
 	service := NewService(store, &sequenceIDs{}, clock)
 
-	question, err := service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "question", TargetID: "question", ActorID: "agent:researcher", IdempotencyKey: "question-attention", ExpectedVersion: 1, AttentionState: work.AttentionNeedsHumanDecision})
+	question, err := UnwrapMutation(service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "question", TargetID: "question", ActorID: "agent:researcher", IdempotencyKey: "question-attention", ExpectedVersion: 1, AttentionState: work.AttentionNeedsHumanDecision}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if question.Question == nil || question.WorkItem != nil || question.TargetKind != "question" || question.TargetID != "question" {
 		t.Fatalf("question attention result = %#v", question)
 	}
-	if updated := store.questions["question"]; !updated.RequiresHumanAttention || updated.Version != 2 {
+	if updated := store.questions["question"]; updated.AttentionState != work.AttentionNeedsHumanDecision || updated.Version != 2 {
 		t.Fatalf("question attention state = %#v", updated)
 	}
 
-	decision, err := service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "decision", TargetID: "decision", ActorID: "agent:researcher", IdempotencyKey: "decision-attention", ExpectedVersion: 1, AttentionState: work.AttentionNeedsHumanReview})
+	// needs_human_review and intervention_required used to collapse into the
+	// same stored boolean; the question must keep the exact state asked for.
+	review, err := UnwrapMutation(service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "question", TargetID: "question", ActorID: "agent:researcher", IdempotencyKey: "question-review", ExpectedVersion: 2, AttentionState: work.AttentionNeedsHumanReview}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Decision == nil || decision.WorkItem != nil || decision.TargetKind != "decision" || decision.TargetID != "decision" {
-		t.Fatalf("decision attention result = %#v", decision)
+	if review.Question == nil || review.Question.AttentionState != work.AttentionNeedsHumanReview || store.questions["question"].AttentionState != work.AttentionNeedsHumanReview {
+		t.Fatalf("question attention after review request = %#v, stored %#v", review.Question, store.questions["question"])
 	}
-	intervention, err := service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "intervention", TargetID: "release-1", ActorID: "agent:researcher", IdempotencyKey: "intervention-attention", AttentionState: work.AttentionInterventionRequired})
-	if err != nil {
-		t.Fatal(err)
+
+	if _, err := UnwrapMutation(service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: "question", TargetID: "question", WorkItemID: "item", ActorID: "agent:researcher", IdempotencyKey: "question-with-item", ExpectedVersion: 3, AttentionState: work.AttentionNeedsHumanReview})); err == nil {
+		t.Fatal("attention on a question that also named a work item was accepted")
 	}
-	if intervention.TargetKind != "intervention" || intervention.TargetID != "release-1" || intervention.WorkItem != nil || intervention.Question != nil || intervention.Decision != nil {
-		t.Fatalf("intervention attention result = %#v", intervention)
+
+	// Decisions are immutable records, and review, clarification and
+	// intervention are attention states rather than targets; none of them
+	// ever stored anything, so each is refused rather than silently recorded.
+	for _, kind := range []string{"decision", "review", "clarification", "intervention"} {
+		if _, err := UnwrapMutation(service.RequestAttention(context.Background(), RequestAttentionCommand{TargetKind: kind, TargetID: "decision", ActorID: "agent:researcher", IdempotencyKey: kind + "-attention", ExpectedVersion: 1, AttentionState: work.AttentionNeedsHumanReview})); err == nil {
+			t.Fatalf("attention on target kind %q was accepted", kind)
+		}
 	}
-	if len(store.activities) != 3 {
-		t.Fatalf("attention activity count = %d", len(store.activities))
+	if len(store.activities) != 2 {
+		t.Fatalf("attention activity count = %d, want one per accepted request", len(store.activities))
 	}
 	for _, activity := range store.activities {
 		var payload struct {
@@ -304,6 +313,10 @@ func (s *memoryStore) Question(_ context.Context, id string) (work.Question, err
 
 func (s *memoryStore) UpdateQuestion(_ context.Context, question work.Question, _ int) error {
 	s.questions[question.ID] = question
+	return nil
+}
+
+func (s *memoryStore) CreateQuestionBlock(context.Context, string, string, string, time.Time) error {
 	return nil
 }
 
@@ -629,6 +642,14 @@ func (s *memoryStore) UpdateAcceptanceCriterion(context.Context, work.Acceptance
 	return nil
 }
 
+func (s *memoryStore) ListAcceptanceCriteria(context.Context, string) ([]work.AcceptanceCriterion, error) {
+	return nil, nil
+}
+
+func (s *memoryStore) SupersedeAcceptanceCriterion(context.Context, work.AcceptanceCriterion) error {
+	return nil
+}
+
 func (s *memoryStore) AcceptanceCriteriaSatisfied(context.Context, string) (bool, error) {
 	return true, nil
 }
@@ -721,6 +742,15 @@ func (s *memoryStore) GetWorkItemContext(ctx context.Context, id string) (ports.
 	return result, nil
 }
 
+func (s *memoryStore) ListObjectives(context.Context) ([]work.Objective, error) {
+	objectives := make([]work.Objective, 0, len(s.objectives))
+	for _, objective := range s.objectives {
+		objectives = append(objectives, objective)
+	}
+	sort.Slice(objectives, func(i, j int) bool { return objectives[i].Key < objectives[j].Key })
+	return objectives, nil
+}
+
 func (s *memoryStore) GetObjectiveContext(_ context.Context, id string) (ports.ObjectiveContext, error) {
 	objective, ok := s.objectives[id]
 	if !ok {
@@ -765,6 +795,14 @@ func (s *memoryStore) ListReadyWorkForActor(context.Context, string) ([]ports.Re
 	return nil, nil
 }
 
+func (s *memoryStore) ReviewEvidence(context.Context, work.WorkItem) ([]work.ReviewEvidence, error) {
+	return nil, nil
+}
+
+func (s *memoryStore) ListQuestionsNeedingAttention(context.Context) ([]work.Question, error) {
+	return nil, nil
+}
+
 func (s *memoryStore) ListActivity(context.Context, ports.ActivityFilter) ([]work.Activity, error) {
 	return nil, nil
 }
@@ -779,3 +817,18 @@ func (s *memoryStore) ListAcceptedOutputs(context.Context, ports.AcceptedOutputF
 
 var _ ports.Store = (*memoryStore)(nil)
 var _ ports.Repository = (*memoryStore)(nil)
+
+// TestReplayedAttentionResultKeepsTheRequestedQuestionState covers a
+// request_attention response stored before REP-08: its question carried only
+// RequiresHumanAttention, which alone would decode as needs_human_decision
+// whatever state was requested.
+func TestReplayedAttentionResultKeepsTheRequestedQuestionState(t *testing.T) {
+	stored := `{"target_kind":"question","target_id":"q","attention_state":"intervention_required","question":{"ID":"q","Status":"open","RequiresHumanAttention":true}}`
+	var result AttentionRequestResult
+	if err := json.Unmarshal([]byte(stored), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Question == nil || result.Question.AttentionState != work.AttentionInterventionRequired || result.AttentionState != work.AttentionInterventionRequired {
+		t.Fatalf("replayed attention result = %#v, question %#v", result, result.Question)
+	}
+}

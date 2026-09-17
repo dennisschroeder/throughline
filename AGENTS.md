@@ -25,6 +25,11 @@ Use `docs/implementation-kickoff.md` as the bounded first implementation task.
   - `go test ./...`
   - `go build ./...`
   - `CGO_ENABLED=0 go build ./...`
-  Green means all six over the whole repository, not the package you touched. The generated model
-  drifts on any change under `internal/domain`, not only on ontology edits.
+  Green means all six over the whole repository, not the package you touched. The generated model's
+  digest is the byte content of every file listed in `ontology/throughline.json`'s `source_mappings`
+  (30 today: the `internal/domain` packages, `internal/mcp/server.go`, `internal/sqlite/effects.go`,
+  `internal/cli/capability.go`, `docs/implementation-handoff.md` and migrations 0001-0017). Editing
+  any of them moves the digest, including the handoff document, the MCP adapter and the capability
+  grant command; editing anything else does not, including a new migration, which is unmapped until
+  someone adds it. Regenerate and commit the digest in the same change.
 - Use Conventional Commits with an imperative subject and no agent-attribution trailers.

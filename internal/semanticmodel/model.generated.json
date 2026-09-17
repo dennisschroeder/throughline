@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "model_version": "1.1.0",
+  "model_version": "1.2.0",
   "bootstrap": "Throughline is a local, authoritative coordination state layer for domain-neutral work. It records intent, plans, work, outputs, validation, reuse, and delegated authority; it does not orchestrate agents or perform external effects. Capability does not imply Authority. Call get_semantic_model for details.",
   "entities": [
     {
@@ -31,7 +31,7 @@
     {
       "id": "attention",
       "name": "Attention",
-      "definition": "An orthogonal request for human review, decision, clarification, or intervention; it is not a workflow status."
+      "definition": "An orthogonal request for human review, decision, clarification, or intervention on a work item or a question; it is not a workflow status. The target stores the requested state."
     },
     {
       "id": "authority_grant",
@@ -61,7 +61,7 @@
     {
       "id": "context_record",
       "name": "ContextRecord",
-      "definition": "Typed authoritative context such as a requirement, constraint, assumption, finding, risk, or success metric."
+      "definition": "Typed authoritative context such as a requirement, constraint, assumption, finding, risk, success metric, non-goal, or affected party/surface."
     },
     {
       "id": "decision",
@@ -91,7 +91,7 @@
     {
       "id": "objective",
       "name": "Objective",
-      "definition": "A durable goal that groups work items."
+      "definition": "A durable goal that groups work items. It carries the edge, reason, actor and time of its most recent phase transition."
     },
     {
       "id": "output_profile",
@@ -121,12 +121,12 @@
     {
       "id": "question",
       "name": "Question",
-      "definition": "An unresolved question that may request human attention or block work."
+      "definition": "A question about an objective: unsharp while an in-scope area is visible but not yet phrasable, open once phrased, then answered or waived. It stores its own attention state, and while unsharp or open it blocks every work item it is linked to; a question asked on a work item is always linked to that item. Links are never removed, so only answering or waiving clears them."
     },
     {
       "id": "validation_record",
       "name": "ValidationRecord",
-      "definition": "An append-only verdict and evidence record for one output revision."
+      "definition": "An append-only verdict and evidence record whose subject is exactly one output revision or one work item. On a work item it is a review: it records that the work was checked, by whom, with what verdict and whether the pass was degraded, never how the review was performed."
     },
     {
       "id": "work_item",
@@ -202,6 +202,18 @@
       "cardinality": "one_to_many"
     },
     {
+      "id": "question_blocks_work_item",
+      "from": "question",
+      "to": "work_item",
+      "cardinality": "many_to_many"
+    },
+    {
+      "id": "question_has_attention",
+      "from": "question",
+      "to": "attention",
+      "cardinality": "many_to_one"
+    },
+    {
       "id": "work_item_depends_on_work_item",
       "from": "work_item",
       "to": "work_item",
@@ -238,6 +250,12 @@
       "cardinality": "one_to_many"
     },
     {
+      "id": "work_item_has_review",
+      "from": "work_item",
+      "to": "validation_record",
+      "cardinality": "one_to_many"
+    },
+    {
       "id": "work_item_requires_output",
       "from": "work_item",
       "to": "expected_output",
@@ -257,6 +275,163 @@
     }
   ],
   "lifecycles": [
+    {
+      "id": "context_record_assumption_lifecycle",
+      "entity": "context_record",
+      "kinds": [
+        "assumption"
+      ],
+      "states": [
+        "untested",
+        "validating",
+        "validated",
+        "invalidated",
+        "superseded"
+      ],
+      "transitions": [
+        [
+          "untested",
+          "validating"
+        ],
+        [
+          "validating",
+          "validated"
+        ],
+        [
+          "validating",
+          "invalidated"
+        ],
+        [
+          "untested",
+          "superseded"
+        ],
+        [
+          "validating",
+          "superseded"
+        ],
+        [
+          "validated",
+          "superseded"
+        ],
+        [
+          "invalidated",
+          "superseded"
+        ]
+      ]
+    },
+    {
+      "id": "context_record_finding_lifecycle",
+      "entity": "context_record",
+      "kinds": [
+        "finding"
+      ],
+      "states": [
+        "recorded",
+        "superseded"
+      ],
+      "transitions": [
+        [
+          "recorded",
+          "superseded"
+        ]
+      ]
+    },
+    {
+      "id": "context_record_proposal_lifecycle",
+      "entity": "context_record",
+      "kinds": [
+        "requirement",
+        "constraint",
+        "risk",
+        "non_goal",
+        "affected"
+      ],
+      "states": [
+        "proposed",
+        "accepted",
+        "waived",
+        "superseded"
+      ],
+      "transitions": [
+        [
+          "proposed",
+          "accepted"
+        ],
+        [
+          "accepted",
+          "waived"
+        ],
+        [
+          "proposed",
+          "superseded"
+        ],
+        [
+          "accepted",
+          "superseded"
+        ],
+        [
+          "waived",
+          "superseded"
+        ]
+      ]
+    },
+    {
+      "id": "context_record_success_metric_lifecycle",
+      "entity": "context_record",
+      "kinds": [
+        "success_metric"
+      ],
+      "states": [
+        "untested",
+        "validating",
+        "validated",
+        "invalidated",
+        "waived",
+        "superseded"
+      ],
+      "transitions": [
+        [
+          "untested",
+          "validating"
+        ],
+        [
+          "validating",
+          "validated"
+        ],
+        [
+          "validating",
+          "invalidated"
+        ],
+        [
+          "untested",
+          "waived"
+        ],
+        [
+          "validating",
+          "waived"
+        ],
+        [
+          "untested",
+          "superseded"
+        ],
+        [
+          "validating",
+          "superseded"
+        ],
+        [
+          "validated",
+          "superseded"
+        ],
+        [
+          "invalidated",
+          "superseded"
+        ],
+        [
+          "waived",
+          "superseded"
+        ]
+      ]
+    },
     {
       "id": "external_action_lifecycle",
       "entity": "external_action",
@@ -487,6 +662,34 @@
       ]
     },
     {
+      "id": "question_lifecycle",
+      "entity": "question",
+      "states": [
+        "unsharp",
+        "open",
+        "answered",
+        "waived"
+      ],
+      "transitions": [
+        [
+          "unsharp",
+          "open"
+        ],
+        [
+          "unsharp",
+          "waived"
+        ],
+        [
+          "open",
+          "answered"
+        ],
+        [
+          "open",
+          "waived"
+        ]
+      ]
+    },
+    {
       "id": "work_item_execution",
       "entity": "work_item",
       "states": [
@@ -563,6 +766,10 @@
       "statement": "At most one unexpired active claim exists per work item; claims are reclaimable leases."
     },
     {
+      "id": "declared_review_required",
+      "statement": "A work item that declares review requirements reaches done only when, for each, the latest work-item validation with the same criterion reference and validator kind passed or was waived and no work was recorded on the item after it; an item that declares none has no review requirement."
+    },
+    {
       "id": "execution_policy_not_authority",
       "statement": "Execution policy governs internal work autonomy and never grants authority for an ExternalAction."
     },
@@ -575,6 +782,10 @@
       "statement": "A work item cannot depend on itself; hard prerequisite cycles are rejected."
     },
     {
+      "id": "objective_phase_moves_explicitly",
+      "statement": "An objective changes phase only through an explicit transition with a recorded reason and actor; recording work against it never advances the phase, and objectives are not claimed or leased."
+    },
+    {
       "id": "optimistic_concurrency",
       "statement": "Mutations use expected_version and reject mismatches without overwriting current state."
     },
@@ -585,6 +796,10 @@
     {
       "id": "progress_is_concise",
       "statement": "Progress records concise checkpoints and never raw model reasoning."
+    },
+    {
+      "id": "questions_block_linked_work",
+      "statement": "An unsharp or open question blocks claiming and readiness of every work item it is linked to; the block clears only when the question is answered or waived."
     }
   ],
   "source_mappings": [
@@ -604,9 +819,19 @@
       "symbol": "CanonicalizeSubject"
     },
     {
+      "id": "capability_grant_cli",
+      "path": "internal/cli/capability.go",
+      "symbol": "runCapabilityGrant"
+    },
+    {
       "id": "mcp_adapter",
       "path": "internal/mcp/server.go",
       "symbol": "NewServer"
+    },
+    {
+      "id": "migration_activity_objective_binding",
+      "path": "internal/sqlite/migrations/0014_activity_objective_binding.sql",
+      "symbol": "ALTER TABLE activity ADD COLUMN objective_id"
     },
     {
       "id": "migration_approval_versions",
@@ -629,6 +854,11 @@
       "symbol": "CREATE TABLE actors"
     },
     {
+      "id": "migration_criterion_supersession",
+      "path": "internal/sqlite/migrations/0012_acceptance_criterion_supersession.sql",
+      "symbol": "CREATE TABLE acceptance_criteria_new"
+    },
+    {
       "id": "migration_execution",
       "path": "internal/sqlite/migrations/0003_durable_execution_graph.sql",
       "symbol": "CREATE TABLE acceptance_criteria"
@@ -644,14 +874,49 @@
       "symbol": "CREATE TABLE objectives"
     },
     {
+      "id": "migration_objective_phase_transition",
+      "path": "internal/sqlite/migrations/0017_objective_phase_transition.sql",
+      "symbol": "ALTER TABLE objectives ADD COLUMN phase_transition_from"
+    },
+    {
       "id": "migration_planning",
       "path": "internal/sqlite/migrations/0002_intent_planning.sql",
       "symbol": "CREATE TABLE context_records"
     },
     {
+      "id": "migration_priority_measure_context_kinds",
+      "path": "internal/sqlite/migrations/0013_priority_measure_context_kinds.sql",
+      "symbol": "ALTER TABLE objectives ADD COLUMN priority"
+    },
+    {
       "id": "migration_profile_versions",
       "path": "internal/sqlite/migrations/0007_output_profile_state_versions.sql",
       "symbol": "ALTER TABLE output_profiles"
+    },
+    {
+      "id": "migration_question_frontier_and_blocks",
+      "path": "internal/sqlite/migrations/0015_question_frontier_and_blocks.sql",
+      "symbol": "CREATE TABLE question_blocks"
+    },
+    {
+      "id": "migration_relation_versions",
+      "path": "internal/sqlite/migrations/0011_relation_versions.sql",
+      "symbol": "ALTER TABLE decisions"
+    },
+    {
+      "id": "migration_success_metric_lifecycle",
+      "path": "internal/sqlite/migrations/0010_success_metric_validation_lifecycle.sql",
+      "symbol": "UPDATE context_records"
+    },
+    {
+      "id": "migration_work_item_reviews",
+      "path": "internal/sqlite/migrations/0016_work_item_reviews.sql",
+      "symbol": "CREATE TABLE output_validations"
+    },
+    {
+      "id": "mutation_effects",
+      "path": "internal/sqlite/effects.go",
+      "symbol": "effectTables"
     },
     {
       "id": "output_profiles",
@@ -679,6 +944,11 @@
       "symbol": "TransitionObjective"
     },
     {
+      "id": "work_review_evidence",
+      "path": "internal/domain/work/review.go",
+      "symbol": "EvaluateReviewEvidence"
+    },
+    {
       "id": "work_types",
       "path": "internal/domain/work/types.go",
       "symbol": "type Objective struct"
@@ -686,9 +956,9 @@
   ],
   "manifest": {
     "schema_version": "1.0",
-    "model_version": "1.1.0",
-    "content_digest": "2eff9eef545ff0b338cc108ddf77fa9b83a78851024783a2b9c1d15f78aae91f",
-    "source_digest": "557e8006ee16d1c5691e07d5ff21d7c99c55590926f3d4ab210f1c343059bbef",
+    "model_version": "1.2.0",
+    "content_digest": "6975b795b1812a7dcd7ac93ee5a7f2764faff7c37f0ad7b27b4ab274efa496a4",
+    "source_digest": "84ced086002b0b398f9c32ab8829257e82ea3b2fe4622711b8ee017665d788e2",
     "bootstrap": "Throughline is a local, authoritative coordination state layer for domain-neutral work. It records intent, plans, work, outputs, validation, reuse, and delegated authority; it does not orchestrate agents or perform external effects. Capability does not imply Authority. Call get_semantic_model for details.",
     "available_sections": [
       "manifest",
@@ -701,12 +971,12 @@
     ],
     "section_counts": {
       "entities": 26,
-      "invariants": 11,
-      "lifecycles": 6,
-      "relations": 20,
-      "source_mappings": 19
+      "invariants": 14,
+      "lifecycles": 11,
+      "relations": 23,
+      "source_mappings": 30
     }
   },
-  "content_digest": "2eff9eef545ff0b338cc108ddf77fa9b83a78851024783a2b9c1d15f78aae91f",
-  "source_digest": "557e8006ee16d1c5691e07d5ff21d7c99c55590926f3d4ab210f1c343059bbef"
+  "content_digest": "6975b795b1812a7dcd7ac93ee5a7f2764faff7c37f0ad7b27b4ab274efa496a4",
+  "source_digest": "84ced086002b0b398f9c32ab8829257e82ea3b2fe4622711b8ee017665d788e2"
 }

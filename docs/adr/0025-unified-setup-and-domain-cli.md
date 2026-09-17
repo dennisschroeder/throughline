@@ -8,7 +8,8 @@
 `WR-01`–`WR-11` built the daemon, its security boundary, its lifecycle seam, and three
 per-harness configuration adapters as independent pieces. `WR-12` unifies them: one `setup`
 command that provisions all of it atomically, `ready`/`show` converted from direct SQLite
-readers into daemon clients (closing the one remaining "domain CLI opens storage" gap), and
+readers into daemon clients (closing the one remaining "domain CLI opens storage" gap; REP-11
+later added `capability grant` as a deliberate exception, see below), and
 `uninstall` that reverses `setup` without ever touching workspace data.
 
 ## Decision
@@ -71,3 +72,13 @@ produces, not just `init`.
   CLI behavior changes; both are exercised by updated tests, and neither was a decision this
   work item was free to design around — they follow directly from `list_ready_items`'s
   required `actor_id` and the MCP envelope shape shipped in `WR-04`.
+
+## Amendment: capability grant opens storage (REP-11, 2026-09-15)
+
+`throughline capability grant` opens the workspace database directly. Granting a capability must
+not exist as an MCP tool, because the only principal available over MCP is the agent a claim
+constrains, so the daemon cannot carry it either. The command never migrates: it checks that the
+database has exactly the migrations its binary carries and otherwise tells the user to update,
+restart the daemon and open the workspace once through it. `--as` names a registered human on the
+trust of the local user; it is not authentication.
+

@@ -63,6 +63,22 @@ func (h *Handlers) ItemDetailHandler() http.Handler {
 // (already the loop snapshot's own read path) purely to label dependency neighbours with
 // their key/title and to compute the reverse "required_by" edge, which WorkItemContext does
 // not carry itself.
+// acceptanceCriterionDetailView is the drawer's view of one criterion. Split
+// out so the supersession link and reason it carries — AC1's "visible" — can
+// be tested without a full work item and service.
+func acceptanceCriterionDetailView(ac work.AcceptanceCriterion) acceptanceCriterionView {
+	return acceptanceCriterionView{
+		Text:                ac.Text,
+		Required:            ac.Required,
+		Status:              string(ac.Status),
+		ResolvedBy:          ac.ResolvedBy,
+		ResolvedAt:          formatOptionalTime(ac.ResolvedAt),
+		ResolutionRationale: ac.ResolutionRationale,
+		SupersedesID:        ac.SupersedesID,
+		SupersessionReason:  ac.SupersessionReason,
+	}
+}
+
 func buildItemDetail(ctx context.Context, service *app.Service, id string, now time.Time) (itemDetail, error) {
 	item, err := service.GetWorkItem(ctx, id)
 	if err != nil {
@@ -100,14 +116,7 @@ func buildItemDetail(ctx context.Context, service *app.Service, id string, now t
 	}
 
 	for _, ac := range item.AcceptanceCriteria {
-		detail.AcceptanceCriteria = append(detail.AcceptanceCriteria, acceptanceCriterionView{
-			Text:                ac.Text,
-			Required:            ac.Required,
-			Status:              string(ac.Status),
-			ResolvedBy:          ac.ResolvedBy,
-			ResolvedAt:          formatOptionalTime(ac.ResolvedAt),
-			ResolutionRationale: ac.ResolutionRationale,
-		})
+		detail.AcceptanceCriteria = append(detail.AcceptanceCriteria, acceptanceCriterionDetailView(ac))
 	}
 
 	for _, dep := range item.Dependencies {
@@ -141,6 +150,25 @@ func buildItemDetail(ctx context.Context, service *app.Service, id string, now t
 				ExecutionStatus: string(other.WorkItem.ExecutionStatus),
 			})
 		}
+	}
+
+	for _, evidence := range item.ReviewEvidence {
+		detail.ReviewEvidence = append(detail.ReviewEvidence, reviewEvidenceView{
+			CriterionRef:       evidence.Requirement.CriterionRef,
+			ValidatorKind:      evidence.Requirement.ValidatorKind,
+			State:              string(evidence.State),
+			ValidationRecordID: evidence.ValidationRecordID,
+			Degraded:           evidence.Degraded,
+		})
+	}
+
+	for _, question := range item.BlockingQuestions {
+		detail.BlockingQuestions = append(detail.BlockingQuestions, blockingQuestionView{
+			QuestionID:     question.ID,
+			Text:           question.Text,
+			Status:         string(question.Status),
+			AttentionState: string(question.AttentionState),
+		})
 	}
 
 	// Newest first: Progress arrives oldest-first from the store (append order), the drawer
@@ -251,12 +279,18 @@ type itemDetail struct {
 	AcceptanceCriteria []acceptanceCriterionView `json:"acceptance_criteria"`
 	DependsOn          []dependencyView          `json:"depends_on"`
 	RequiredBy         []dependencyView          `json:"required_by"`
-	Progress           []progressView            `json:"progress"`
-	ExpectedOutputs    []expectedOutputView      `json:"expected_outputs"`
-	OutputRevisions    []outputRevisionView      `json:"output_revisions"`
-	ExternalActions    []externalActionView      `json:"external_actions"`
-	Artifacts          []artifactView            `json:"artifacts"`
-	Claim              *claimView                `json:"claim,omitempty"`
+	// BlockingQuestions are kept apart from DependsOn: a question is resolved by
+	// answering or waiving it, not by finishing another item.
+	BlockingQuestions []blockingQuestionView `json:"blocking_questions"`
+	// ReviewEvidence shows each declared review as satisfied, missing, failed
+	// or stale, so the reason done is refused is visible where the item is read.
+	ReviewEvidence  []reviewEvidenceView `json:"review_evidence"`
+	Progress        []progressView       `json:"progress"`
+	ExpectedOutputs []expectedOutputView `json:"expected_outputs"`
+	OutputRevisions []outputRevisionView `json:"output_revisions"`
+	ExternalActions []externalActionView `json:"external_actions"`
+	Artifacts       []artifactView       `json:"artifacts"`
+	Claim           *claimView           `json:"claim,omitempty"`
 	// ReadOnly is true when this item has no open gate — the drawer then shows the
 	// read-only footer ("No open gate on this item...") instead of decision buttons.
 	ReadOnly bool `json:"read_only"`
@@ -285,6 +319,8 @@ type acceptanceCriterionView struct {
 	ResolvedBy          string `json:"resolved_by,omitempty"`
 	ResolvedAt          string `json:"resolved_at,omitempty"`
 	ResolutionRationale string `json:"resolution_rationale,omitempty"`
+	SupersedesID        string `json:"supersedes_id,omitempty"`
+	SupersessionReason  string `json:"supersession_reason,omitempty"`
 }
 
 type dependencyView struct {
@@ -295,6 +331,21 @@ type dependencyView struct {
 	Note            string `json:"note,omitempty"`
 	ExecutionStatus string `json:"execution_status,omitempty"`
 	Satisfied       *bool  `json:"satisfied,omitempty"`
+}
+
+type reviewEvidenceView struct {
+	CriterionRef       string `json:"criterion_ref"`
+	ValidatorKind      string `json:"validator_kind"`
+	State              string `json:"state"`
+	ValidationRecordID string `json:"validation_record_id,omitempty"`
+	Degraded           bool   `json:"degraded"`
+}
+
+type blockingQuestionView struct {
+	QuestionID     string `json:"question_id"`
+	Text           string `json:"text"`
+	Status         string `json:"status"`
+	AttentionState string `json:"attention_state"`
 }
 
 type progressView struct {

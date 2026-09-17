@@ -4,8 +4,19 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 	"testing"
 )
+
+func withUmask(t *testing.T, mask int) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not exercised on windows")
+	}
+	previous := syscall.Umask(mask)
+	t.Cleanup(func() { syscall.Umask(previous) })
+}
 
 func TestInitializeIsIdempotentAndFindsWorkspaceFromDescendant(t *testing.T) {
 	root := t.TempDir()
@@ -121,5 +132,56 @@ func TestFingerprintChangesWhenIdentifyingFieldsChange(t *testing.T) {
 	same := base
 	if base.Fingerprint() != same.Fingerprint() {
 		t.Fatal("fingerprint changed for an identical config")
+	}
+}
+
+func TestInitializeProtectsWorkspaceDirectoryAndConfigWithPermissiveUmask(t *testing.T) {
+	withUmask(t, 0)
+	root := t.TempDir()
+	workspace, _, err := Initialize(root, "", "ws-permissions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directoryInfo, err := os.Stat(workspace.Directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := directoryInfo.Mode().Perm(); got != 0o700 {
+		t.Fatalf("workspace directory mode = %o, want 0700", got)
+	}
+	configInfo, err := os.Stat(workspace.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := configInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("workspace config mode = %o, want 0600", got)
+	}
+
+	if err := os.Chmod(workspace.Directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(workspace.ConfigPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reopened, created, err := Initialize(root, "", "ignored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created || reopened.Config.WorkspaceID != "ws-permissions" {
+		t.Fatalf("reopened workspace = %#v, created=%v", reopened, created)
+	}
+	directoryInfo, err = os.Stat(workspace.Directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configInfo, err = os.Stat(workspace.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := directoryInfo.Mode().Perm(); got != 0o700 {
+		t.Fatalf("repaired workspace directory mode = %o, want 0700", got)
+	}
+	if got := configInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("repaired workspace config mode = %o, want 0600", got)
 	}
 }

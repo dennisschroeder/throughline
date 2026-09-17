@@ -75,11 +75,17 @@ func Initialize(root, databasePath, workspaceID string) (Workspace, bool, error)
 	}
 
 	directory := filepath.Join(root, DirectoryName)
-	if err := os.MkdirAll(directory, 0o755); err != nil {
+	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return Workspace{}, false, fmt.Errorf("create workspace directory: %w", err)
+	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		return Workspace{}, false, fmt.Errorf("set workspace directory permissions: %w", err)
 	}
 	configPath := filepath.Join(directory, ConfigFileName)
 	if _, err := os.Stat(configPath); err == nil {
+		if err := os.Chmod(configPath, 0o600); err != nil {
+			return Workspace{}, false, fmt.Errorf("set workspace config permissions: %w", err)
+		}
 		workspace, loadErr := Load(root)
 		if loadErr != nil {
 			return Workspace{}, false, loadErr
@@ -108,7 +114,7 @@ func Initialize(root, databasePath, workspaceID string) (Workspace, bool, error)
 	if err != nil {
 		return Workspace{}, false, fmt.Errorf("encode workspace config: %w", err)
 	}
-	if err := writeFileAtomically(configPath, encoded, 0o644, false); err != nil {
+	if err := writeFileAtomically(configPath, encoded, 0o600, false); err != nil {
 		return Workspace{}, false, err
 	}
 
@@ -144,7 +150,7 @@ func Fork(root, newWorkspaceID string) (Workspace, string, error) {
 	if err != nil {
 		return Workspace{}, "", fmt.Errorf("encode forked workspace config: %w", err)
 	}
-	if err := writeFileAtomically(existing.ConfigPath, encoded, 0o644, true); err != nil {
+	if err := writeFileAtomically(existing.ConfigPath, encoded, 0o600, true); err != nil {
 		return Workspace{}, "", err
 	}
 	workspace, err := Load(root)
@@ -196,6 +202,17 @@ func writeFileAtomically(path string, content []byte, mode os.FileMode, overwrit
 }
 
 func Find(start string) (Workspace, error) {
+	return find(start, Load)
+}
+
+// FindReadOnly resolves the nearest initialized workspace the same way Find does, but never
+// repairs directory or file permissions along the way. Callers that promise not to touch the
+// workspace at all — throughline doctor foremost — must use this instead of Find.
+func FindReadOnly(start string) (Workspace, error) {
+	return find(start, LoadReadOnly)
+}
+
+func find(start string, load func(string) (Workspace, error)) (Workspace, error) {
 	current, err := filepath.Abs(start)
 	if err != nil {
 		return Workspace{}, fmt.Errorf("resolve workspace search path: %w", err)
@@ -203,7 +220,7 @@ func Find(start string) (Workspace, error) {
 	current = filepath.Clean(current)
 	for {
 		if _, err := os.Stat(filepath.Join(current, DirectoryName, ConfigFileName)); err == nil {
-			return Load(current)
+			return load(current)
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return Workspace{}, fmt.Errorf("inspect workspace config: %w", err)
 		}
@@ -216,6 +233,17 @@ func Find(start string) (Workspace, error) {
 }
 
 func Load(root string) (Workspace, error) {
+	return load(root, true)
+}
+
+// LoadReadOnly loads a workspace's config.toml the same way Load does, but never chmods the
+// workspace directory or config file. Callers that promise not to touch the workspace at all —
+// throughline doctor foremost — must use this instead of Load.
+func LoadReadOnly(root string) (Workspace, error) {
+	return load(root, false)
+}
+
+func load(root string, repairPermissions bool) (Workspace, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return Workspace{}, fmt.Errorf("resolve workspace root: %w", err)
@@ -223,6 +251,14 @@ func Load(root string) (Workspace, error) {
 	root = filepath.Clean(root)
 	directory := filepath.Join(root, DirectoryName)
 	configPath := filepath.Join(directory, ConfigFileName)
+	if repairPermissions {
+		if err := os.Chmod(directory, 0o700); err != nil {
+			return Workspace{}, fmt.Errorf("set workspace directory permissions: %w", err)
+		}
+		if err := os.Chmod(configPath, 0o600); err != nil {
+			return Workspace{}, fmt.Errorf("set workspace config permissions: %w", err)
+		}
+	}
 	content, err := os.ReadFile(configPath)
 	if err != nil {
 		return Workspace{}, fmt.Errorf("read workspace config: %w", err)

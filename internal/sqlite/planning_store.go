@@ -24,17 +24,30 @@ SELECT EXISTS(
 }
 
 func (r *transactionRepository) UpdateObjective(ctx context.Context, objective work.Objective, expectedVersion int) error {
+	arguments := []any{objective.Title, objective.Description, objective.DesiredOutcome, objective.Phase, nullableString(string(objective.PriorPhase)),
+		objective.Priority, objective.Appetite.Value, objective.Appetite.Unit, objective.Appetite.Basis}
+	arguments = append(arguments, phaseTransitionColumns(objective.LastPhaseTransition)...)
+	arguments = append(arguments, nullableString(objective.UpdatedBy), objective.Version, formatTime(objective.UpdatedAt), objective.ID, expectedVersion)
 	result, err := r.transaction.ExecContext(ctx, `
 UPDATE objectives
-SET title = ?, description = ?, desired_outcome = ?, phase = ?, prior_phase = ?, updated_by = ?, version = ?, updated_at = ?
-WHERE id = ? AND version = ?`,
-		objective.Title, objective.Description, objective.DesiredOutcome, objective.Phase, nullableString(string(objective.PriorPhase)), nullableString(objective.UpdatedBy),
-		objective.Version, formatTime(objective.UpdatedAt), objective.ID, expectedVersion,
-	)
+SET title = ?, description = ?, desired_outcome = ?, phase = ?, prior_phase = ?, priority = ?,
+    appetite_value = ?, appetite_unit = ?, appetite_basis = ?,
+    phase_transition_from = ?, phase_transition_to = ?, phase_transition_reason = ?, phase_transition_by = ?, phase_transition_at = ?,
+    updated_by = ?, version = ?, updated_at = ?
+WHERE id = ? AND version = ?`, arguments...)
 	if err != nil {
 		return fmt.Errorf("update objective phase: %w", err)
 	}
 	return requireChanged(result)
+}
+
+// phaseTransitionColumns are the stored form of an objective's latest phase
+// transition; all five are NULL until the objective is first transitioned.
+func phaseTransitionColumns(transition *work.PhaseTransition) []any {
+	if transition == nil {
+		return []any{nil, nil, nil, nil, nil}
+	}
+	return []any{string(transition.From), string(transition.To), transition.Reason, transition.ActorID, formatTime(transition.At)}
 }
 
 func (r *transactionRepository) CreateContextRecord(ctx context.Context, record work.ContextRecord) error {
@@ -76,15 +89,29 @@ WHERE id = ? AND version = ?`,
 func (r *transactionRepository) CreateQuestion(ctx context.Context, question work.Question) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO questions
-  (id, objective_id, work_item_id, question, status, answer, requires_human_attention,
+  (id, objective_id, work_item_id, question, status, answer, attention_state,
    version, created_by, resolved_by, created_at, resolved_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		question.ID, question.ObjectiveID, nullableString(question.WorkItemID), question.Text,
-		question.Status, question.Answer, boolInt(question.RequiresHumanAttention), question.Version,
+		question.Status, question.Answer, question.AttentionState, question.Version,
 		question.CreatedBy, nullableString(question.ResolvedBy), formatTime(question.CreatedAt), nullableTime(question.ResolvedAt),
 	)
 	if err != nil {
 		return fmt.Errorf("insert question: %w", err)
+	}
+	for _, workItemID := range question.BlocksWorkItems {
+		if err := r.CreateQuestionBlock(ctx, question.ID, workItemID, question.CreatedBy, question.CreatedAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *transactionRepository) CreateQuestionBlock(ctx context.Context, questionID, workItemID, actorID string, createdAt time.Time) error {
+	if _, err := r.transaction.ExecContext(ctx, `
+INSERT INTO question_blocks (question_id, work_item_id, created_by, created_at) VALUES (?, ?, ?, ?)`,
+		questionID, workItemID, actorID, formatTime(createdAt)); err != nil {
+		return fmt.Errorf("insert question block: %w", err)
 	}
 	return nil
 }
@@ -97,9 +124,9 @@ func (r *transactionRepository) Question(ctx context.Context, id string) (work.Q
 func (r *transactionRepository) UpdateQuestion(ctx context.Context, question work.Question, expectedVersion int) error {
 	result, err := r.transaction.ExecContext(ctx, `
 UPDATE questions
-SET status = ?, answer = ?, version = ?, resolved_by = ?, resolved_at = ?
+SET question = ?, status = ?, answer = ?, attention_state = ?, version = ?, resolved_by = ?, resolved_at = ?
 WHERE id = ? AND version = ?`,
-		question.Status, question.Answer, question.Version, nullableString(question.ResolvedBy),
+		question.Text, question.Status, question.Answer, question.AttentionState, question.Version, nullableString(question.ResolvedBy),
 		nullableTime(question.ResolvedAt), question.ID, expectedVersion,
 	)
 	if err != nil {
@@ -116,12 +143,12 @@ func (r *transactionRepository) CreateDecision(ctx context.Context, decision wor
 	_, err = r.transaction.ExecContext(ctx, `
 INSERT INTO decisions
   (id, objective_id, work_item_id, title, decision, rationale, alternatives_json, status,
-   supersedes_id, decided_by, decided_at, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  supersedes_id, decided_by, decided_at, created_at, version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		decision.ID, decision.ObjectiveID, nullableString(decision.WorkItemID), decision.Title,
 		decision.Outcome, decision.Rationale, string(alternatives), decision.Status,
 		nullableString(decision.SupersedesID), decision.DecidedBy, formatTime(decision.DecidedAt),
-		formatTime(decision.CreatedAt),
+		formatTime(decision.CreatedAt), decision.Version,
 	)
 	if err != nil {
 		return fmt.Errorf("insert decision: %w", err)
@@ -136,8 +163,8 @@ func (r *transactionRepository) Decision(ctx context.Context, id string) (work.D
 
 func (r *transactionRepository) UpdateDecision(ctx context.Context, decision work.Decision) error {
 	result, err := r.transaction.ExecContext(ctx,
-		"UPDATE decisions SET status = ? WHERE id = ? AND status = ?",
-		decision.Status, decision.ID, work.DecisionAccepted,
+		"UPDATE decisions SET status = ?, version = ? WHERE id = ? AND status = ? AND version = ?",
+		decision.Status, decision.Version, decision.ID, work.DecisionAccepted, decision.Version-1,
 	)
 	if err != nil {
 		return fmt.Errorf("supersede decision: %w", err)
@@ -246,7 +273,7 @@ WHERE id = ? AND version = ?`, approval.Status, approval.Version, nullableString
 }
 
 func (r *transactionRepository) AddWorkItemCapability(ctx context.Context, workItemID, capability string) error {
-	if _, err := r.transaction.ExecContext(ctx, "INSERT OR IGNORE INTO capabilities(slug) VALUES (?)", capability); err != nil {
+	if _, err := r.transaction.ExecContext(ctx, "INSERT INTO capabilities(slug) VALUES (?) ON CONFLICT DO NOTHING", capability); err != nil {
 		return fmt.Errorf("insert capability: %w", err)
 	}
 	if _, err := r.transaction.ExecContext(ctx,
@@ -326,6 +353,30 @@ func requireChanged(result sql.Result) error {
 		return ports.ErrVersionConflict
 	}
 	return nil
+}
+
+// ListObjectives reads the objectives table itself. Everything that needed a
+// list of objectives used to derive one from the work items, which cannot see an
+// objective that has none: a freshly created objective was absent from the
+// board overview and unselectable in the dashboard until its first item existed.
+func (s *Store) ListObjectives(ctx context.Context) ([]work.Objective, error) {
+	rows, err := s.db.QueryContext(ctx, objectiveSelect+" ORDER BY key")
+	if err != nil {
+		return nil, fmt.Errorf("query objectives: %w", err)
+	}
+	defer rows.Close()
+	objectives := make([]work.Objective, 0)
+	for rows.Next() {
+		objective, err := scanObjective(rows)
+		if err != nil {
+			return nil, err
+		}
+		objectives = append(objectives, objective)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate objectives: %w", err)
+	}
+	return objectives, nil
 }
 
 func (s *Store) GetObjectiveContext(ctx context.Context, id string) (ports.ObjectiveContext, error) {
@@ -488,7 +539,7 @@ func (s *Store) listExpectedOutputs(ctx context.Context, reader sqlReader, workI
 	rows, err := reader.QueryContext(ctx, `
 SELECT
   e.id, e.work_item_id, e.name, e.output_profile_id, e.contract_json,
-  e.destination_hint, e.required, e.ordinal,
+  e.destination_hint, e.required, e.ordinal, e.version,
   p.id, p.name, p.version, p.state_version, p.description, p.lifecycle_state,
   p.structure_json, p.semantics_json, p.validation_json, p.built_in,
   p.supersedes_id, p.proposed_by, p.proposed_at, p.resolved_by, p.resolved_at,
@@ -520,7 +571,8 @@ func scanExpectedOutputDetail(row scanner) (output.ExpectedOutputDetail, error) 
 	if err := row.Scan(
 		&detail.ExpectedOutput.ID, &detail.ExpectedOutput.WorkItemID, &detail.ExpectedOutput.Name,
 		&detail.ExpectedOutput.OutputProfileID, &contract, &detail.ExpectedOutput.DestinationHint,
-		&required, &detail.ExpectedOutput.Ordinal, &detail.Profile.ID, &detail.Profile.Name,
+		&required, &detail.ExpectedOutput.Ordinal, &detail.ExpectedOutput.Version,
+		&detail.Profile.ID, &detail.Profile.Name,
 		&detail.Profile.Version, &detail.Profile.StateVersion, &detail.Profile.Description, &detail.Profile.LifecycleState,
 		&structure, &semantics, &validation, &builtIn, &supersedesID, &proposedBy,
 		&proposedAt, &resolvedBy, &resolvedAt, &detail.Profile.ResolutionReason, &profileCreatedAt,
@@ -551,6 +603,43 @@ func scanExpectedOutputDetail(row scanner) (output.ExpectedOutputDetail, error) 
 	}
 	detail.Profile.CreatedAt, err = parseTime(profileCreatedAt)
 	return detail, err
+}
+
+// ListQuestionsNeedingAttention returns unresolved questions flagged for a
+// person, so orientation sees them beside flagged work items.
+func (s *Store) ListQuestionsNeedingAttention(ctx context.Context) ([]work.Question, error) {
+	var result []work.Question
+	err := s.withinReadTransaction(ctx, func(reader sqlReader) error {
+		var err error
+		result, err = queryQuestions(ctx, reader, questionSelect+" WHERE attention_state <> 'none' AND status IN ('unsharp', 'open') ORDER BY created_at, id")
+		return err
+	})
+	return result, err
+}
+
+// listBlockingQuestions returns the unresolved questions holding a work item.
+func listBlockingQuestions(ctx context.Context, reader sqlReader, workItemID string) ([]work.Question, error) {
+	return queryQuestions(ctx, reader, questionSelect+`
+WHERE status IN ('unsharp', 'open')
+  AND id IN (SELECT question_id FROM question_blocks WHERE work_item_id = ?)
+ORDER BY created_at, id`, workItemID)
+}
+
+func queryQuestions(ctx context.Context, reader sqlReader, query string, arguments ...any) ([]work.Question, error) {
+	rows, err := reader.QueryContext(ctx, query, arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("query questions: %w", err)
+	}
+	defer rows.Close()
+	var result []work.Question
+	for rows.Next() {
+		question, err := scanQuestion(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, question)
+	}
+	return result, rows.Err()
 }
 
 func (s *Store) listQuestions(ctx context.Context, reader sqlReader, objectiveID string) ([]work.Question, error) {
@@ -610,13 +699,15 @@ SELECT id, objective_id, work_item_id, kind, title, body, status, confidence, so
 FROM context_records`
 
 const questionSelect = `
-SELECT id, objective_id, work_item_id, question, status, answer, requires_human_attention,
-       version, created_by, resolved_by, created_at, resolved_at
+SELECT id, objective_id, work_item_id, question, status, answer, attention_state,
+       version, created_by, resolved_by, created_at, resolved_at,
+       (SELECT json_group_array(work_item_id) FROM (
+          SELECT work_item_id FROM question_blocks WHERE question_id = questions.id ORDER BY rowid))
 FROM questions`
 
 const decisionSelect = `
 SELECT id, objective_id, work_item_id, title, decision, rationale, alternatives_json, status,
-       supersedes_id, decided_by, decided_at, created_at
+       supersedes_id, decided_by, decided_at, created_at, version
 FROM decisions`
 
 const approvalSelect = `
@@ -650,18 +741,22 @@ func scanContextRecord(row scanner) (work.ContextRecord, error) {
 func scanQuestion(row scanner) (work.Question, error) {
 	var question work.Question
 	var workItemID, resolvedBy, resolvedAt sql.NullString
-	var attention int
-	var createdAt string
+	var createdAt, blocks string
 	if err := row.Scan(
 		&question.ID, &question.ObjectiveID, &workItemID, &question.Text, &question.Status,
-		&question.Answer, &attention, &question.Version, &question.CreatedBy, &resolvedBy,
-		&createdAt, &resolvedAt,
+		&question.Answer, &question.AttentionState, &question.Version, &question.CreatedBy, &resolvedBy,
+		&createdAt, &resolvedAt, &blocks,
 	); err != nil {
 		return work.Question{}, err
 	}
 	question.WorkItemID = workItemID.String
-	question.RequiresHumanAttention = attention == 1
 	question.ResolvedBy = resolvedBy.String
+	if err := json.Unmarshal([]byte(blocks), &question.BlocksWorkItems); err != nil {
+		return work.Question{}, fmt.Errorf("decode question blocks: %w", err)
+	}
+	if len(question.BlocksWorkItems) == 0 {
+		question.BlocksWorkItems = nil
+	}
 	var err error
 	question.CreatedAt, err = parseTime(createdAt)
 	if err != nil {
@@ -680,7 +775,7 @@ func scanDecision(row scanner) (work.Decision, error) {
 	if err := row.Scan(
 		&decision.ID, &decision.ObjectiveID, &workItemID, &decision.Title, &decision.Outcome,
 		&decision.Rationale, &alternatives, &decision.Status, &supersedesID, &decision.DecidedBy,
-		&decidedAt, &createdAt,
+		&decidedAt, &createdAt, &decision.Version,
 	); err != nil {
 		return work.Decision{}, err
 	}

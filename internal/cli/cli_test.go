@@ -8,7 +8,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -130,6 +132,40 @@ func TestInitCanRunTwice(t *testing.T) {
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected initialized file %q: %v", path, err)
+		}
+	}
+}
+
+func TestInitProtectsWorkspaceFilesWithPermissiveUmask(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not exercised on windows")
+	}
+	previous := syscall.Umask(0)
+	t.Cleanup(func() { syscall.Umask(previous) })
+	withTestRegistry(t)
+	root := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	if code := Run(context.Background(), []string{"init", root}, &stdout, &stderr); code != 0 {
+		t.Fatalf("init exited %d: %s", code, stderr.String())
+	}
+	workspace, err := config.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []struct {
+		path string
+		mode os.FileMode
+	}{
+		{workspace.Directory, 0o700},
+		{workspace.ConfigPath, 0o600},
+		{workspace.DatabasePath, 0o600},
+	} {
+		info, err := os.Stat(entry.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != entry.mode {
+			t.Fatalf("%s mode = %o, want %o", entry.path, got, entry.mode)
 		}
 	}
 }

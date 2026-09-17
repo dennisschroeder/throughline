@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS workspaces (
 CREATE UNIQUE INDEX IF NOT EXISTS workspaces_active_canonical_root
   ON workspaces(canonical_root)
   WHERE lifecycle_state = 'active';
+CREATE INDEX IF NOT EXISTS workspaces_canonical_root
+  ON workspaces(canonical_root);
 `
 
 // Registry is the per-user SQLite-backed exclusive routing allowlist. Every method opens
@@ -226,6 +228,20 @@ func (r *Registry) Lookup(ctx context.Context, workspaceID string) (WorkspaceTar
 	return target, nil
 }
 
+// LookupByCanonicalRoot resolves the entry, active or pending, whose canonical_root
+// exactly equals canonicalRoot. Unlike Lookup it does not translate a pending entry into
+// ErrWorkspacePending or check root availability: this is the single point query a
+// path-based resolution walks upward with one directory at a time, and the caller needs to
+// tell "nothing registered at this level, keep walking" apart from "found, but not yet
+// active" rather than have both collapse to the same error.
+func (r *Registry) LookupByCanonicalRoot(ctx context.Context, canonicalRoot string) (WorkspaceTarget, error) {
+	row := r.db.QueryRowContext(ctx, `
+SELECT workspace_id, provider_kind, provider_locator, canonical_root, config_fingerprint,
+       lifecycle_state, generation, fork_of_workspace_id, created_at, updated_at
+FROM workspaces WHERE canonical_root = ?`, canonicalRoot)
+	return scanTarget(row)
+}
+
 // CheckFingerprint compares a freshly computed config fingerprint against the registry's
 // record and returns ErrWorkspaceRegistryConflict on disagreement, without repairing it.
 func (r *Registry) CheckFingerprint(ctx context.Context, workspaceID, liveFingerprint string) error {
@@ -292,6 +308,12 @@ func queryTarget(ctx context.Context, q queryRower, workspaceID string) (Workspa
 SELECT workspace_id, provider_kind, provider_locator, canonical_root, config_fingerprint,
        lifecycle_state, generation, fork_of_workspace_id, created_at, updated_at
 FROM workspaces WHERE workspace_id = ?`, workspaceID)
+	return scanTarget(row)
+}
+
+// scanTarget is the row-scanning logic queryTarget and LookupByCanonicalRoot share; only
+// the WHERE clause selecting the row differs between them.
+func scanTarget(row *sql.Row) (WorkspaceTarget, error) {
 	var target WorkspaceTarget
 	var providerKind, lifecycleState, createdAt, updatedAt string
 	err := row.Scan(&target.WorkspaceID, &providerKind, &target.ProviderLocator, &target.CanonicalRoot,

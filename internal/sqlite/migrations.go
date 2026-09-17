@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
@@ -43,7 +44,70 @@ func (d *Database) Migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	return d.installEffectCollector(ctx)
+}
+
+// installEffectCollector arms the mutation write-set collector in its own
+// committed transaction. Every write transaction verifies the collector anyway
+// and rebuilds it when it is missing, so this is not what makes collection
+// correct — it is what keeps it cheap. The collector lives in the connection's
+// TEMP schema and is therefore transactional: a write transaction that installs
+// it and then rolls back destroys it again, so a run of conflicting writes would
+// otherwise pay the full install on every attempt.
+func (d *Database) installEffectCollector(ctx context.Context) error {
+	transaction, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin effect collector transaction: %w", err)
+	}
+	defer transaction.Rollback()
+	if err := (&transactionRepository{transaction: transaction}).beginEffectCollection(ctx); err != nil {
+		return err
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit effect collector transaction: %w", err)
+	}
 	return nil
+}
+
+// ErrSchemaIncompatible reports a workspace database whose applied migrations
+// differ from the ones this binary carries.
+var ErrSchemaIncompatible = errors.New("workspace database schema does not match this throughline binary")
+
+// CheckSchemaCurrent verifies, without migrating anything, that the database
+// has exactly the migrations this binary carries. Commands that write a
+// workspace outside the daemon use it: the daemon migrates, so a mismatch
+// means one of the two binaries is out of date and the fix is to update and
+// restart, never to migrate from the side.
+func (d *Database) CheckSchemaCurrent(ctx context.Context) error {
+	migrations, err := loadMigrations()
+	if err != nil {
+		return err
+	}
+	var tables int
+	if err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").Scan(&tables); err != nil {
+		return fmt.Errorf("inspect schema: %w", err)
+	}
+	applied := map[int]string{}
+	if tables == 1 {
+		if applied, err = d.appliedMigrations(ctx); err != nil {
+			return err
+		}
+	}
+	latest := 0
+	for version := range applied {
+		latest = max(latest, version)
+	}
+	carried := migrations[len(migrations)-1].version
+	if err := validateMigrationHistory(migrations, applied); err != nil {
+		return fmt.Errorf("%w: %v; this binary and the database disagree about applied migrations, so do not retry until both come from the same throughline release", ErrSchemaIncompatible, err)
+	}
+	if len(applied) == len(migrations) {
+		return nil
+	}
+	// The daemon migrates a workspace when a request first opens it after a
+	// restart, not when it starts, so the remediation has to include that
+	// first request or the retry fails the same way.
+	return fmt.Errorf("%w: database is at migration %d, this binary carries %d; the workspace has not been migrated by an updated daemon: update throughline, run throughline daemon restart, open the workspace once through the daemon (for example throughline show <item-id> in it), then retry", ErrSchemaIncompatible, latest, carried)
 }
 
 func (d *Database) ensureMigrationTable(ctx context.Context) error {

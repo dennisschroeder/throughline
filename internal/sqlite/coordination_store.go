@@ -16,8 +16,8 @@ import (
 
 func (r *transactionRepository) CreateActor(ctx context.Context, actor work.Actor) error {
 	_, err := r.transaction.ExecContext(ctx, `
-INSERT INTO actors (id, kind, display_name, created_at) VALUES (?, ?, ?, ?)`,
-		actor.ID, actor.Kind, actor.DisplayName, formatTime(actor.CreatedAt))
+INSERT INTO actors (id, kind, display_name, created_at, version) VALUES (?, ?, ?, ?, ?)`,
+		actor.ID, actor.Kind, actor.DisplayName, formatTime(actor.CreatedAt), actor.Version)
 	if err != nil {
 		return fmt.Errorf("insert actor: %w", err)
 	}
@@ -26,13 +26,13 @@ INSERT INTO actors (id, kind, display_name, created_at) VALUES (?, ?, ?, ?)`,
 
 func (r *transactionRepository) Actor(ctx context.Context, id string) (work.Actor, error) {
 	actor, err := scanActor(r.transaction.QueryRowContext(ctx, `
-SELECT id, kind, display_name, created_at FROM actors WHERE id = ?`, id))
+SELECT id, kind, display_name, created_at, version FROM actors WHERE id = ?`, id))
 	return actor, mapNotFound(err)
 }
 
 func (r *transactionRepository) CreateCapability(ctx context.Context, capability work.Capability) error {
 	_, err := r.transaction.ExecContext(ctx,
-		"INSERT OR IGNORE INTO capabilities (slug, description) VALUES (?, ?)", capability.Slug, capability.Description)
+		"INSERT INTO capabilities (slug, description, version) VALUES (?, ?, ?) ON CONFLICT DO NOTHING", capability.Slug, capability.Description, capability.Version)
 	if err != nil {
 		return fmt.Errorf("insert capability: %w", err)
 	}
@@ -41,7 +41,7 @@ func (r *transactionRepository) CreateCapability(ctx context.Context, capability
 
 func (r *transactionRepository) AssignActorCapability(ctx context.Context, actorID, capability string) error {
 	_, err := r.transaction.ExecContext(ctx,
-		"INSERT OR IGNORE INTO actor_capabilities (actor_id, capability_slug) VALUES (?, ?)", actorID, capability)
+		"INSERT INTO actor_capabilities (actor_id, capability_slug, version) VALUES (?, ?, 1) ON CONFLICT DO NOTHING", actorID, capability)
 	if err != nil {
 		return fmt.Errorf("assign actor capability: %w", err)
 	}
@@ -95,18 +95,18 @@ SELECT EXISTS(
 }
 
 func (r *transactionRepository) HasOpenBlocker(ctx context.Context, workItemID string) (bool, error) {
-	return queryBoolean(ctx, r.transaction, `SELECT EXISTS(SELECT 1 FROM questions WHERE work_item_id = ? AND status = 'open') OR EXISTS(SELECT 1 FROM manual_blockers WHERE work_item_id = ? AND status = 'active')`, workItemID, workItemID)
+	return queryBoolean(ctx, r.transaction, `SELECT EXISTS(SELECT 1 FROM question_blocks link JOIN questions question ON question.id = link.question_id WHERE link.work_item_id = ? AND question.status IN ('unsharp', 'open')) OR EXISTS(SELECT 1 FROM manual_blockers WHERE work_item_id = ? AND status = 'active')`, workItemID, workItemID)
 }
 
 func (r *transactionRepository) CreateManualBlocker(ctx context.Context, blocker work.ManualBlocker) error {
-	_, err := r.transaction.ExecContext(ctx, `INSERT INTO manual_blockers (id, work_item_id, reason, status, created_by, created_at, resolved_by, resolved_at, resolution) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, blocker.ID, blocker.WorkItemID, blocker.Reason, blocker.Status, blocker.CreatedBy, formatTime(blocker.CreatedAt), nullableString(blocker.ResolvedBy), nullableTime(blocker.ResolvedAt), blocker.Resolution)
+	_, err := r.transaction.ExecContext(ctx, `INSERT INTO manual_blockers (id, work_item_id, reason, status, created_by, created_at, resolved_by, resolved_at, resolution, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, blocker.ID, blocker.WorkItemID, blocker.Reason, blocker.Status, blocker.CreatedBy, formatTime(blocker.CreatedAt), nullableString(blocker.ResolvedBy), nullableTime(blocker.ResolvedAt), blocker.Resolution, blocker.Version)
 	return err
 }
 
 func (r *transactionRepository) ManualBlocker(ctx context.Context, id string) (work.ManualBlocker, error) {
 	var blocker work.ManualBlocker
 	var createdAt, resolvedAt string
-	err := r.transaction.QueryRowContext(ctx, `SELECT id, work_item_id, reason, status, created_by, created_at, COALESCE(resolved_by, ''), COALESCE(resolved_at, ''), resolution FROM manual_blockers WHERE id = ?`, id).Scan(&blocker.ID, &blocker.WorkItemID, &blocker.Reason, &blocker.Status, &blocker.CreatedBy, &createdAt, &blocker.ResolvedBy, &resolvedAt, &blocker.Resolution)
+	err := r.transaction.QueryRowContext(ctx, `SELECT id, work_item_id, reason, status, created_by, created_at, COALESCE(resolved_by, ''), COALESCE(resolved_at, ''), resolution, version FROM manual_blockers WHERE id = ?`, id).Scan(&blocker.ID, &blocker.WorkItemID, &blocker.Reason, &blocker.Status, &blocker.CreatedBy, &createdAt, &blocker.ResolvedBy, &resolvedAt, &blocker.Resolution, &blocker.Version)
 	if err != nil {
 		return work.ManualBlocker{}, mapNotFound(err)
 	}
@@ -124,7 +124,7 @@ func (r *transactionRepository) ManualBlocker(ctx context.Context, id string) (w
 }
 
 func (r *transactionRepository) UpdateManualBlocker(ctx context.Context, blocker work.ManualBlocker) error {
-	result, err := r.transaction.ExecContext(ctx, `UPDATE manual_blockers SET status = ?, resolved_by = ?, resolved_at = ?, resolution = ? WHERE id = ? AND status = 'active'`, blocker.Status, blocker.ResolvedBy, formatTime(blocker.ResolvedAt), blocker.Resolution, blocker.ID)
+	result, err := r.transaction.ExecContext(ctx, `UPDATE manual_blockers SET status = ?, resolved_by = ?, resolved_at = ?, resolution = ?, version = ? WHERE id = ? AND status = 'active' AND version = ?`, blocker.Status, blocker.ResolvedBy, formatTime(blocker.ResolvedAt), blocker.Resolution, blocker.Version, blocker.ID, blocker.Version-1)
 	if err != nil {
 		return err
 	}
@@ -143,10 +143,10 @@ SELECT EXISTS(
 func (r *transactionRepository) CreateWorkItemExecutionApproval(ctx context.Context, approval work.ExecutionApproval) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO approvals
-  (id, work_item_id, approved_for_actor_id, expires_at, request, status, requested_by, requested_at, resolved_by, resolved_at, rationale)
-VALUES (?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?)`, approval.ID, approval.WorkItemID, approval.ApprovedForActorID,
+  (id, work_item_id, approved_for_actor_id, expires_at, request, status, requested_by, requested_at, resolved_by, resolved_at, rationale, version)
+VALUES (?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?)`, approval.ID, approval.WorkItemID, approval.ApprovedForActorID,
 		nullableTimePtr(approval.ExpiresAt), approval.Request, approval.RequestedBy, formatTime(approval.RequestedAt),
-		approval.ResolvedBy, formatTime(approval.ResolvedAt), approval.Rationale)
+		approval.ResolvedBy, formatTime(approval.ResolvedAt), approval.Rationale, approval.Version)
 	if err != nil {
 		return fmt.Errorf("insert work item execution approval: %w", err)
 	}
@@ -155,7 +155,7 @@ VALUES (?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?)`, approval.ID, approval.WorkIt
 
 func (r *transactionRepository) ActiveClaim(ctx context.Context, workItemID string, now time.Time) (*work.Claim, error) {
 	claim, err := scanClaim(r.transaction.QueryRowContext(ctx, `
-SELECT id, work_item_id, actor_id, acquired_at, expires_at, released_at, release_reason
+SELECT id, work_item_id, actor_id, acquired_at, expires_at, released_at, release_reason, version
 FROM claims
 WHERE work_item_id = ? AND released_at IS NULL AND expires_at > ?
 ORDER BY acquired_at DESC LIMIT 1`, workItemID, formatTime(now)))
@@ -170,7 +170,7 @@ ORDER BY acquired_at DESC LIMIT 1`, workItemID, formatTime(now)))
 
 func (r *transactionRepository) ExpireClaims(ctx context.Context, workItemID string, now time.Time) ([]work.Claim, error) {
 	rows, err := r.transaction.QueryContext(ctx, `
-SELECT id, work_item_id, actor_id, acquired_at, expires_at, released_at, release_reason
+SELECT id, work_item_id, actor_id, acquired_at, expires_at, released_at, release_reason, version
 FROM claims WHERE work_item_id = ? AND released_at IS NULL AND expires_at <= ?`, workItemID, formatTime(now))
 	if err != nil {
 		return nil, fmt.Errorf("query expired claims: %w", err)
@@ -185,8 +185,8 @@ FROM claims WHERE work_item_id = ? AND released_at IS NULL AND expires_at <= ?`,
 		claim.ReleasedAt = now.UTC()
 		claim.ReleaseReason = "lease_expired"
 		result, err := r.transaction.ExecContext(ctx, `
-UPDATE claims SET released_at = ?, release_reason = ? WHERE id = ? AND released_at IS NULL`,
-			formatTime(claim.ReleasedAt), claim.ReleaseReason, claim.ID)
+UPDATE claims SET released_at = ?, release_reason = ?, version = ? WHERE id = ? AND released_at IS NULL AND version = ?`,
+			formatTime(claim.ReleasedAt), claim.ReleaseReason, claim.Version+1, claim.ID, claim.Version)
 		if err != nil {
 			return nil, fmt.Errorf("expire claim: %w", err)
 		}
@@ -203,9 +203,9 @@ UPDATE claims SET released_at = ?, release_reason = ? WHERE id = ? AND released_
 
 func (r *transactionRepository) CreateClaim(ctx context.Context, claim work.Claim) error {
 	_, err := r.transaction.ExecContext(ctx, `
-INSERT INTO claims (id, work_item_id, actor_id, acquired_at, expires_at, released_at, release_reason)
-VALUES (?, ?, ?, ?, ?, ?, ?)`, claim.ID, claim.WorkItemID, claim.ActorID, formatTime(claim.AcquiredAt),
-		formatTime(claim.ExpiresAt), nullableTime(claim.ReleasedAt), claim.ReleaseReason)
+INSERT INTO claims (id, work_item_id, actor_id, acquired_at, expires_at, released_at, release_reason, version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, claim.ID, claim.WorkItemID, claim.ActorID, formatTime(claim.AcquiredAt),
+		formatTime(claim.ExpiresAt), nullableTime(claim.ReleasedAt), claim.ReleaseReason, claim.Version)
 	if err != nil {
 		if strings.Contains(err.Error(), "one_unreleased_claim_per_item") || strings.Contains(err.Error(), "UNIQUE constraint failed: claims.work_item_id") {
 			return ports.ErrClaimConflict
@@ -217,16 +217,16 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`, claim.ID, claim.WorkItemID, claim.ActorID, format
 
 func (r *transactionRepository) Claim(ctx context.Context, id string) (work.Claim, error) {
 	claim, err := scanClaim(r.transaction.QueryRowContext(ctx, `
-SELECT id, work_item_id, actor_id, acquired_at, expires_at, released_at, release_reason
+SELECT id, work_item_id, actor_id, acquired_at, expires_at, released_at, release_reason, version
 FROM claims WHERE id = ?`, id))
 	return claim, mapNotFound(err)
 }
 
 func (r *transactionRepository) RenewClaim(ctx context.Context, claim work.Claim, now time.Time) error {
 	result, err := r.transaction.ExecContext(ctx, `
-UPDATE claims SET expires_at = ?
-WHERE id = ? AND actor_id = ? AND released_at IS NULL AND expires_at > ?`,
-		formatTime(claim.ExpiresAt), claim.ID, claim.ActorID, formatTime(now))
+UPDATE claims SET expires_at = ?, version = ?
+WHERE id = ? AND actor_id = ? AND released_at IS NULL AND expires_at > ? AND version = ?`,
+		formatTime(claim.ExpiresAt), claim.Version, claim.ID, claim.ActorID, formatTime(now), claim.Version-1)
 	if err != nil {
 		return fmt.Errorf("renew claim: %w", err)
 	}
@@ -242,9 +242,9 @@ WHERE id = ? AND actor_id = ? AND released_at IS NULL AND expires_at > ?`,
 
 func (r *transactionRepository) ReleaseClaim(ctx context.Context, claim work.Claim) error {
 	result, err := r.transaction.ExecContext(ctx, `
-UPDATE claims SET released_at = ?, release_reason = ?
-WHERE id = ? AND actor_id = ? AND released_at IS NULL`,
-		formatTime(claim.ReleasedAt), claim.ReleaseReason, claim.ID, claim.ActorID)
+UPDATE claims SET released_at = ?, release_reason = ?, version = ?
+WHERE id = ? AND actor_id = ? AND released_at IS NULL AND version = ?`,
+		formatTime(claim.ReleasedAt), claim.ReleaseReason, claim.Version, claim.ID, claim.ActorID, claim.Version-1)
 	if err != nil {
 		return fmt.Errorf("release claim: %w", err)
 	}
@@ -279,9 +279,9 @@ func (r *transactionRepository) CreateProgressEntry(ctx context.Context, entry w
 		}
 	}
 	_, err = r.transaction.ExecContext(ctx, `
-INSERT INTO progress_entries (id, work_item_id, actor_id, summary, completed_json, remaining_json, discovered_json, blocker_json, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, entry.ID, entry.WorkItemID, entry.ActorID, entry.Summary,
-		string(completed), string(remaining), string(discovered), string(blocker), formatTime(entry.CreatedAt))
+INSERT INTO progress_entries (id, work_item_id, actor_id, summary, completed_json, remaining_json, discovered_json, blocker_json, created_at, version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, entry.ID, entry.WorkItemID, entry.ActorID, entry.Summary,
+		string(completed), string(remaining), string(discovered), string(blocker), formatTime(entry.CreatedAt), entry.Version)
 	if err != nil {
 		return fmt.Errorf("insert progress entry: %w", err)
 	}
@@ -311,7 +311,7 @@ func listWorkItemArtifacts(ctx context.Context, reader sqlReader, workItemID str
 
 func listClaims(ctx context.Context, reader sqlReader, workItemID string) ([]work.Claim, error) {
 	rows, err := reader.QueryContext(ctx, `
-SELECT id, work_item_id, actor_id, acquired_at, expires_at, released_at, release_reason
+SELECT id, work_item_id, actor_id, acquired_at, expires_at, released_at, release_reason, version
 FROM claims WHERE work_item_id = ? ORDER BY acquired_at, id`, workItemID)
 	if err != nil {
 		return nil, fmt.Errorf("query claims: %w", err)
@@ -330,7 +330,7 @@ FROM claims WHERE work_item_id = ? ORDER BY acquired_at, id`, workItemID)
 
 func listProgressEntries(ctx context.Context, reader sqlReader, workItemID string) ([]work.ProgressEntry, error) {
 	rows, err := reader.QueryContext(ctx, `
-SELECT id, work_item_id, actor_id, summary, completed_json, remaining_json, discovered_json, blocker_json, created_at
+SELECT id, work_item_id, actor_id, summary, completed_json, remaining_json, discovered_json, blocker_json, created_at, version
 FROM progress_entries WHERE work_item_id = ? ORDER BY created_at, id`, workItemID)
 	if err != nil {
 		return nil, fmt.Errorf("query progress entries: %w", err)
@@ -378,7 +378,7 @@ func (s *Store) IdempotencyRecord(ctx context.Context, actorID, key string) (por
 func scanActor(row scanner) (work.Actor, error) {
 	var actor work.Actor
 	var createdAt string
-	if err := row.Scan(&actor.ID, &actor.Kind, &actor.DisplayName, &createdAt); err != nil {
+	if err := row.Scan(&actor.ID, &actor.Kind, &actor.DisplayName, &createdAt, &actor.Version); err != nil {
 		return work.Actor{}, err
 	}
 	var err error
@@ -390,7 +390,7 @@ func scanClaim(row scanner) (work.Claim, error) {
 	var claim work.Claim
 	var acquiredAt, expiresAt string
 	var releasedAt sql.NullString
-	if err := row.Scan(&claim.ID, &claim.WorkItemID, &claim.ActorID, &acquiredAt, &expiresAt, &releasedAt, &claim.ReleaseReason); err != nil {
+	if err := row.Scan(&claim.ID, &claim.WorkItemID, &claim.ActorID, &acquiredAt, &expiresAt, &releasedAt, &claim.ReleaseReason, &claim.Version); err != nil {
 		return work.Claim{}, err
 	}
 	var err error
@@ -412,7 +412,7 @@ func scanProgressEntry(row scanner) (work.ProgressEntry, error) {
 	var entry work.ProgressEntry
 	var completed, remaining, discovered, blocker string
 	var createdAt string
-	if err := row.Scan(&entry.ID, &entry.WorkItemID, &entry.ActorID, &entry.Summary, &completed, &remaining, &discovered, &blocker, &createdAt); err != nil {
+	if err := row.Scan(&entry.ID, &entry.WorkItemID, &entry.ActorID, &entry.Summary, &completed, &remaining, &discovered, &blocker, &createdAt, &entry.Version); err != nil {
 		return work.ProgressEntry{}, err
 	}
 	if err := json.Unmarshal([]byte(completed), &entry.Completed); err != nil {

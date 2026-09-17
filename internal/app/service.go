@@ -34,9 +34,19 @@ type CreateObjectiveCommand struct {
 	Description    string
 	DesiredOutcome string
 	Phase          work.ObjectivePhase
+	Priority       work.Priority
+	Appetite       work.Measure
 }
 
-func (s *Service) CreateObjective(ctx context.Context, command CreateObjectiveCommand) (work.Objective, error) {
+func (s *Service) createObjectiveMutation(ctx context.Context, command CreateObjectiveCommand) (work.Objective, error) {
+	// Defaulting happens before the request is hashed anywhere, not after: a
+	// default applied only between the replay lookup and the executed write
+	// would hash the same logical request two different ways, and a retry
+	// with the very key+fields that succeeded the first time would come back
+	// idempotency_key_reused_with_different_request.
+	if command.Priority == "" {
+		command.Priority = work.PriorityMedium
+	}
 	if replay, found, err := replayIdempotently[work.Objective](ctx, s, command.ActorID, command.IdempotencyKey, "create_objective", command); err != nil {
 		return work.Objective{}, err
 	} else if found {
@@ -52,8 +62,12 @@ func (s *Service) CreateObjective(ctx context.Context, command CreateObjectiveCo
 	if err != nil {
 		return work.Objective{}, fmt.Errorf("generate objective id: %w", err)
 	}
-	objective, err := work.NewObjective(id, command.Key, command.Title, command.Description, command.DesiredOutcome, command.Phase, s.clock.Now())
+	objective, err := work.NewObjective(id, command.Key, command.Title, command.Description, command.DesiredOutcome, command.Phase, command.Priority, s.clock.Now())
 	if err != nil {
+		return work.Objective{}, err
+	}
+	objective.Appetite = command.Appetite
+	if err := objective.Validate(); err != nil {
 		return work.Objective{}, err
 	}
 	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
@@ -61,7 +75,7 @@ func (s *Service) CreateObjective(ctx context.Context, command CreateObjectiveCo
 			if err := repository.CreateObjective(ctx, objective); err != nil {
 				return work.Objective{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "objective", EntityID: objective.ID, ActorID: command.ActorID, EventType: "objective.created", Summary: fmt.Sprintf("Objective %s created", objective.Key)}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "objective", EntityID: objective.ID, ObjectiveID: objective.ID, ActorID: command.ActorID, EventType: "objective.created", Summary: fmt.Sprintf("Objective %s created", objective.Key)}); err != nil {
 				return work.Objective{}, err
 			}
 			return objective, nil
@@ -93,9 +107,11 @@ type PatchObjectiveCommand struct {
 	Title           *string
 	Description     *string
 	DesiredOutcome  *string
+	Priority        *work.Priority
+	Appetite        *work.Measure
 }
 
-func (s *Service) PatchObjective(ctx context.Context, command PatchObjectiveCommand) (work.Objective, error) {
+func (s *Service) patchObjectiveMutation(ctx context.Context, command PatchObjectiveCommand) (work.Objective, error) {
 	var patched work.Objective
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		result, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "patch_objective", command, func() (work.Objective, error) {
@@ -115,6 +131,12 @@ func (s *Service) PatchObjective(ctx context.Context, command PatchObjectiveComm
 			if command.DesiredOutcome != nil {
 				objective.DesiredOutcome = strings.TrimSpace(*command.DesiredOutcome)
 			}
+			if command.Priority != nil {
+				objective.Priority = *command.Priority
+			}
+			if command.Appetite != nil {
+				objective.Appetite = *command.Appetite
+			}
 			if err := objective.Validate(); err != nil {
 				return work.Objective{}, err
 			}
@@ -124,7 +146,7 @@ func (s *Service) PatchObjective(ctx context.Context, command PatchObjectiveComm
 			if err := repository.UpdateObjective(ctx, objective, command.ExpectedVersion); err != nil {
 				return work.Objective{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "objective", EntityID: objective.ID, ActorID: command.ActorID, EventType: "objective.patched", Summary: "Objective details updated"}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "objective", EntityID: objective.ID, ObjectiveID: objective.ID, ActorID: command.ActorID, EventType: "objective.patched", Summary: "Objective details updated"}); err != nil {
 				return work.Objective{}, err
 			}
 			return objective, nil
@@ -139,20 +161,41 @@ func (s *Service) PatchObjective(ctx context.Context, command PatchObjectiveComm
 }
 
 type PatchWorkItemCommand struct {
-	WorkItemID                     string
-	ActorID                        string
-	IdempotencyKey                 string
-	ExpectedVersion                int
-	Title                          *string
-	Description                    *string
-	ParentID                       *string
-	Priority                       *work.Priority
-	EstimatedScope                 *work.EstimatedScope
-	ExecutionPolicy                *work.ExecutionPolicy
-	AttentionState                 *work.AttentionState
-	RequiredCapabilities           *[]string
+	WorkItemID           string
+	ActorID              string
+	IdempotencyKey       string
+	ExpectedVersion      int
+	Title                *string
+	Description          *string
+	ParentID             *string
+	Priority             *work.Priority
+	EstimatedScope       *work.EstimatedScope
+	Measure              *work.Measure
+	ExecutionPolicy      *work.ExecutionPolicy
+	AttentionState       *work.AttentionState
+	RequiredCapabilities *[]string
+	// ReviewRequirements replaces the reviews the item declares; nil leaves
+	// them unchanged and an empty list removes them.
+	ReviewRequirements             *[]work.ReviewRequirement
 	AcceptanceCriterionResolutions []PatchAcceptanceCriterionResolution
-	ExpectedOutputsToAdd           []ProposedExpectedOutput
+	// AcceptanceCriteriaToAdd appends conditions to an item that already exists.
+	// A criterion that names SupersedesID replaces one instead, which is the only
+	// way to correct a wrong condition: waiving it would record the condition as
+	// excused rather than as mistaken, and leaving it would block completion for
+	// a reason nobody stands behind.
+	AcceptanceCriteriaToAdd []PatchAcceptanceCriterionAddition
+	ExpectedOutputsToAdd    []ProposedExpectedOutput
+}
+
+type PatchAcceptanceCriterionAddition struct {
+	Text     string
+	Required bool
+	Ordinal  int
+	// SupersedesID, when set, names the criterion this one replaces, and
+	// SupersessionReason says why. A replacement may reuse its predecessor's
+	// ordinal: only criteria that still count are unique on it.
+	SupersedesID       string
+	SupersessionReason string
 }
 
 type PatchAcceptanceCriterionResolution struct {
@@ -161,7 +204,7 @@ type PatchAcceptanceCriterionResolution struct {
 	Rationale   string
 }
 
-func (s *Service) PatchWorkItem(ctx context.Context, command PatchWorkItemCommand) (work.WorkItem, error) {
+func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkItemCommand) (work.WorkItem, error) {
 	var patched work.WorkItem
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		result, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "patch_work_item", command, func() (work.WorkItem, error) {
@@ -216,6 +259,10 @@ func (s *Service) PatchWorkItem(ctx context.Context, command PatchWorkItemComman
 				item.EstimatedScope = *command.EstimatedScope
 				changes = append(changes, "estimated scope")
 			}
+			if command.Measure != nil {
+				item.Measure = *command.Measure
+				changes = append(changes, "measure")
+			}
 			if command.ExecutionPolicy != nil {
 				item.ExecutionPolicy = *command.ExecutionPolicy
 				changes = append(changes, "execution policy")
@@ -233,6 +280,22 @@ func (s *Service) PatchWorkItem(ctx context.Context, command PatchWorkItemComman
 					return work.WorkItem{}, err
 				}
 				changes = append(changes, "required capabilities")
+			}
+			if command.ReviewRequirements != nil {
+				requirements, err := normalizeReviewRequirements(*command.ReviewRequirements)
+				if err != nil {
+					return work.WorkItem{}, err
+				}
+				flag, err := reviewRequirementChangeNeedsAttention(ctx, repository, item, requirements)
+				if err != nil {
+					return work.WorkItem{}, err
+				}
+				item.ReviewRequirements = requirements
+				changes = append(changes, "review requirements")
+				if flag && command.AttentionState == nil && item.AttentionState == work.AttentionNone {
+					item.AttentionState = work.AttentionNeedsHumanReview
+					changes = append(changes, "attention state")
+				}
 			}
 			seenCriteria := make(map[string]bool, len(command.AcceptanceCriterionResolutions))
 			waivedRequired := false
@@ -261,8 +324,105 @@ func (s *Service) PatchWorkItem(ctx context.Context, command PatchWorkItemComman
 				}
 				waivedRequired = waivedRequired || (resolved.Status == work.AcceptanceWaived && resolved.Required)
 			}
-			if len(command.AcceptanceCriterionResolutions) > 0 {
+			// An ordinal is free if no criterion that still counts holds it. A
+			// caller adding a condition has no reason to know which are taken, so
+			// a collision has to be a domain message rather than the driver's
+			// unique-constraint error.
+			activeOrdinals := map[int]bool{}
+			if len(command.AcceptanceCriteriaToAdd) > 0 {
+				existing, err := repository.ListAcceptanceCriteria(ctx, item.ID)
+				if err != nil {
+					return work.WorkItem{}, err
+				}
+				for _, criterion := range existing {
+					if criterion.Status.Active() {
+						activeOrdinals[criterion.Ordinal] = true
+					}
+				}
+			}
+			for _, addition := range command.AcceptanceCriteriaToAdd {
+				supersedesID := strings.TrimSpace(addition.SupersedesID)
+				var predecessor work.AcceptanceCriterion
+				if supersedesID != "" {
+					loaded, err := repository.AcceptanceCriterion(ctx, supersedesID)
+					if err != nil {
+						return work.WorkItem{}, fmt.Errorf("load superseded acceptance criterion %q: %w", supersedesID, err)
+					}
+					if loaded.WorkItemID != item.ID {
+						return work.WorkItem{}, errors.New("acceptance criterion belongs to another work item")
+					}
+					predecessor = loaded
+				}
+				// A supersession frees the ordinal it actually replaces as
+				// soon as it is decided, not only for this addition's own
+				// collision check: a later addition in the same patch may
+				// want to reuse it, and the patch applies as one atomic set.
+				if supersedesID != "" {
+					delete(activeOrdinals, predecessor.Ordinal)
+				}
+				if activeOrdinals[addition.Ordinal] {
+					return work.WorkItem{}, fmt.Errorf("acceptance criterion ordinal %d is already in use; supersede that criterion or choose another ordinal", addition.Ordinal)
+				}
+				id, err := s.ids.New()
+				if err != nil {
+					return work.WorkItem{}, fmt.Errorf("generate acceptance criterion id: %w", err)
+				}
+				replacement, err := work.NewAcceptanceCriterion(work.AcceptanceCriterion{
+					ID: id, WorkItemID: item.ID, Text: addition.Text, Required: addition.Required, Ordinal: addition.Ordinal,
+				})
+				if err != nil {
+					return work.WorkItem{}, err
+				}
+				if predecessorID := supersedesID; predecessorID != "" {
+					if seenCriteria[predecessorID] {
+						return work.WorkItem{}, fmt.Errorf("acceptance criterion %q is both resolved and superseded in one patch", predecessorID)
+					}
+					seenCriteria[predecessorID] = true
+					superseded, updated, err := work.SupersedeAcceptanceCriterion(predecessor, replacement, command.ActorID, addition.SupersessionReason)
+					if err != nil {
+						return work.WorkItem{}, err
+					}
+					if err := repository.SupersedeAcceptanceCriterion(ctx, superseded); err != nil {
+						return work.WorkItem{}, err
+					}
+					// A distinct record: the item-level patch activity says only
+					// "acceptance criteria", which reads identically whether a
+					// criterion was judged or replaced.
+					if err := s.recordActivity(ctx, repository, work.Activity{
+						EntityKind: "acceptance_criterion", EntityID: predecessor.ID, WorkItemID: item.ID, ActorID: command.ActorID,
+						EventType: "acceptance_criterion.superseded",
+						Summary:   fmt.Sprintf("Acceptance criterion %d superseded: %s", predecessor.Ordinal, addition.SupersessionReason),
+					}); err != nil {
+						return work.WorkItem{}, err
+					}
+					replacement = updated
+				}
+				if err := repository.CreateAcceptanceCriterion(ctx, replacement); err != nil {
+					return work.WorkItem{}, err
+				}
+				if err := s.recordActivity(ctx, repository, work.Activity{
+					EntityKind: "acceptance_criterion", EntityID: replacement.ID, WorkItemID: item.ID, ActorID: command.ActorID,
+					EventType: "acceptance_criterion.added",
+					Summary:   fmt.Sprintf("Acceptance criterion %d added", replacement.Ordinal),
+				}); err != nil {
+					return work.WorkItem{}, err
+				}
+				activeOrdinals[replacement.Ordinal] = true
+			}
+			if len(command.AcceptanceCriterionResolutions) > 0 || len(command.AcceptanceCriteriaToAdd) > 0 {
 				changes = append(changes, "acceptance criteria")
+			}
+			// Adding a required condition to work already called done says the
+			// judgement was wrong. That is allowed — it is how a criterion gets
+			// corrected after the fact — but it leaves a completed item with an
+			// unmet gate, which nobody would notice without being told.
+			addedRequired := false
+			for _, addition := range command.AcceptanceCriteriaToAdd {
+				addedRequired = addedRequired || addition.Required
+			}
+			if addedRequired && item.ExecutionStatus == work.StatusDone && command.AttentionState == nil && item.AttentionState == work.AttentionNone {
+				item.AttentionState = work.AttentionNeedsHumanReview
+				changes = append(changes, "attention state")
 			}
 			if waivedRequired && command.AttentionState == nil && item.AttentionState == work.AttentionNone {
 				item.AttentionState = work.AttentionNeedsHumanReview
@@ -282,6 +442,11 @@ func (s *Service) PatchWorkItem(ctx context.Context, command PatchWorkItemComman
 					return work.WorkItem{}, err
 				}
 				if err := repository.CreateExpectedOutput(ctx, expected); err != nil {
+					return work.WorkItem{}, err
+				}
+				// The same record define_expected_output writes: a review judged the
+				// work against the outputs it had, so one added here stales it.
+				if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "expected_output", EntityID: expected.ID, WorkItemID: item.ID, ActorID: command.ActorID, EventType: "expected_output.defined", Summary: fmt.Sprintf("Expected output %s defined", expected.Name)}); err != nil {
 					return work.WorkItem{}, err
 				}
 			}
@@ -311,7 +476,38 @@ func (s *Service) PatchWorkItem(ctx context.Context, command PatchWorkItemComman
 }
 
 func patchWorkItemHasChanges(command PatchWorkItemCommand) bool {
-	return command.Title != nil || command.Description != nil || command.ParentID != nil || command.Priority != nil || command.EstimatedScope != nil || command.ExecutionPolicy != nil || command.AttentionState != nil || command.RequiredCapabilities != nil || len(command.AcceptanceCriterionResolutions) > 0 || len(command.ExpectedOutputsToAdd) > 0
+	return command.Title != nil || command.Description != nil || command.ParentID != nil || command.Priority != nil || command.EstimatedScope != nil || command.Measure != nil || command.ExecutionPolicy != nil || command.AttentionState != nil || command.RequiredCapabilities != nil || command.ReviewRequirements != nil || len(command.AcceptanceCriterionResolutions) > 0 || len(command.AcceptanceCriteriaToAdd) > 0 || len(command.ExpectedOutputsToAdd) > 0
+}
+
+// reviewRequirementChangeNeedsAttention mirrors what waiving or adding a
+// required acceptance criterion does. Dropping a review that was not satisfied
+// lets done through without it, and declaring a new review on work already
+// done changes what that completion claimed; either passes silently unless
+// someone is told.
+func reviewRequirementChangeNeedsAttention(ctx context.Context, repository ports.Repository, item work.WorkItem, next []work.ReviewRequirement) (bool, error) {
+	kept := make(map[work.ReviewRequirement]bool, len(next))
+	for _, requirement := range next {
+		kept[requirement] = true
+	}
+	current, err := repository.ReviewEvidence(ctx, item)
+	if err != nil {
+		return false, err
+	}
+	declared := make(map[work.ReviewRequirement]bool, len(current))
+	for _, evidence := range current {
+		declared[evidence.Requirement] = true
+		if !kept[evidence.Requirement] && evidence.State != work.ReviewEvidenceSatisfied {
+			return true, nil
+		}
+	}
+	if item.ExecutionStatus == work.StatusDone {
+		for _, requirement := range next {
+			if !declared[requirement] {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func normalizedCapabilities(capabilities []string) ([]string, error) {
@@ -346,10 +542,26 @@ type AttentionRequestResult struct {
 	AttentionState work.AttentionState `json:"attention_state"`
 	WorkItem       *work.WorkItem      `json:"work_item,omitempty"`
 	Question       *work.Question      `json:"question,omitempty"`
-	Decision       *work.Decision      `json:"decision,omitempty"`
 }
 
-func (s *Service) RequestAttention(ctx context.Context, command RequestAttentionCommand) (AttentionRequestResult, error) {
+// UnmarshalJSON keeps a replayed response consistent with itself. Before
+// REP-08 a question stored only whether any attention was requested, which
+// Question upgrades to needs_human_decision; the state actually requested is
+// the one this result carries at its top level.
+func (result *AttentionRequestResult) UnmarshalJSON(data []byte) error {
+	type stored AttentionRequestResult
+	var decoded stored
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*result = AttentionRequestResult(decoded)
+	if result.Question != nil && result.AttentionState != "" {
+		result.Question.AttentionState = result.AttentionState
+	}
+	return nil
+}
+
+func (s *Service) requestAttentionMutation(ctx context.Context, command RequestAttentionCommand) (AttentionRequestResult, error) {
 	var result AttentionRequestResult
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		requested, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "request_attention", command, func() (AttentionRequestResult, error) {
@@ -390,20 +602,14 @@ func (s *Service) RequestAttention(ctx context.Context, command RequestAttention
 				if question.Version != command.ExpectedVersion {
 					return AttentionRequestResult{}, ports.ErrVersionConflict
 				}
-				question.RequiresHumanAttention = command.AttentionState != work.AttentionNone
+				question.AttentionState = command.AttentionState
 				question.Version++
 				if err := repository.UpdateQuestion(ctx, question, command.ExpectedVersion); err != nil {
 					return AttentionRequestResult{}, err
 				}
 				result.Question = &question
 				activity.WorkItemID = question.WorkItemID
-			case "decision":
-				decision, err := repository.Decision(ctx, targetID)
-				if err != nil {
-					return AttentionRequestResult{}, err
-				}
-				result.Decision = &decision
-				activity.WorkItemID = decision.WorkItemID
+				activity.ObjectiveID = question.ObjectiveID
 			}
 			if err := s.recordActivity(ctx, repository, activity); err != nil {
 				return AttentionRequestResult{}, err
@@ -434,12 +640,15 @@ func attentionTarget(command RequestAttentionCommand) (string, string, error) {
 		if targetID == "" || (workItemID != "" && workItemID != targetID) {
 			return "", "", errors.New("attention requires exactly one work item target")
 		}
-	case "question", "decision", "review", "clarification", "intervention":
+	case "question":
 		if targetID == "" || workItemID != "" {
-			return "", "", errors.New("attention requires exactly one non-work target")
+			return "", "", errors.New("attention on a question requires its id and no work item")
 		}
 	default:
-		return "", "", errors.New("attention target kind is not supported")
+		// review, clarification and intervention were attention states that
+		// leaked into this list, and a decision is an immutable record with no
+		// state to hold; none of them ever stored anything.
+		return "", "", fmt.Errorf("attention target kind %q is not supported; use work_item or question", targetKind)
 	}
 	return targetKind, targetID, nil
 }
@@ -453,7 +662,7 @@ func attentionPayload(targetKind, targetID string, attentionState work.Attention
 	return payload
 }
 
-func (s *Service) CreatePlan(ctx context.Context, command CreatePlanCommand) (work.Plan, error) {
+func (s *Service) createPlanMutation(ctx context.Context, command CreatePlanCommand) (work.Plan, error) {
 	if replay, found, err := replayIdempotently[work.Plan](ctx, s, command.ActorID, command.IdempotencyKey, "create_plan", command); err != nil {
 		return work.Plan{}, err
 	} else if found {
@@ -482,7 +691,7 @@ func (s *Service) CreatePlan(ctx context.Context, command CreatePlanCommand) (wo
 				return work.Plan{}, err
 			}
 			if err := s.recordActivity(ctx, repository, work.Activity{
-				EntityKind: "plan", EntityID: plan.ID, ActorID: command.ActorID,
+				EntityKind: "plan", EntityID: plan.ID, ObjectiveID: plan.ObjectiveID, ActorID: command.ActorID,
 				EventType: "plan.created", Summary: fmt.Sprintf("Draft plan revision %d created", plan.Revision),
 			}); err != nil {
 				return work.Plan{}, err
@@ -511,10 +720,12 @@ type CreateWorkItemCommand struct {
 	ExecutionStatus      work.ExecutionStatus
 	Priority             work.Priority
 	EstimatedScope       work.EstimatedScope
+	Measure              work.Measure
 	ExecutionPolicy      work.ExecutionPolicy
 	RequiredActorKind    work.ActorKind
 	AttentionState       work.AttentionState
 	RequiredCapabilities []string
+	ReviewRequirements   []work.ReviewRequirement
 	AcceptanceCriteria   []ProposedAcceptanceCriterion
 	ExpectedOutputs      []ProposedExpectedOutput
 	OutputRequirements   []ProposedOutputRequirement
@@ -530,7 +741,7 @@ type CreateWorkItemDependency struct {
 	Note                string
 }
 
-func (s *Service) CreateWorkItem(ctx context.Context, command CreateWorkItemCommand) (work.WorkItem, error) {
+func (s *Service) createWorkItemMutation(ctx context.Context, command CreateWorkItemCommand) (work.WorkItem, error) {
 	if replay, found, err := replayIdempotently[work.WorkItem](ctx, s, command.ActorID, command.IdempotencyKey, "create_work_item", command); err != nil {
 		return work.WorkItem{}, err
 	} else if found {
@@ -558,26 +769,32 @@ func (s *Service) CreateWorkItem(ctx context.Context, command CreateWorkItemComm
 	if command.RequiredActorKind == "" {
 		command.RequiredActorKind = work.ActorAny
 	}
+	reviewRequirements, err := normalizeReviewRequirements(command.ReviewRequirements)
+	if err != nil {
+		return work.WorkItem{}, err
+	}
 	id, err := s.ids.New()
 	if err != nil {
 		return work.WorkItem{}, fmt.Errorf("generate work item id: %w", err)
 	}
 	item, err := work.NewWorkItem(work.WorkItem{
-		ID:                id,
-		Key:               command.Key,
-		ObjectiveID:       command.ObjectiveID,
-		PlanID:            command.PlanID,
-		ParentID:          command.ParentID,
-		Title:             command.Title,
-		Description:       command.Description,
-		Kind:              command.Kind,
-		CommitmentState:   command.CommitmentState,
-		ExecutionStatus:   command.ExecutionStatus,
-		Priority:          command.Priority,
-		EstimatedScope:    command.EstimatedScope,
-		ExecutionPolicy:   command.ExecutionPolicy,
-		RequiredActorKind: command.RequiredActorKind,
-		AttentionState:    command.AttentionState,
+		ID:                 id,
+		Key:                command.Key,
+		ObjectiveID:        command.ObjectiveID,
+		PlanID:             command.PlanID,
+		ParentID:           command.ParentID,
+		Title:              command.Title,
+		Description:        command.Description,
+		Kind:               command.Kind,
+		CommitmentState:    command.CommitmentState,
+		ExecutionStatus:    command.ExecutionStatus,
+		Priority:           command.Priority,
+		EstimatedScope:     command.EstimatedScope,
+		Measure:            command.Measure,
+		ExecutionPolicy:    command.ExecutionPolicy,
+		RequiredActorKind:  command.RequiredActorKind,
+		AttentionState:     command.AttentionState,
+		ReviewRequirements: reviewRequirements,
 	}, s.clock.Now())
 	if err != nil {
 		return work.WorkItem{}, err
@@ -829,7 +1046,7 @@ type DefineExpectedOutputCommand struct {
 	IdempotencyKey  string
 }
 
-func (s *Service) DefineExpectedOutput(ctx context.Context, command DefineExpectedOutputCommand) (output.ExpectedOutput, error) {
+func (s *Service) defineExpectedOutputMutation(ctx context.Context, command DefineExpectedOutputCommand) (output.ExpectedOutput, error) {
 	if replay, found, err := replayIdempotently[output.ExpectedOutput](ctx, s, command.ActorID, command.IdempotencyKey, "define_expected_output", command); err != nil {
 		return output.ExpectedOutput{}, err
 	} else if found {

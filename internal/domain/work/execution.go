@@ -15,11 +15,20 @@ const (
 	AcceptancePending   AcceptanceCriterionStatus = "pending"
 	AcceptanceSatisfied AcceptanceCriterionStatus = "satisfied"
 	AcceptanceWaived    AcceptanceCriterionStatus = "waived"
+	// AcceptanceSuperseded marks a criterion a later one replaced. It keeps the
+	// text and any resolution it had, and stops counting towards completion.
+	AcceptanceSuperseded AcceptanceCriterionStatus = "superseded"
 )
+
+// Active reports whether this criterion still says anything about whether the
+// work is done. A superseded one is history: it is readable, and it neither
+// blocks completion nor counts towards progress.
+func (s AcceptanceCriterionStatus) Active() bool { return s != AcceptanceSuperseded }
 
 type AcceptanceCriterion struct {
 	ID                  string
 	WorkItemID          string
+	Version             int
 	Ordinal             int
 	Text                string
 	Required            bool
@@ -27,6 +36,12 @@ type AcceptanceCriterion struct {
 	ResolvedBy          string
 	ResolvedAt          time.Time
 	ResolutionRationale string
+	// SupersedesID names the criterion this one replaces, if any, and
+	// SupersessionReason says why. Both live on the replacement: the link runs
+	// backwards so that superseding a criterion changes nothing about it except
+	// that it stops counting.
+	SupersedesID       string
+	SupersessionReason string
 }
 
 func NewAcceptanceCriterion(criterion AcceptanceCriterion) (AcceptanceCriterion, error) {
@@ -40,6 +55,7 @@ func NewAcceptanceCriterion(criterion AcceptanceCriterion) (AcceptanceCriterion,
 		return AcceptanceCriterion{}, errors.New("acceptance criterion ordinal must be positive")
 	}
 	criterion.Status = AcceptancePending
+	criterion.Version = 1
 	criterion.ResolvedBy = ""
 	criterion.ResolvedAt = time.Time{}
 	criterion.ResolutionRationale = ""
@@ -62,7 +78,40 @@ func ResolveAcceptanceCriterion(criterion AcceptanceCriterion, target Acceptance
 	criterion.ResolvedBy = actor
 	criterion.ResolvedAt = now.UTC()
 	criterion.ResolutionRationale = rationale
+	criterion.Version++
 	return criterion, nil
+}
+
+// SupersedeAcceptanceCriterion replaces one criterion with another. The
+// predecessor is not edited beyond being marked superseded and carrying the
+// reason: what it said, and any verdict already recorded against it, stay
+// exactly as they were. Waiving a wrong criterion would have been the only
+// alternative, and that records the condition as excused rather than as
+// mistaken.
+func SupersedeAcceptanceCriterion(predecessor, replacement AcceptanceCriterion, actor, rationale string) (AcceptanceCriterion, AcceptanceCriterion, error) {
+	actor = strings.TrimSpace(actor)
+	rationale = strings.TrimSpace(rationale)
+	if actor == "" {
+		return AcceptanceCriterion{}, AcceptanceCriterion{}, errors.New("acceptance criterion supersession requires an actor")
+	}
+	if rationale == "" {
+		return AcceptanceCriterion{}, AcceptanceCriterion{}, errors.New("acceptance criterion supersession requires a reason")
+	}
+	if predecessor.Status == AcceptanceSuperseded {
+		return AcceptanceCriterion{}, AcceptanceCriterion{}, errors.New("acceptance criterion is already superseded")
+	}
+	if predecessor.WorkItemID != replacement.WorkItemID {
+		return AcceptanceCriterion{}, AcceptanceCriterion{}, errors.New("an acceptance criterion can only be superseded within its own work item")
+	}
+	if predecessor.ID == replacement.ID {
+		return AcceptanceCriterion{}, AcceptanceCriterion{}, errors.New("an acceptance criterion cannot supersede itself")
+	}
+	superseded := predecessor
+	superseded.Status = AcceptanceSuperseded
+	superseded.Version++
+	replacement.SupersedesID = predecessor.ID
+	replacement.SupersessionReason = rationale
+	return superseded, replacement, nil
 }
 
 type DependencyKind string
@@ -77,6 +126,7 @@ type Dependency struct {
 	ID              string
 	WorkItemID      string
 	DependsOnItemID string
+	Version         int
 	Kind            DependencyKind
 	Note            string
 	CreatedBy       string
@@ -99,6 +149,7 @@ func NewDependency(dependency Dependency, now time.Time) (Dependency, error) {
 		return Dependency{}, fmt.Errorf("invalid dependency kind %q", dependency.Kind)
 	}
 	dependency.CreatedAt = now.UTC()
+	dependency.Version = 1
 	return dependency, nil
 }
 
@@ -108,6 +159,7 @@ type Activity struct {
 	EntityKind  string
 	EntityID    string
 	WorkItemID  string
+	ObjectiveID string
 	ActorID     string
 	EventType   string
 	Summary     string
@@ -115,11 +167,20 @@ type Activity struct {
 	CreatedAt   time.Time
 }
 
+// objectiveScopedActivityKinds belong to an objective even when no work item
+// is involved. Without the binding the objective-filtered change feed omits
+// them silently, which is indistinguishable from an objective where nothing
+// happened.
+var objectiveScopedActivityKinds = map[string]bool{
+	"objective": true, "plan": true, "question": true, "decision": true, "context_record": true,
+}
+
 func NewActivity(activity Activity, now time.Time) (Activity, error) {
 	activity.ID = strings.TrimSpace(activity.ID)
 	activity.EntityKind = strings.TrimSpace(activity.EntityKind)
 	activity.EntityID = strings.TrimSpace(activity.EntityID)
 	activity.WorkItemID = strings.TrimSpace(activity.WorkItemID)
+	activity.ObjectiveID = strings.TrimSpace(activity.ObjectiveID)
 	activity.ActorID = strings.TrimSpace(activity.ActorID)
 	activity.EventType = strings.TrimSpace(activity.EventType)
 	activity.Summary = strings.TrimSpace(activity.Summary)
@@ -128,6 +189,9 @@ func NewActivity(activity Activity, now time.Time) (Activity, error) {
 	}
 	if activity.ID == "" || activity.EntityKind == "" || activity.EntityID == "" || activity.ActorID == "" || activity.EventType == "" || activity.Summary == "" {
 		return Activity{}, errors.New("activity requires id, entity kind, entity id, actor, event type, and summary")
+	}
+	if activity.ObjectiveID == "" && (activity.WorkItemID != "" || objectiveScopedActivityKinds[activity.EntityKind]) {
+		return Activity{}, fmt.Errorf("%s activity requires its objective", activity.EntityKind)
 	}
 	payload, err := normalizeJSONObject(activity.PayloadJSON)
 	if err != nil {

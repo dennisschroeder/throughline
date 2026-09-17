@@ -44,6 +44,10 @@ configuration, connection-bound workspace state, or alternative routing mechanis
   attributable to `workspace_id` and `actor_id`. Diagnostics expose stable routing outcomes and error
   codes while avoiding database paths, credentials, authorization tokens, or unrelated workspace
   metadata. (`01a0347f-62e9-7109-bf2e-71f8afd59c1e`)
+- **Workspace storage is protected from other OS users.** The workspace directory is mode `0700`;
+  `config.toml`, the SQLite database, and any `-wal`/`-shm` sidecars are mode `0600`, including on
+  first creation and reopen repair. This protects against other OS users. Processes running as the
+  same OS user remain a cooperative convention; Throughline provides no tamper detection for them.
 
 ## Binding decisions
 

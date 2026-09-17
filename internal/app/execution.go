@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -22,7 +23,7 @@ type TransitionWorkItemCommand struct {
 	IdempotencyKey  string
 }
 
-func (s *Service) TransitionWorkItem(ctx context.Context, command TransitionWorkItemCommand) (work.WorkItem, error) {
+func (s *Service) transitionWorkItemMutation(ctx context.Context, command TransitionWorkItemCommand) (work.WorkItem, error) {
 	var transitioned work.WorkItem
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		var err error
@@ -120,13 +121,17 @@ func transitionRequirements(ctx context.Context, repository ports.Repository, ob
 	if err != nil {
 		return nil, err
 	}
+	evidence, err := repository.ReviewEvidence(ctx, item)
+	if err != nil {
+		return nil, err
+	}
 	return work.EvaluateTransitionGate(work.TransitionGateFacts{
 		ObjectivePhase: objective.Phase, PlanApproved: planApproved, ItemCommitment: item.CommitmentState,
 		CurrentStatus: item.ExecutionStatus, TargetStatus: target,
 		AcceptanceCriteriaSatisfied: criteriaSatisfied, HardDependenciesSatisfied: dependenciesSatisfied,
 		ExpectedOutputsSatisfied: expectedOutputsSatisfied, OutputRequirementsSatisfied: outputRequirementsSatisfied,
 		ExternalActionsSatisfied:    externalActionsSatisfied,
-		ReviewRequirementsSatisfied: true,
+		ReviewRequirementsSatisfied: work.ReviewRequirementsSatisfied(evidence),
 	}), nil
 }
 
@@ -139,7 +144,7 @@ type ResolveAcceptanceCriterionCommand struct {
 	IdempotencyKey          string
 }
 
-func (s *Service) ResolveAcceptanceCriterion(ctx context.Context, command ResolveAcceptanceCriterionCommand) (work.AcceptanceCriterion, error) {
+func (s *Service) resolveAcceptanceCriterionMutation(ctx context.Context, command ResolveAcceptanceCriterionCommand) (work.AcceptanceCriterion, error) {
 	var resolved work.AcceptanceCriterion
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		var err error
@@ -198,7 +203,7 @@ type BlockWorkItemCommand struct {
 	Reason          string
 }
 
-func (s *Service) BlockWorkItem(ctx context.Context, command BlockWorkItemCommand) (work.ManualBlocker, error) {
+func (s *Service) blockWorkItemMutation(ctx context.Context, command BlockWorkItemCommand) (work.ManualBlocker, error) {
 	if replay, found, err := replayIdempotently[work.ManualBlocker](ctx, s, command.ActorID, command.IdempotencyKey, "block_work_item", command); err != nil {
 		return work.ManualBlocker{}, err
 	} else if found {
@@ -251,7 +256,7 @@ type UnblockWorkItemCommand struct {
 	Resolution      string
 }
 
-func (s *Service) UnblockWorkItem(ctx context.Context, command UnblockWorkItemCommand) (work.ManualBlocker, error) {
+func (s *Service) unblockWorkItemMutation(ctx context.Context, command UnblockWorkItemCommand) (work.ManualBlocker, error) {
 	var blocker work.ManualBlocker
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		resolved, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "unblock_work_item", command, func() (work.ManualBlocker, error) {
@@ -292,7 +297,7 @@ func (s *Service) UnblockWorkItem(ctx context.Context, command UnblockWorkItemCo
 	return blocker, nil
 }
 
-func (s *Service) LinkDependency(ctx context.Context, command LinkDependencyCommand) (work.Dependency, error) {
+func (s *Service) linkDependencyMutation(ctx context.Context, command LinkDependencyCommand) (work.Dependency, error) {
 	if replay, found, err := replayIdempotently[work.Dependency](ctx, s, command.ActorID, command.IdempotencyKey, "link_dependency", command); err != nil {
 		return work.Dependency{}, err
 	} else if found {
@@ -365,7 +370,7 @@ type UnlinkDependencyCommand struct {
 	IdempotencyKey      string
 }
 
-func (s *Service) UnlinkDependency(ctx context.Context, command UnlinkDependencyCommand) (work.WorkItem, error) {
+func (s *Service) unlinkDependencyMutation(ctx context.Context, command UnlinkDependencyCommand) (work.WorkItem, error) {
 	var item work.WorkItem
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		result, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "unlink_dependency", command, func() (work.WorkItem, error) {
@@ -414,7 +419,7 @@ type CreateOutputRevisionCommand struct {
 	Artifacts        []OutputArtifactInput
 }
 
-func (s *Service) CreateOutputRevision(ctx context.Context, command CreateOutputRevisionCommand) (output.OutputRevision, error) {
+func (s *Service) createOutputRevisionMutation(ctx context.Context, command CreateOutputRevisionCommand) (output.OutputRevision, error) {
 	if replay, found, err := replayIdempotently[output.OutputRevision](ctx, s, command.ActorID, command.IdempotencyKey, "create_output_revision", command); err != nil {
 		return output.OutputRevision{}, err
 	} else if found {
@@ -517,10 +522,11 @@ type RecordValidationCommand struct {
 	VerifierActorID    string
 	EvidenceArtifactID string
 	Details            json.RawMessage
+	Degraded           bool
 	IdempotencyKey     string
 }
 
-func (s *Service) RecordValidation(ctx context.Context, command RecordValidationCommand) (output.OutputRevision, error) {
+func (s *Service) recordValidationMutation(ctx context.Context, command RecordValidationCommand) (output.OutputRevision, error) {
 	if replay, found, err := replayIdempotently[output.OutputRevision](ctx, s, command.VerifierActorID, command.IdempotencyKey, "record_validation", command); err != nil {
 		return output.OutputRevision{}, err
 	} else if found {
@@ -566,6 +572,7 @@ func (s *Service) RecordValidation(ctx context.Context, command RecordValidation
 			if err != nil {
 				return output.OutputRevision{}, err
 			}
+			record.Degraded = command.Degraded
 			if err := repository.CreateValidationRecord(ctx, record); err != nil {
 				return output.OutputRevision{}, err
 			}
@@ -610,6 +617,82 @@ func (s *Service) RecordValidation(ctx context.Context, command RecordValidation
 	return revision, nil
 }
 
+type RecordWorkItemValidationCommand struct {
+	WorkItemID         string
+	CriterionRef       string
+	ValidatorKind      output.ValidatorKind
+	Verdict            output.ValidationVerdict
+	Score              *float64
+	VerifierActorID    string
+	EvidenceArtifactID string
+	Details            json.RawMessage
+	Degraded           bool
+	IdempotencyKey     string
+}
+
+// recordWorkItemValidationMutation records a review of a work item. It never
+// changes the item; whether the review satisfies what the item declares is
+// derived when the done gate or a reader asks.
+func (s *Service) recordWorkItemValidationMutation(ctx context.Context, command RecordWorkItemValidationCommand) (output.ValidationRecord, error) {
+	if replay, found, err := replayIdempotently[output.ValidationRecord](ctx, s, command.VerifierActorID, command.IdempotencyKey, "record_work_item_validation", command); err != nil {
+		return output.ValidationRecord{}, err
+	} else if found {
+		return replay, nil
+	}
+	id, err := s.ids.New()
+	if err != nil {
+		return output.ValidationRecord{}, fmt.Errorf("generate validation id: %w", err)
+	}
+	var recorded output.ValidationRecord
+	err = s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
+		result, err := executeIdempotently(ctx, s, repository, command.VerifierActorID, command.IdempotencyKey, "record_work_item_validation", command, func() (output.ValidationRecord, error) {
+			item, err := repository.WorkItem(ctx, command.WorkItemID)
+			if err != nil {
+				return output.ValidationRecord{}, err
+			}
+			if evidenceID := strings.TrimSpace(command.EvidenceArtifactID); evidenceID != "" {
+				artifacts, err := repository.Artifacts(ctx, item.ID)
+				if err != nil {
+					return output.ValidationRecord{}, err
+				}
+				if !slices.ContainsFunc(artifacts, func(artifact output.Artifact) bool { return artifact.ID == evidenceID }) {
+					return output.ValidationRecord{}, errors.New("review evidence artifact must be attached to the reviewed work item")
+				}
+			}
+			// Anchored before this record's own activity, so only work recorded
+			// afterwards can make the review stale.
+			sequence, err := repository.LatestActivitySequence(ctx)
+			if err != nil {
+				return output.ValidationRecord{}, err
+			}
+			record, err := output.NewWorkItemValidationRecord(id, item.ID, sequence, command.CriterionRef, command.ValidatorKind, command.Verdict, command.Score, command.VerifierActorID, command.EvidenceArtifactID, command.Details, command.Degraded, s.clock.Now())
+			if err != nil {
+				return output.ValidationRecord{}, err
+			}
+			if err := repository.CreateValidationRecord(ctx, record); err != nil {
+				return output.ValidationRecord{}, err
+			}
+			summary := fmt.Sprintf("%s review of %s recorded as %s", record.ValidatorKind, record.CriterionRef, record.Verdict)
+			if record.Degraded {
+				summary += " (degraded)"
+			}
+			if err := s.recordActivity(ctx, repository, work.Activity{
+				EntityKind: "validation_record", EntityID: record.ID, WorkItemID: item.ID, ActorID: command.VerifierActorID,
+				EventType: "work_item_validation.recorded", Summary: summary,
+			}); err != nil {
+				return output.ValidationRecord{}, err
+			}
+			return record, nil
+		})
+		recorded = result
+		return err
+	})
+	if err != nil {
+		return output.ValidationRecord{}, fmt.Errorf("record work item validation: %w", err)
+	}
+	return recorded, nil
+}
+
 type AddOutputRequirementCommand struct {
 	WorkItemID               string
 	RequiredOutputRevisionID string
@@ -622,7 +705,7 @@ type AddOutputRequirementCommand struct {
 	IdempotencyKey           string
 }
 
-func (s *Service) AddOutputRequirement(ctx context.Context, command AddOutputRequirementCommand) (output.OutputRequirement, error) {
+func (s *Service) addOutputRequirementMutation(ctx context.Context, command AddOutputRequirementCommand) (output.OutputRequirement, error) {
 	if replay, found, err := replayIdempotently[output.OutputRequirement](ctx, s, command.ActorID, command.IdempotencyKey, "add_output_requirement", command); err != nil {
 		return output.OutputRequirement{}, err
 	} else if found {
@@ -763,6 +846,13 @@ func (s *Service) recordActivity(ctx context.Context, repository ports.Repositor
 		return fmt.Errorf("generate activity id: %w", err)
 	}
 	candidate.ID = id
+	if candidate.ObjectiveID == "" && candidate.WorkItemID != "" {
+		item, err := repository.WorkItem(ctx, candidate.WorkItemID)
+		if err != nil {
+			return fmt.Errorf("resolve activity objective: %w", err)
+		}
+		candidate.ObjectiveID = item.ObjectiveID
+	}
 	activity, err := work.NewActivity(candidate, s.clock.Now())
 	if err != nil {
 		return err

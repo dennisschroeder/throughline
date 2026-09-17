@@ -13,10 +13,10 @@ import (
 	"github.com/dennisschroeder/throughline/internal/ports"
 )
 
-// ObjectivesHandler serves the switcher's contents: every objective the workspace's work
-// items currently reference (see the ListWorkItems-dedup comment on resolveObjectives below
-// for why this, and not a dedicated ListObjectives read, is the source), each with a
-// server-computed open-gate count.
+// ObjectivesHandler serves the switcher's contents: every objective in the workspace, each
+// with its item count and a server-computed open-gate count. It reads the objectives
+// themselves, so an objective a person has just created is listed and selectable before it
+// has any work items.
 func (h *Handlers) ObjectivesHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !h.hostAllowed(r) {
@@ -34,7 +34,18 @@ func (h *Handlers) ObjectivesHandler() http.Handler {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+		// The current marker is addressed the same way the loop payload is, so a
+		// key in the URL marks the same row the snapshot describes.
 		current := strings.TrimSpace(r.URL.Query().Get("objective_id"))
+		if current != "" {
+			objective, resolveErr := service.ResolveObjective(r.Context(), current)
+			if resolveErr != nil {
+				h.logError("resolve current objective", resolveErr)
+				http.Error(w, "no objective found", http.StatusNotFound)
+				return
+			}
+			current = objective.ID
+		}
 		resp, err := buildObjectivesResponse(r.Context(), service, session.WorkspaceID, session.ActorID, current, h.now())
 		if err != nil {
 			h.logError("build objectives response", err)
@@ -118,42 +129,39 @@ func (h *Handlers) ChangesHandler() http.Handler {
 	})
 }
 
-// objectivesFromItems dedups the distinct objectives referenced by this workspace's work
-// items. There is no ListObjectives read path (see the original snapshot builder this
-// package replaces), so — as before — a workspace with zero work items yields zero
-// objectives, and an objective with no work items yet is invisible to the switcher.
-func objectivesFromItems(items []ports.WorkItemContext) []work.Objective {
-	seen := make(map[string]bool)
-	var out []work.Objective
-	for _, item := range items {
-		id := item.Objective.ID
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		out = append(out, item.Objective)
-	}
-	return out
-}
-
 func resolveObjectiveID(ctx context.Context, service *app.Service, requested string, now time.Time) (string, error) {
 	if requested != "" {
-		return requested, nil
+		// A requested objective is an address, not a promise that it exists, and
+		// list_objectives now prints keys prominently enough that pasting one
+		// into the URL is the obvious move. Resolving here turns an unknown or
+		// mistyped reference into the 404 this handler already has a branch for,
+		// instead of letting it reach the snapshot builder and surface as 500.
+		objective, err := service.ResolveObjective(ctx, requested)
+		if err != nil {
+			return "", err
+		}
+		return objective.ID, nil
 	}
-	items, err := service.ListWorkItems(ctx)
+	objectives, err := service.ListObjectives(ctx)
 	if err != nil {
 		return "", err
 	}
-	objectives := objectivesFromItems(items)
 	if len(objectives) == 0 {
 		return "", fmt.Errorf("no objectives in this workspace")
 	}
 	if len(objectives) == 1 {
 		return objectives[0].ID, nil
 	}
+	items, err := service.ListWorkItems(ctx)
+	if err != nil {
+		return "", err
+	}
+	itemCounts := map[string]int{}
+	for _, item := range items {
+		itemCounts[item.Objective.ID]++
+	}
 	al := &actorLiveness{lastCallAt: map[string]time.Time{}, now: now}
-	best := objectives[0]
-	bestGates := -1
+	candidates := make([]objectiveCandidate, 0, len(objectives))
 	for _, obj := range objectives {
 		objCtx, err := service.GetObjectiveContext(ctx, obj.ID)
 		if err != nil {
@@ -163,13 +171,51 @@ func resolveObjectiveID(ctx context.Context, service *app.Service, requested str
 		if err != nil {
 			continue
 		}
-		n := len(gates)
-		if n > bestGates || (n == bestGates && obj.UpdatedAt.After(best.UpdatedAt)) {
-			bestGates = n
-			best = obj
+		candidates = append(candidates, objectiveCandidate{objective: obj, gates: len(gates), items: itemCounts[obj.ID]})
+	}
+	return chooseObjective(objectives[0], candidates).ID, nil
+}
+
+// objectiveCandidate is one objective whose gates could actually be counted.
+type objectiveCandidate struct {
+	objective work.Objective
+	gates     int
+	items     int
+}
+
+// chooseObjective picks the objective to open when the caller named none.
+//
+// Most blocking gates wins, then the objective that actually holds work, then
+// most recently updated. Without the middle term an objective that was just
+// created and has nothing in it wins every all-zero contest, because it is
+// trivially the most recently updated one — so opening the dashboard right after
+// creating an objective showed an empty board.
+//
+// Every candidate can be dropped upstream when a store read fails, so this takes
+// a fallback for the run where all of them are. Returning the zero objective
+// instead would hand the caller an empty id with no error: the handler's 404
+// branch only fires on an error, so the empty id travels on and fails later as
+// an internal error about an objective nobody asked for. Naming a real objective
+// makes a lasting failure legible, and leaves the reader somewhere they can
+// navigate away from while a transient one clears.
+//
+// The fallback is a single objective rather than the whole list, so a caller
+// cannot pass a candidate set and a list that disagree.
+func chooseObjective(fallback work.Objective, candidates []objectiveCandidate) work.Objective {
+	if len(candidates) == 0 {
+		return fallback
+	}
+	best := candidates[0]
+	for _, candidate := range candidates[1:] {
+		better := candidate.gates > best.gates ||
+			(candidate.gates == best.gates && candidate.items > best.items) ||
+			(candidate.gates == best.gates && candidate.items == best.items &&
+				candidate.objective.UpdatedAt.After(best.objective.UpdatedAt))
+		if better {
+			best = candidate
 		}
 	}
-	return best.ID, nil
+	return best.objective
 }
 
 func buildObjectivesResponse(ctx context.Context, service *app.Service, workspaceID, actorID, currentID string, now time.Time) (ObjectivesResponse, error) {
@@ -177,16 +223,21 @@ func buildObjectivesResponse(ctx context.Context, service *app.Service, workspac
 	if err != nil {
 		return ObjectivesResponse{}, err
 	}
-	objectives := objectivesFromItems(items)
+	// Read the objectives rather than deriving them from the items: an objective
+	// with none is exactly the one a person has just created and wants to switch
+	// to, and deriving hid it until its first item existed.
+	objectives, err := service.ListObjectives(ctx)
+	if err != nil {
+		return ObjectivesResponse{}, err
+	}
 	al := &actorLiveness{lastCallAt: map[string]time.Time{}, now: now}
 	resp := ObjectivesResponse{WorkspacePath: workspaceID, ActorID: actorID}
+	itemCounts := map[string]int{}
+	for _, item := range items {
+		itemCounts[item.Objective.ID]++
+	}
 	for _, obj := range objectives {
-		itemCount := 0
-		for _, item := range items {
-			if item.Objective.ID == obj.ID {
-				itemCount++
-			}
-		}
+		itemCount := itemCounts[obj.ID]
 		objCtx, err := service.GetObjectiveContext(ctx, obj.ID)
 		if err != nil {
 			return ObjectivesResponse{}, err
@@ -370,6 +421,20 @@ func buildCard(item ports.WorkItemContext, gatedWorkItem map[string]Gate, readyI
 	if gate, ok := gatedWorkItem[wi.ID]; ok {
 		card.GateID = gate.ID
 		card.Blocker = &CardBlocker{Code: "gated", Label: "gated · " + gate.ID + " needs you"}
+	} else if len(item.BlockingQuestions) > 0 && wi.ExecutionStatus != work.StatusDone && wi.ExecutionStatus != work.StatusCancelled {
+		// A question holding the item is a different thing to wait on than a
+		// prerequisite item, and the person reading the card resolves it
+		// differently, so it is named rather than folded into dependencies.
+		question := item.BlockingQuestions[0]
+		label := "blocked · question: " + truncate(question.Text, 60)
+		if more := len(item.BlockingQuestions) - 1; more > 0 {
+			label += fmt.Sprintf(" (+%d more)", more)
+		}
+		card.Blocker = &CardBlocker{Code: "blocked_question", Label: label}
+	} else if evidence, ok := firstUnsatisfiedReview(item.ReviewEvidence); ok && wi.ExecutionStatus == work.StatusReview {
+		// An item in review whose declared review is missing, failed or stale
+		// cannot reach done; saying which, on the card, is the point of deriving it.
+		card.Blocker = &CardBlocker{Code: "review_evidence", Label: "done waits on review · " + evidence.Requirement.CriterionRef + " " + string(evidence.State)}
 	} else if wi.CommitmentState == work.ItemAccepted && objective.Phase == work.ObjectiveExecution &&
 		wi.ExecutionStatus != work.StatusDone && wi.ExecutionStatus != work.StatusCancelled && !readyIDs[wi.ID] {
 		card.Blocker = &CardBlocker{Code: "blocked_dependency", Label: "blocked · waiting on dependencies"}
@@ -378,7 +443,11 @@ func buildCard(item ports.WorkItemContext, gatedWorkItem map[string]Gate, readyI
 	required := 0
 	passed := 0
 	for _, ac := range item.AcceptanceCriteria {
-		if !ac.Required {
+		// A superseded criterion is a condition nobody stands behind any more.
+		// Counting it made superseding one move the card away from done, which
+		// is exactly backwards: describing the work more accurately does not
+		// make it less finished.
+		if !ac.Required || !ac.Status.Active() {
 			continue
 		}
 		required++
@@ -455,4 +524,13 @@ func phaseNote(phase work.ObjectivePhase) string {
 	default:
 		return ""
 	}
+}
+
+func firstUnsatisfiedReview(evidence []work.ReviewEvidence) (work.ReviewEvidence, bool) {
+	for _, item := range evidence {
+		if item.State != work.ReviewEvidenceSatisfied {
+			return item, true
+		}
+	}
+	return work.ReviewEvidence{}, false
 }

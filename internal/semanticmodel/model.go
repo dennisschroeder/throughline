@@ -32,6 +32,7 @@ type Relation struct {
 type Lifecycle struct {
 	ID          string      `json:"id"`
 	Entity      string      `json:"entity"`
+	Kinds       []string    `json:"kinds,omitempty"`
 	States      []string    `json:"states"`
 	Transitions [][2]string `json:"transitions"`
 	ResumeRule  string      `json:"resume_rule,omitempty"`

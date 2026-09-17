@@ -34,6 +34,7 @@ type Repository interface {
 	CreateQuestion(context.Context, work.Question) error
 	Question(ctx context.Context, id string) (work.Question, error)
 	UpdateQuestion(ctx context.Context, question work.Question, expectedVersion int) error
+	CreateQuestionBlock(ctx context.Context, questionID, workItemID, actorID string, createdAt time.Time) error
 	CreateDecision(context.Context, work.Decision) error
 	Decision(ctx context.Context, id string) (work.Decision, error)
 	UpdateDecision(context.Context, work.Decision) error
@@ -53,7 +54,9 @@ type Repository interface {
 	WorkItemParentCreatesCycle(ctx context.Context, workItemID, parentID string) (bool, error)
 	CreateAcceptanceCriterion(context.Context, work.AcceptanceCriterion) error
 	AcceptanceCriterion(ctx context.Context, id string) (work.AcceptanceCriterion, error)
+	ListAcceptanceCriteria(ctx context.Context, workItemID string) ([]work.AcceptanceCriterion, error)
 	UpdateAcceptanceCriterion(context.Context, work.AcceptanceCriterion) error
+	SupersedeAcceptanceCriterion(context.Context, work.AcceptanceCriterion) error
 	AcceptanceCriteriaSatisfied(ctx context.Context, workItemID string) (bool, error)
 	CreateDependency(context.Context, work.Dependency) error
 	DeleteDependency(ctx context.Context, workItemID, dependsOnItemID string, kind work.DependencyKind) error
@@ -120,6 +123,7 @@ type Repository interface {
 	UpdateOutputRevisionAcceptance(context.Context, output.OutputRevision) error
 	CreateValidationRecord(context.Context, output.ValidationRecord) error
 	ValidationRecords(ctx context.Context, outputRevisionID string) ([]output.ValidationRecord, error)
+	ReviewEvidence(ctx context.Context, item work.WorkItem) ([]work.ReviewEvidence, error)
 	CreateOutputRequirement(context.Context, output.OutputRequirement) error
 	OutputRequirementsSatisfied(ctx context.Context, workItemID string) (bool, error)
 	ExpectedOutputsSatisfied(ctx context.Context, workItemID string) (bool, error)
@@ -129,9 +133,11 @@ type Store interface {
 	WithinTransaction(context.Context, func(Repository) error) error
 	GetWorkItemContext(ctx context.Context, id string) (WorkItemContext, error)
 	ListWorkItemContexts(ctx context.Context) ([]WorkItemContext, error)
+	ListObjectives(ctx context.Context) ([]work.Objective, error)
 	GetObjectiveContext(ctx context.Context, id string) (ObjectiveContext, error)
 	SelectObjectiveContext(ctx context.Context, query ObjectiveContextSelectionQuery) (ObjectiveContextSelection, error)
 	ListOutputProfiles(ctx context.Context) ([]output.Profile, error)
+	ListQuestionsNeedingAttention(ctx context.Context) ([]work.Question, error)
 	ListReadyWork(ctx context.Context) ([]ReadyWorkItem, error)
 	ListReadyWorkForActor(ctx context.Context, actorID string) ([]ReadyWorkItem, error)
 	ListActivity(ctx context.Context, filter ActivityFilter) ([]work.Activity, error)
@@ -154,6 +160,10 @@ type WorkItemContext struct {
 	Progress             []work.ProgressEntry
 	Artifacts            []output.Artifact
 	ExternalActions      []ExternalActionDetail
+	// BlockingQuestions are the unsharp or open questions holding this item.
+	BlockingQuestions []work.Question
+	// ReviewEvidence says how each review the item declares currently stands.
+	ReviewEvidence []work.ReviewEvidence
 }
 
 type OutputRevisionDetail struct {

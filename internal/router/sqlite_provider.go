@@ -28,7 +28,7 @@ func (SQLiteProvider) Open(ctx context.Context, target registry.WorkspaceTarget)
 	if workspace.Config.WorkspaceID != target.WorkspaceID {
 		return ProviderHandle{}, fmt.Errorf("%w: registry and workspace config disagree on workspace_id", registry.ErrWorkspaceRegistryConflict)
 	}
-	if err := os.MkdirAll(filepath.Dir(workspace.DatabasePath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(workspace.DatabasePath), 0o700); err != nil {
 		return ProviderHandle{}, fmt.Errorf("%w: create database directory: %v", ErrProviderUnavailable, err)
 	}
 	database, err := throughlinesqlite.Open(ctx, workspace.DatabasePath)

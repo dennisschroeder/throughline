@@ -107,6 +107,23 @@ func buildGateDetail(ctx context.Context, service *app.Service, kind, id, object
 	return detail, nil
 }
 
+// gateCriterionRows is the evidence a reviewer judges at a gate. A superseded
+// criterion is history: listing it would ask someone to weigh a condition
+// nobody stands behind any more.
+func gateCriterionRows(item *ports.WorkItemContext) []CriterionRow {
+	if item == nil {
+		return nil
+	}
+	var rows []CriterionRow
+	for _, ac := range item.AcceptanceCriteria {
+		if !ac.Status.Active() {
+			continue
+		}
+		rows = append(rows, CriterionRow{Text: ac.Text, Passed: ac.Status == work.AcceptanceSatisfied, Status: string(ac.Status)})
+	}
+	return rows
+}
+
 func activityRows(activity []work.Activity, entityID string, now time.Time, limit int) []ActivityRow {
 	var rows []ActivityRow
 	for i := len(activity) - 1; i >= 0 && len(rows) < limit; i-- {
@@ -188,16 +205,21 @@ func questionGateSections(objCtx ports.ObjectiveContext, gate Gate, activity []w
 		}
 	}
 	ask := fmt.Sprintf("Answer or waive: %q. Waiving requires a rationale and leaves the question open-ended for whatever proceeds without it.", gate.Title)
+	if question != nil && question.Status == work.QuestionUnsharp {
+		ask = fmt.Sprintf("Unsharp: %q. It cannot be answered until someone phrases it with sharpen_question; waiving requires a rationale.", gate.Title)
+	}
 	meta := "open"
-	if question != nil && question.RequiresHumanAttention {
-		meta = "flagged for human attention"
+	attention := string(work.AttentionNone)
+	if question != nil {
+		meta = string(question.Status)
+		attention = string(question.AttentionState)
 	}
 	evidence := Evidence{Label: "Evidence", Meta: meta, Kind: "text", Text: gate.Title}
 	facts := []Fact{
 		{"target", gate.TargetID},
 		{"version", fmt.Sprint(gate.ExpectedVersion)},
 		{"requester", gate.Requester + " · " + ageLabel(parseTime(gate.RequestedAt), now)},
-		{"attention state", meta},
+		{"attention state", attention},
 		{"profile", "-"},
 		{"objective", objCtx.Objective.Title},
 		{"supersedes", "-"},
@@ -214,12 +236,7 @@ func attentionGateSections(items []ports.WorkItemContext, gate Gate, activity []
 		}
 	}
 	ask := fmt.Sprintf("This item %s. Acknowledge to clear the attention flag once you've looked.", gate.EvidenceHint)
-	var criteria []CriterionRow
-	if item != nil {
-		for _, ac := range item.AcceptanceCriteria {
-			criteria = append(criteria, CriterionRow{Text: ac.Text, Passed: ac.Status == work.AcceptanceSatisfied, Status: string(ac.Status)})
-		}
-	}
+	criteria := gateCriterionRows(item)
 	evidence := Evidence{Label: "Evidence", Meta: gate.EvidenceHint, Kind: "criteria", Criteria: criteria}
 	claim := "-"
 	if item != nil {

@@ -122,6 +122,8 @@ button:focus-visible, [tabindex]:focus-visible, a:focus-visible{
 .b.g{background:#fff}
 .b.danger{border-color:var(--color-accent);color:var(--color-accent-800)}
 .b:disabled{opacity:.45;cursor:not-allowed}
+.mark.superseded{opacity:.5}
+.criteria-note{margin-top:2px}
 
 .id-copy{
   border:1px solid var(--color-neutral-400);background:#fff;color:var(--color-neutral-700);
@@ -285,11 +287,20 @@ function announce(text){
 /* ------------------------------------------------------------------------------------
  * Bootstrapping and polling.
  * ---------------------------------------------------------------------------------- */
-function boot(){
-  api("/dashboard/api/v1/objectives").then(function(resp){
+function fetchObjectives(){
+  var qs = S.objectiveId ? "?objective_id=" + encodeURIComponent(S.objectiveId) : "";
+  return api("/dashboard/api/v1/objectives" + qs).then(function(resp){
     S.objectives = resp;
-    var params = new URLSearchParams(window.location.search);
-    S.objectiveId = params.get("objective_id") || null;
+  });
+}
+
+function boot(){
+  // The selection has to be known before the switcher is fetched: the server
+  // marks the current row from the objective_id it is given, so fetching first
+  // left every row unmarked until some unrelated change triggered a refresh.
+  var params = new URLSearchParams(window.location.search);
+  S.objectiveId = params.get("objective_id") || null;
+  fetchObjectives().then(function(){
     return loadLoop();
   }).catch(function(err){
     S.loadError = String(err.message || err);
@@ -365,7 +376,14 @@ function pollOnce(){
         S.frozenGateOrder = S.snapshot.gates.map(function(g){ return gateKey(g.kind, g.id); });
       }
       var qs2 = "?objective_id=" + encodeURIComponent(S.objectiveId);
-      api("/dashboard/api/v1/loop" + qs2).then(function(snap){ applySnapshot(snap); schedulePoll(); })
+      // Refresh the switcher alongside the snapshot. It used to be fetched once at
+      // boot, so an objective created while the page was open never appeared in it,
+      // and the item and gate counts of the ones that were listed went stale.
+      // The switcher is fetched first and stored without rendering, so a tick
+      // rebuilds the DOM once rather than twice.
+      fetchObjectives().catch(function(){}).then(function(){
+        return api("/dashboard/api/v1/loop" + qs2);
+      }).then(function(snap){ applySnapshot(snap); schedulePoll(); })
         .catch(function(){ schedulePoll(); });
       return;
     }
@@ -820,7 +838,19 @@ function renderItemDrawer(detail){
   if (detail.acceptance_criteria && detail.acceptance_criteria.length) {
     html += "<div class=\"drawer-section\"><div class=\"section-lbl\">Acceptance criteria</div>";
     detail.acceptance_criteria.forEach(function(c){
-      html += "<div class=\"criteria-row\"><span class=\"mark" + (c.status === "satisfied" ? " pass" : "") + "\">" + (c.status === "satisfied" ? "✓" : "·") + "</span><span>" + esc(c.text) + "</span></div>";
+      // A superseded criterion used to render exactly like a pending one, so a
+      // replaced condition and its replacement sat side by side with nothing
+      // telling them apart. It is struck through and carries the reason.
+      var superseded = c.status === "superseded";
+      var mark = c.status === "satisfied" ? "✓" : (superseded ? "×" : (c.status === "waived" ? "~" : "·"));
+      var cls = "mark" + (c.status === "satisfied" ? " pass" : "") + (superseded ? " superseded" : "");
+      var text = superseded
+        ? "<s>" + esc(c.text) + "</s>"
+        : esc(c.text);
+      var note = "";
+      if (superseded) note = "<div class=\"m criteria-note\">replaced</div>";
+      else if (c.supersession_reason) note = "<div class=\"m criteria-note\">replaces an earlier condition · " + esc(c.supersession_reason) + "</div>";
+      html += "<div class=\"criteria-row\"><span class=\"" + cls + "\">" + mark + "</span><span>" + text + note + "</span></div>";
     });
     html += "</div>";
   }
@@ -837,6 +867,16 @@ function renderItemDrawer(detail){
     html += "<div class=\"drawer-section\"><div class=\"section-lbl\">Dependencies</div>";
     (detail.depends_on || []).forEach(function(d){ html += "<div class=\"dep-row\"><span class=\"rel\">depends on</span><span>" + esc(d.title || d.item_id) + "</span><span class=\"mini\">" + esc(d.execution_status || "") + "</span></div>"; });
     (detail.required_by || []).forEach(function(d){ html += "<div class=\"dep-row\"><span class=\"rel\">required by</span><span>" + esc(d.title || d.item_id) + "</span><span class=\"mini\">" + esc(d.execution_status || "") + "</span></div>"; });
+    html += "</div>";
+  }
+  if (detail.review_evidence && detail.review_evidence.length) {
+    html += "<div class=\"drawer-section\"><div class=\"section-lbl\">Required reviews</div>";
+    detail.review_evidence.forEach(function(r){ html += "<div class=\"dep-row\"><span class=\"rel\">" + esc(r.validator_kind) + "</span><span>" + esc(r.criterion_ref) + "</span><span class=\"mini\">" + esc(r.state) + (r.degraded ? " · degraded" : "") + "</span></div>"; });
+    html += "</div>";
+  }
+  if (detail.blocking_questions && detail.blocking_questions.length) {
+    html += "<div class=\"drawer-section\"><div class=\"section-lbl\">Blocking questions</div>";
+    detail.blocking_questions.forEach(function(q){ html += "<div class=\"dep-row\"><span class=\"rel\">held by " + esc(q.status) + " question</span><span>" + esc(q.text) + "</span><span class=\"mini\">" + esc(q.attention_state) + "</span></div>"; });
     html += "</div>";
   }
   if (detail.external_actions && detail.external_actions.length) {
@@ -895,7 +935,15 @@ function wireApp(){
       S.tab = null;
       S.selection = null;
       window.history.replaceState(null, "", "?objective_id=" + encodeURIComponent(S.objectiveId));
-      loadLoop();
+      // Refresh the switcher too: its rows carry the current marker, and without
+      // this the dot stays on the objective just navigated away from until some
+      // unrelated workspace change happens to trigger a poll refresh. Fetched
+      // first and rendered once, like the poll path, so the switcher and the
+      // snapshot can never describe different objectives.
+      fetchObjectives().then(loadLoop).catch(function(err){
+        S.loadError = String(err.message || err);
+        render();
+      });
     });
   });
 

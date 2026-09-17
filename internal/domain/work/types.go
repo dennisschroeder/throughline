@@ -59,6 +59,44 @@ const (
 	PriorityUrgent Priority = "urgent"
 )
 
+// MeasureBasis says whether a Measure's value was measured after the fact or
+// estimated in advance; it does not itself distinguish scope from appetite.
+type MeasureBasis string
+
+const (
+	MeasureEstimated MeasureBasis = "estimated"
+	MeasureMeasured  MeasureBasis = "measured"
+)
+
+// Measure is a quantity the model stores and never interprets: Unit is an
+// opaque string (tokens, euros, days, pages, ...), never compared across
+// units and never gated on. The zero value means "no measure recorded" — a
+// WorkItem's coarse EstimatedScope hint and an Objective's Appetite (what the
+// work is worth spending, set before it starts) both use this same shape,
+// answering different questions rather than replacing one another.
+type Measure struct {
+	Value float64
+	Unit  string
+	Basis MeasureBasis
+}
+
+func (m Measure) isZero() bool {
+	return m == Measure{}
+}
+
+func validMeasure(m Measure) bool {
+	if m.isZero() {
+		return true
+	}
+	if strings.TrimSpace(m.Unit) == "" {
+		return false
+	}
+	if m.Value < 0 {
+		return false
+	}
+	return m.Basis == MeasureEstimated || m.Basis == MeasureMeasured
+}
+
 type EstimatedScope string
 
 const (
@@ -104,10 +142,24 @@ type Objective struct {
 	DesiredOutcome string
 	Phase          ObjectivePhase
 	PriorPhase     ObjectivePhase
-	UpdatedBy      string
-	Version        int
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	Priority       Priority
+	Appetite       Measure
+	// LastPhaseTransition is why the objective is in its phase: the most recent
+	// transition's edge, reason, actor and time. Nil for an objective never
+	// transitioned since reasons began to be stored.
+	LastPhaseTransition *PhaseTransition
+	UpdatedBy           string
+	Version             int
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+type PhaseTransition struct {
+	From    ObjectivePhase
+	To      ObjectivePhase
+	Reason  string
+	ActorID string
+	At      time.Time
 }
 
 type Plan struct {
@@ -140,15 +192,19 @@ type WorkItem struct {
 	ExecutionStatus   ExecutionStatus
 	Priority          Priority
 	EstimatedScope    EstimatedScope
+	Measure           Measure
 	ExecutionPolicy   ExecutionPolicy
 	RequiredActorKind ActorKind
 	AttentionState    AttentionState
-	Version           int
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	// ReviewRequirements are the reviews done waits for; none means the gate
+	// has nothing to check.
+	ReviewRequirements []ReviewRequirement
+	Version            int
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
-func NewObjective(id, key, title, description, desiredOutcome string, phase ObjectivePhase, now time.Time) (Objective, error) {
+func NewObjective(id, key, title, description, desiredOutcome string, phase ObjectivePhase, priority Priority, now time.Time) (Objective, error) {
 	objective := Objective{
 		ID:             strings.TrimSpace(id),
 		Key:            strings.TrimSpace(key),
@@ -156,6 +212,7 @@ func NewObjective(id, key, title, description, desiredOutcome string, phase Obje
 		Description:    strings.TrimSpace(description),
 		DesiredOutcome: strings.TrimSpace(desiredOutcome),
 		Phase:          phase,
+		Priority:       priority,
 		Version:        1,
 		CreatedAt:      now.UTC(),
 		UpdatedAt:      now.UTC(),
@@ -172,6 +229,12 @@ func (o Objective) Validate() error {
 	}
 	if !validObjectivePhase(o.Phase) {
 		return fmt.Errorf("objective: invalid phase %q", o.Phase)
+	}
+	if !validPriority(o.Priority) {
+		return fmt.Errorf("objective: invalid priority %q", o.Priority)
+	}
+	if !validMeasure(o.Appetite) {
+		return fmt.Errorf("objective: invalid appetite %+v", o.Appetite)
 	}
 	return nil
 }
@@ -246,6 +309,9 @@ func (w WorkItem) Validate() error {
 	}
 	if !validEstimatedScope(w.EstimatedScope) {
 		return fmt.Errorf("work item: invalid estimated scope %q", w.EstimatedScope)
+	}
+	if !validMeasure(w.Measure) {
+		return fmt.Errorf("work item: invalid measure %+v", w.Measure)
 	}
 	if !validExecutionPolicy(w.ExecutionPolicy) {
 		return fmt.Errorf("work item: invalid execution policy %q", w.ExecutionPolicy)

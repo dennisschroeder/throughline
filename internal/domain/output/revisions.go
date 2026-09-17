@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 type Artifact struct {
 	ID         string
 	WorkItemID string
+	Version    int
 	Kind       string
 	URI        string
 	Title      string
@@ -32,13 +34,11 @@ func NewArtifact(artifact Artifact, now time.Time) (Artifact, error) {
 	if artifact.ID == "" || artifact.WorkItemID == "" || artifact.Kind == "" || artifact.URI == "" || artifact.AttachedBy == "" {
 		return Artifact{}, errors.New("artifact requires id, work item id, kind, URI, and attaching actor")
 	}
-	if strings.ContainsAny(artifact.URI, " \t\r\n") {
-		return Artifact{}, errors.New("artifact URI must be an absolute URI")
+	normalizedURI, err := normalizeArtifactURI(artifact.URI)
+	if err != nil {
+		return Artifact{}, err
 	}
-	parsed, err := url.Parse(artifact.URI)
-	if err != nil || !parsed.IsAbs() {
-		return Artifact{}, errors.New("artifact URI must be an absolute URI")
-	}
+	artifact.URI = normalizedURI
 	if len(artifact.Metadata) == 0 {
 		artifact.Metadata = json.RawMessage(`{}`)
 	}
@@ -47,7 +47,87 @@ func NewArtifact(artifact Artifact, now time.Time) (Artifact, error) {
 	}
 	artifact.Metadata = append(json.RawMessage(nil), artifact.Metadata...)
 	artifact.CreatedAt = now.UTC()
+	artifact.Version = 1
 	return artifact, nil
+}
+
+// workspaceURIScheme marks a reference as relative to the workspace's canonical root
+// explicitly, rather than inferring it from a URI that happens to lack a scheme — a
+// malformed or typo'd absolute URI must fail loudly, not silently become a path.
+const workspaceURIScheme = "workspace"
+
+// normalizeArtifactURI validates and canonicalizes an artifact reference. A workspace:
+// URI names a path relative to canonical_root, cleaned and checked to stay inside it;
+// Throughline never resolves canonical_root itself, since that fact lives in the
+// registry, a layer internal/domain cannot import. Every other scheme must remain an
+// absolute URI, as before, with its path component cleaned the same way. Cleaning both
+// forms here — the one place every artifact URI passes through before being stored or
+// compared — is what lets the existing exact-match ArtifactByURI lookup recognize two
+// differently-spelled references to the same file as the same reference.
+func normalizeArtifactURI(raw string) (string, error) {
+	if strings.ContainsAny(raw, " \t\r\n") {
+		return "", errors.New("artifact URI must be an absolute URI")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", errors.New("artifact URI must be an absolute URI")
+	}
+	if parsed.Scheme == workspaceURIScheme {
+		// A host, userinfo, query, or fragment would silently vanish from the
+		// reconstructed workspace:<path> form below, since nothing in this
+		// branch carries them through — two references differing only in a
+		// query string would then normalize to the same string and collide
+		// under the dedup lookup despite naming distinct things the caller
+		// wrote down on purpose. Rejecting them is the same "fail loudly
+		// rather than silently reinterpret" rule the scheme itself exists
+		// to enforce, not merely an omission to patch over.
+		if parsed.Host != "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return "", errors.New("workspace-relative artifact URI must be a bare path: no host, userinfo, query, or fragment")
+		}
+		// The opaque spelling (workspace:a%3Fb.md) and the hierarchical one
+		// (workspace:///a%3Fb.md) reach here through different net/url decoding
+		// rules — Path is already percent-decoded, Opaque is taken verbatim — so
+		// both are unescaped to the same literal characters before path.Clean
+		// runs, or the two spellings of one file would clean and compare
+		// unequal.
+		var relative string
+		if parsed.Opaque != "" {
+			decoded, err := url.PathUnescape(parsed.Opaque)
+			if err != nil {
+				return "", errors.New("workspace-relative artifact URI is not validly percent-encoded")
+			}
+			// The hierarchical spelling's Path is always leading-slash
+			// absolute and TrimPrefix'd below; a decoded opaque spelling
+			// (workspace:%2Fdocs) must lose the same leading slash, or the
+			// two spellings of one path normalize to different strings and
+			// the opaque form round-trips as its own hierarchical output,
+			// which then normalizes to something shorter than itself.
+			relative = strings.TrimPrefix(decoded, "/")
+		} else {
+			relative = strings.TrimPrefix(parsed.Path, "/")
+		}
+		cleaned := path.Clean(relative)
+		if cleaned == "" || cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+			return "", errors.New("workspace-relative artifact URI must name a path inside the workspace")
+		}
+		// Re-escaping segment by segment, rather than writing the decoded
+		// literal straight back out, is what makes the canonical form
+		// idempotent: a literal "?" or "#" in a real filename would otherwise
+		// reparse as a query or fragment the next time this same function sees
+		// its own output, tripping the rejection three lines above.
+		segments := strings.Split(cleaned, "/")
+		for index, segment := range segments {
+			segments[index] = url.PathEscape(segment)
+		}
+		return workspaceURIScheme + ":" + strings.Join(segments, "/"), nil
+	}
+	if !parsed.IsAbs() {
+		return "", errors.New("artifact URI must be an absolute URI")
+	}
+	if parsed.Path != "" {
+		parsed.Path = path.Clean(parsed.Path)
+	}
+	return parsed.String(), nil
 }
 
 type RevisionAcceptanceState string
@@ -71,6 +151,7 @@ type OutputRevision struct {
 	ExpectedOutputID string
 	OutputProfileID  string
 	Revision         int
+	StateVersion     int
 	Artifacts        []RevisionArtifact
 	ContentDigest    string
 	AcceptanceState  RevisionAcceptanceState
@@ -120,6 +201,7 @@ func NewOutputRevision(id string, expected ExpectedOutput, profile Profile, revi
 		ExpectedOutputID: expected.ID,
 		OutputProfileID:  profile.ID,
 		Revision:         revision,
+		StateVersion:     1,
 		Artifacts:        bindings,
 		ContentDigest:    strings.TrimSpace(contentDigest),
 		AcceptanceState:  RevisionProduced,
@@ -150,8 +232,18 @@ const (
 )
 
 type ValidationRecord struct {
-	ID                 string
-	OutputRevisionID   string
+	ID string
+	// Exactly one subject is set: the output revision an artefact validation
+	// checked, or the work item a review checked.
+	OutputRevisionID string
+	WorkItemID       string
+	// SubjectSequence is the activity sequence current when a work-item review
+	// was recorded; work recorded on the item after it makes the review stale.
+	SubjectSequence int64
+	// Degraded marks a pass that ran with less than its intended strength. It
+	// is recorded for readers and never changes what the record satisfies.
+	Degraded           bool
+	Version            int
 	CriterionRef       string
 	ValidatorKind      ValidatorKind
 	Verdict            ValidationVerdict
@@ -163,12 +255,47 @@ type ValidationRecord struct {
 }
 
 func NewValidationRecord(id string, revision OutputRevision, criterionRef string, kind ValidatorKind, verdict ValidationVerdict, score *float64, verifierActorID, evidenceArtifactID string, details json.RawMessage, now time.Time) (ValidationRecord, error) {
+	if revision.ID == "" {
+		return ValidationRecord{}, errors.New("validation record requires id, output revision, and criterion reference")
+	}
+	record, err := newValidationRecord(id, criterionRef, kind, verdict, score, verifierActorID, evidenceArtifactID, details, now)
+	if err != nil {
+		return ValidationRecord{}, err
+	}
+	record.OutputRevisionID = revision.ID
+	return record, nil
+}
+
+// NewWorkItemValidationRecord records a review of a work item itself, for
+// work whose result is not an output revision.
+func NewWorkItemValidationRecord(id, workItemID string, subjectSequence int64, criterionRef string, kind ValidatorKind, verdict ValidationVerdict, score *float64, verifierActorID, evidenceArtifactID string, details json.RawMessage, degraded bool, now time.Time) (ValidationRecord, error) {
+	workItemID = strings.TrimSpace(workItemID)
+	if workItemID == "" {
+		return ValidationRecord{}, errors.New("work item validation requires a work item")
+	}
+	if subjectSequence < 0 {
+		return ValidationRecord{}, errors.New("work item validation subject sequence cannot be negative")
+	}
+	if kind == ValidatorSuccessorUse {
+		return ValidationRecord{}, errors.New("successor-use evidence applies to output revisions, not work items")
+	}
+	record, err := newValidationRecord(id, criterionRef, kind, verdict, score, verifierActorID, evidenceArtifactID, details, now)
+	if err != nil {
+		return ValidationRecord{}, err
+	}
+	record.WorkItemID = workItemID
+	record.SubjectSequence = subjectSequence
+	record.Degraded = degraded
+	return record, nil
+}
+
+func newValidationRecord(id, criterionRef string, kind ValidatorKind, verdict ValidationVerdict, score *float64, verifierActorID, evidenceArtifactID string, details json.RawMessage, now time.Time) (ValidationRecord, error) {
 	id = strings.TrimSpace(id)
 	criterionRef = strings.TrimSpace(criterionRef)
 	verifierActorID = strings.TrimSpace(verifierActorID)
 	evidenceArtifactID = strings.TrimSpace(evidenceArtifactID)
-	if id == "" || revision.ID == "" || criterionRef == "" {
-		return ValidationRecord{}, errors.New("validation record requires id, output revision, and criterion reference")
+	if id == "" || criterionRef == "" {
+		return ValidationRecord{}, errors.New("validation record requires id, subject, and criterion reference")
 	}
 	if !kind.supported() {
 		return ValidationRecord{}, fmt.Errorf("unsupported validator kind %q", kind)
@@ -210,7 +337,7 @@ func NewValidationRecord(id string, revision OutputRevision, criterionRef string
 	}
 	return ValidationRecord{
 		ID:                 id,
-		OutputRevisionID:   revision.ID,
+		Version:            1,
 		CriterionRef:       criterionRef,
 		ValidatorKind:      kind,
 		Verdict:            verdict,
@@ -258,6 +385,7 @@ func AcceptOutputRevision(revision OutputRevision, expected ExpectedOutput, prof
 	accepted := revision
 	accepted.Artifacts = append([]RevisionArtifact(nil), revision.Artifacts...)
 	accepted.AcceptanceState = RevisionAccepted
+	accepted.StateVersion++
 	accepted.AcceptedBy = acceptedBy
 	accepted.AcceptedAt = now.UTC()
 	accepted.AcceptanceReason = reason
@@ -372,6 +500,11 @@ func latestValidationsForRevision(revisionID string, validations []ValidationRec
 	return latest
 }
 
+// Supported reports whether the kind is one Throughline records.
+func (kind ValidatorKind) Supported() bool {
+	return kind.supported()
+}
+
 func (kind ValidatorKind) supported() bool {
 	switch kind {
 	case ValidatorStructure, ValidatorSchema, ValidatorEvaluation, ValidatorProvenance, ValidatorHumanReview, ValidatorPolicy, ValidatorProbe, ValidatorSuccessorUse:
@@ -393,6 +526,7 @@ func (verdict ValidationVerdict) supported() bool {
 type OutputRequirement struct {
 	ID                       string
 	WorkItemID               string
+	Version                  int
 	RequiredOutputRevisionID string
 	RequiredProfileName      string
 	VersionConstraint        string
@@ -405,6 +539,7 @@ func NewExactOutputRequirement(id, workItemID string, revision OutputRevision, r
 		ID:                       strings.TrimSpace(id),
 		WorkItemID:               strings.TrimSpace(workItemID),
 		RequiredOutputRevisionID: strings.TrimSpace(revision.ID),
+		Version:                  1,
 		Required:                 required,
 		Note:                     strings.TrimSpace(note),
 	}
@@ -418,6 +553,7 @@ func NewProfileOutputRequirement(id, workItemID, profileName, versionConstraint 
 	requirement := OutputRequirement{
 		ID:                  strings.TrimSpace(id),
 		WorkItemID:          strings.TrimSpace(workItemID),
+		Version:             1,
 		RequiredProfileName: strings.TrimSpace(profileName),
 		VersionConstraint:   strings.TrimSpace(versionConstraint),
 		Required:            required,

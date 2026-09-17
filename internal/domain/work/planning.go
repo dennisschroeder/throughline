@@ -1,6 +1,7 @@
 package work
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -16,6 +17,13 @@ const (
 	ContextFinding       ContextKind = "finding"
 	ContextRisk          ContextKind = "risk"
 	ContextSuccessMetric ContextKind = "success_metric"
+	// ContextNonGoal records something the work deliberately excludes: a
+	// constraint restricts how the work is done, a non-goal says what it is
+	// not. ContextAffected records who or what surface the work lands on —
+	// deliberately one kind for both audience and blast radius, since the
+	// boundary between a party and a surface cannot be applied reliably.
+	ContextNonGoal  ContextKind = "non_goal"
+	ContextAffected ContextKind = "affected"
 )
 
 type ContextStatus string
@@ -87,7 +95,7 @@ func validContextTransition(kind ContextKind, current, target ContextStatus) boo
 			(current == ContextValidating && (target == ContextValidated || target == ContextInvalidated)) ||
 			(current == ContextUntested && target == ContextWaived) ||
 			(current == ContextValidating && target == ContextWaived)
-	case ContextRequirement, ContextConstraint, ContextRisk:
+	case ContextRequirement, ContextConstraint, ContextRisk, ContextNonGoal, ContextAffected:
 		return (current == ContextProposed && target == ContextAccepted) ||
 			(current == ContextAccepted && target == ContextWaived)
 	default:
@@ -125,16 +133,21 @@ func validContextStatus(kind ContextKind, status ContextStatus) bool {
 		return status == ContextRecorded || status == ContextSuperseded
 	case ContextSuccessMetric:
 		return status == ContextUntested || status == ContextValidating || status == ContextValidated || status == ContextInvalidated || status == ContextSuperseded || status == ContextWaived
-	case ContextRequirement, ContextConstraint, ContextRisk:
+	case ContextRequirement, ContextConstraint, ContextRisk, ContextNonGoal, ContextAffected:
 		return status == ContextProposed || status == ContextAccepted || status == ContextSuperseded || status == ContextWaived
 	default:
 		return false
 	}
 }
 
-func TransitionObjective(objective Objective, target ObjectivePhase, reason string, now time.Time) (Objective, error) {
-	if strings.TrimSpace(reason) == "" {
+func TransitionObjective(objective Objective, target ObjectivePhase, reason, actorID string, now time.Time) (Objective, error) {
+	reason = strings.TrimSpace(reason)
+	actorID = strings.TrimSpace(actorID)
+	if reason == "" {
 		return Objective{}, errors.New("objective transition requires a reason")
+	}
+	if actorID == "" {
+		return Objective{}, errors.New("objective transition requires an actor")
 	}
 	if !validObjectiveTransition(objective, target) {
 		return Objective{}, fmt.Errorf("objective cannot transition from %q to %q", objective.Phase, target)
@@ -144,7 +157,9 @@ func TransitionObjective(objective Objective, target ObjectivePhase, reason stri
 	} else if objective.Phase == ObjectivePaused {
 		objective.PriorPhase = ""
 	}
+	objective.LastPhaseTransition = &PhaseTransition{From: objective.Phase, To: target, Reason: reason, ActorID: actorID, At: now.UTC()}
 	objective.Phase = target
+	objective.UpdatedBy = actorID
 	objective.Version++
 	objective.UpdatedAt = now.UTC()
 	return objective, nil
@@ -200,24 +215,63 @@ func ReviewPlan(plan Plan, decision PlanCommitment, reviewer, reason string, now
 type QuestionStatus string
 
 const (
+	// QuestionUnsharp is an in-scope area a session can see coming but cannot
+	// yet phrase. Answering every open question must not read as discovery
+	// being complete while such areas remain, so they are a state of their
+	// own rather than an ordinary open question.
+	QuestionUnsharp  QuestionStatus = "unsharp"
 	QuestionOpen     QuestionStatus = "open"
 	QuestionAnswered QuestionStatus = "answered"
 	QuestionWaived   QuestionStatus = "waived"
 )
 
+// Unresolved reports whether the question still holds the work items it
+// blocks.
+func (status QuestionStatus) Unresolved() bool {
+	return status == QuestionUnsharp || status == QuestionOpen
+}
+
 type Question struct {
-	ID                     string
-	ObjectiveID            string
-	WorkItemID             string
-	Text                   string
-	Status                 QuestionStatus
-	Answer                 string
-	RequiresHumanAttention bool
-	Version                int
-	CreatedBy              string
-	ResolvedBy             string
-	CreatedAt              time.Time
-	ResolvedAt             time.Time
+	ID          string
+	ObjectiveID string
+	WorkItemID  string
+	Text        string
+	Status      QuestionStatus
+	Answer      string
+	// AttentionState is stored as given; a boolean derived from it made
+	// needs_human_review and intervention_required indistinguishable.
+	AttentionState AttentionState
+	// BlocksWorkItems are the work items this question holds while it is
+	// unresolved. Links are never removed; resolving the question clears them.
+	BlocksWorkItems []string
+	Version         int
+	CreatedBy       string
+	ResolvedBy      string
+	CreatedAt       time.Time
+	ResolvedAt      time.Time
+}
+
+// UnmarshalJSON upgrades question records stored before AttentionState
+// replaced RequiresHumanAttention, such as idempotency responses replayed
+// after an upgrade: a stored true meant a human had to decide, and a record
+// with neither field means no attention was requested.
+func (question *Question) UnmarshalJSON(data []byte) error {
+	type stored Question
+	var decoded struct {
+		stored
+		RequiresHumanAttention bool
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*question = Question(decoded.stored)
+	if question.AttentionState == "" {
+		question.AttentionState = AttentionNone
+		if decoded.RequiresHumanAttention {
+			question.AttentionState = AttentionNeedsHumanDecision
+		}
+	}
+	return nil
 }
 
 func NewQuestion(question Question, now time.Time) (Question, error) {
@@ -229,9 +283,73 @@ func NewQuestion(question Question, now time.Time) (Question, error) {
 	if question.ID == "" || question.ObjectiveID == "" || question.Text == "" || question.CreatedBy == "" {
 		return Question{}, errors.New("question requires id, objective id, text, and creator")
 	}
-	question.Status = QuestionOpen
+	if question.Status == "" {
+		question.Status = QuestionOpen
+	}
+	if !question.Status.Unresolved() {
+		return Question{}, fmt.Errorf("a new question must be unsharp or open, not %q", question.Status)
+	}
+	if question.AttentionState == "" {
+		question.AttentionState = AttentionNone
+	}
+	if !ValidAttentionState(question.AttentionState) {
+		return Question{}, fmt.Errorf("invalid attention state %q", question.AttentionState)
+	}
+	question.BlocksWorkItems = normalizeBlockedWorkItems(question.BlocksWorkItems, question.WorkItemID)
 	question.Version = 1
 	question.CreatedAt = now.UTC()
+	return question, nil
+}
+
+// normalizeBlockedWorkItems trims and deduplicates the blocked items and adds
+// the question's own work item: a question asked on a work item has always
+// blocked that item, and recording it as a link keeps one blocking path.
+func normalizeBlockedWorkItems(ids []string, own string) []string {
+	seen := map[string]bool{}
+	var result []string
+	for _, id := range append([]string{own}, ids...) {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		result = append(result, id)
+	}
+	return result
+}
+
+// SharpenQuestion records the graduation of an unsharp area into a question
+// that can be answered, replacing the placeholder text with the phrasing.
+func SharpenQuestion(question Question, text string) (Question, error) {
+	text = strings.TrimSpace(text)
+	if question.Status != QuestionUnsharp {
+		return Question{}, errors.New("only unsharp questions can be sharpened")
+	}
+	if text == "" {
+		return Question{}, errors.New("sharpening a question requires its phrased text")
+	}
+	question.Text = text
+	question.Status = QuestionOpen
+	question.Version++
+	return question, nil
+}
+
+// LinkQuestionBlocker makes an unresolved question hold one more work item.
+func LinkQuestionBlocker(question Question, workItemID string) (Question, error) {
+	workItemID = strings.TrimSpace(workItemID)
+	if !question.Status.Unresolved() {
+		return Question{}, errors.New("only an unsharp or open question can block work")
+	}
+	if workItemID == "" {
+		return Question{}, errors.New("blocking link requires a work item")
+	}
+	for _, existing := range question.BlocksWorkItems {
+		if existing == workItemID {
+			return Question{}, errors.New("question already blocks this work item")
+		}
+	}
+	question.BlocksWorkItems = append(append([]string(nil), question.BlocksWorkItems...), workItemID)
+	question.Version++
 	return question, nil
 }
 
@@ -239,7 +357,7 @@ func AnswerQuestion(question Question, answer, actor string, now time.Time) (Que
 	answer = strings.TrimSpace(answer)
 	actor = strings.TrimSpace(actor)
 	if question.Status != QuestionOpen {
-		return Question{}, errors.New("only open questions can be answered")
+		return Question{}, errors.New("only open questions can be answered; sharpen an unsharp question first")
 	}
 	if answer == "" || actor == "" {
 		return Question{}, errors.New("question answer requires text and actor")
@@ -255,8 +373,8 @@ func AnswerQuestion(question Question, answer, actor string, now time.Time) (Que
 func WaiveQuestion(question Question, reason, actor string, now time.Time) (Question, error) {
 	reason = strings.TrimSpace(reason)
 	actor = strings.TrimSpace(actor)
-	if question.Status != QuestionOpen {
-		return Question{}, errors.New("only open questions can be waived")
+	if !question.Status.Unresolved() {
+		return Question{}, errors.New("only unsharp or open questions can be waived")
 	}
 	if reason == "" || actor == "" {
 		return Question{}, errors.New("question waiver requires reason and actor")
@@ -281,6 +399,7 @@ type Decision struct {
 	ID           string
 	ObjectiveID  string
 	WorkItemID   string
+	Version      int
 	Title        string
 	Outcome      string
 	Rationale    string
@@ -307,6 +426,7 @@ func NewAcceptedDecision(decision Decision, now time.Time) (Decision, error) {
 	decision.Status = DecisionAccepted
 	decision.DecidedAt = now.UTC()
 	decision.CreatedAt = now.UTC()
+	decision.Version = 1
 	return decision, nil
 }
 
@@ -315,6 +435,7 @@ func SupersedeDecision(decision Decision) (Decision, error) {
 		return Decision{}, errors.New("only accepted decisions can be superseded")
 	}
 	decision.Status = DecisionSuperseded
+	decision.Version++
 	return decision, nil
 }
 

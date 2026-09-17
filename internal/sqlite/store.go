@@ -28,7 +28,11 @@ func (s *Store) WithinTransaction(ctx context.Context, operation func(ports.Repo
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer transaction.Rollback()
-	if err := operation(&transactionRepository{transaction: transaction}); err != nil {
+	repository := &transactionRepository{transaction: transaction}
+	if err := repository.beginEffectCollection(ctx); err != nil {
+		return err
+	}
+	if err := operation(repository); err != nil {
 		return err
 	}
 	if err := transaction.Commit(); err != nil {
@@ -139,7 +143,7 @@ ORDER BY item.updated_at, item.id`, query.ActorID, formatTime(time.Now().UTC()),
 			return err
 		}
 		for _, change := range changes {
-			if change.EntityID == context.Objective.ID || selected[change.WorkItemID] {
+			if (change.ObjectiveID == context.Objective.ID && change.WorkItemID == "") || selected[change.WorkItemID] {
 				result.RecentChanges = append(result.RecentChanges, change)
 			}
 		}
@@ -152,7 +156,10 @@ ORDER BY item.updated_at, item.id`, query.ActorID, formatTime(time.Now().UTC()),
 }
 
 func (s *Store) listRecentActivity(ctx context.Context, reader sqlReader, objectiveID string, workItemIDs map[string]bool, limit int) ([]work.Activity, error) {
-	conditions := []string{"entity_kind = 'objective' AND entity_id = ?"}
+	// Objective-level history (the objective itself, its plans, and questions,
+	// decisions and context recorded against it) is always included; work-item
+	// history only for the selected items.
+	conditions := []string{"objective_id = ? AND work_item_id IS NULL"}
 	arguments := []any{objectiveID}
 	if len(workItemIDs) > 0 {
 		placeholders := make([]string, 0, len(workItemIDs))
@@ -231,7 +238,7 @@ func (s *Store) getWorkItemContext(ctx context.Context, reader sqlReader, id str
 	if err != nil {
 		return ports.WorkItemContext{}, err
 	}
-	criteria, err := s.listAcceptanceCriteria(ctx, reader, item.ID)
+	criteria, err := listAcceptanceCriteria(ctx, reader, item.ID)
 	if err != nil {
 		return ports.WorkItemContext{}, err
 	}
@@ -263,6 +270,14 @@ func (s *Store) getWorkItemContext(ctx context.Context, reader sqlReader, id str
 	if err != nil {
 		return ports.WorkItemContext{}, err
 	}
+	blockingQuestions, err := listBlockingQuestions(ctx, reader, item.ID)
+	if err != nil {
+		return ports.WorkItemContext{}, err
+	}
+	evidence, err := reviewEvidence(ctx, reader, item)
+	if err != nil {
+		return ports.WorkItemContext{}, err
+	}
 	return ports.WorkItemContext{
 		Objective:            objective,
 		Plan:                 plan,
@@ -277,6 +292,8 @@ func (s *Store) getWorkItemContext(ctx context.Context, reader sqlReader, id str
 		Progress:             progress,
 		Artifacts:            artifacts,
 		ExternalActions:      externalActions,
+		BlockingQuestions:    blockingQuestions,
+		ReviewEvidence:       evidence,
 	}, nil
 }
 
@@ -287,14 +304,19 @@ type transactionRepository struct {
 func (r *transactionRepository) CreateObjective(ctx context.Context, objective work.Objective) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO objectives
-  (id, key, title, description, desired_outcome, phase, version, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  (id, key, title, description, desired_outcome, phase, priority, appetite_value, appetite_unit,
+   appetite_basis, version, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		objective.ID,
 		objective.Key,
 		objective.Title,
 		objective.Description,
 		objective.DesiredOutcome,
 		objective.Phase,
+		objective.Priority,
+		objective.Appetite.Value,
+		objective.Appetite.Unit,
+		objective.Appetite.Basis,
 		objective.Version,
 		formatTime(objective.CreatedAt),
 		formatTime(objective.UpdatedAt),
@@ -346,9 +368,9 @@ func (r *transactionRepository) CreateWorkItem(ctx context.Context, item work.Wo
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO work_items
   (id, key, objective_id, plan_id, parent_id, title, description, kind, commitment_state,
-   execution_status, priority, estimated_scope, execution_policy, required_actor_kind,
-   attention_state, version, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+   execution_status, priority, estimated_scope, measure_value, measure_unit, measure_basis,
+   execution_policy, required_actor_kind, attention_state, review_requirements_json, version, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ID,
 		item.Key,
 		item.ObjectiveID,
@@ -361,9 +383,13 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ExecutionStatus,
 		item.Priority,
 		item.EstimatedScope,
+		item.Measure.Value,
+		item.Measure.Unit,
+		item.Measure.Basis,
 		item.ExecutionPolicy,
 		item.RequiredActorKind,
 		item.AttentionState,
+		encodeReviewRequirements(item.ReviewRequirements),
 		item.Version,
 		formatTime(item.CreatedAt),
 		formatTime(item.UpdatedAt),
@@ -387,8 +413,8 @@ func (r *transactionRepository) OutputProfile(ctx context.Context, name string, 
 func (r *transactionRepository) CreateExpectedOutput(ctx context.Context, expected output.ExpectedOutput) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO expected_outputs
-  (id, work_item_id, name, output_profile_id, contract_json, destination_hint, required, ordinal)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  (id, work_item_id, name, output_profile_id, contract_json, destination_hint, required, ordinal, version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		expected.ID,
 		expected.WorkItemID,
 		expected.Name,
@@ -397,6 +423,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		expected.DestinationHint,
 		boolInt(expected.Required),
 		expected.Ordinal,
+		expected.Version,
 	)
 	if err != nil {
 		return fmt.Errorf("insert expected output: %w", err)
@@ -404,10 +431,18 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 	return nil
 }
 
-const objectiveSelect = `
-SELECT id, key, title, description, desired_outcome, phase, prior_phase, updated_by,
-       version, created_at, updated_at
-FROM objectives`
+// objectiveColumns and workItemColumns are shared by the plain selects and
+// the ready-work join, which previously listed its own columns and silently
+// stopped reading fields added later.
+var objectiveColumns = []string{"id", "key", "title", "description", "desired_outcome", "phase", "prior_phase", "priority",
+	"appetite_value", "appetite_unit", "appetite_basis", "phase_transition_from", "phase_transition_to", "phase_transition_reason",
+	"phase_transition_by", "phase_transition_at", "updated_by", "version", "created_at", "updated_at"}
+
+var workItemColumns = []string{"id", "key", "objective_id", "plan_id", "parent_id", "title", "description", "kind", "commitment_state",
+	"execution_status", "priority", "estimated_scope", "measure_value", "measure_unit", "measure_basis",
+	"execution_policy", "required_actor_kind", "attention_state", "review_requirements_json", "version", "created_at", "updated_at"}
+
+var objectiveSelect = "SELECT " + strings.Join(objectiveColumns, ", ") + " FROM objectives"
 
 const planSelect = `
 SELECT id, objective_id, title, summary, revision, commitment_state,
@@ -415,11 +450,7 @@ SELECT id, objective_id, title, summary, revision, commitment_state,
        version, created_at, updated_at
 FROM plans`
 
-const workItemSelect = `
-SELECT id, key, objective_id, plan_id, parent_id, title, description, kind, commitment_state,
-       execution_status, priority, estimated_scope, execution_policy, required_actor_kind,
-       attention_state, version, created_at, updated_at
-FROM work_items`
+var workItemSelect = "SELECT " + strings.Join(workItemColumns, ", ") + " FROM work_items"
 
 const profileSelect = `
 SELECT id, name, version, state_version, description, lifecycle_state, structure_json, semantics_json,
@@ -433,32 +464,48 @@ type scanner interface {
 
 func scanObjective(row scanner) (work.Objective, error) {
 	var objective work.Objective
-	var createdAt, updatedAt string
-	var priorPhase, updatedBy sql.NullString
-	if err := row.Scan(
-		&objective.ID,
-		&objective.Key,
-		&objective.Title,
-		&objective.Description,
-		&objective.DesiredOutcome,
-		&objective.Phase,
-		&priorPhase,
-		&updatedBy,
-		&objective.Version,
-		&createdAt,
-		&updatedAt,
-	); err != nil {
+	targets, finish := objectiveScanTargets(&objective)
+	if err := row.Scan(targets...); err != nil {
 		return work.Objective{}, err
 	}
-	objective.PriorPhase = work.ObjectivePhase(priorPhase.String)
-	objective.UpdatedBy = updatedBy.String
-	var err error
-	objective.CreatedAt, err = parseTime(createdAt)
-	if err != nil {
+	if err := finish(); err != nil {
 		return work.Objective{}, err
 	}
-	objective.UpdatedAt, err = parseTime(updatedAt)
-	return objective, err
+	return objective, nil
+}
+
+// objectiveScanTargets returns the destinations for objectiveColumns, in
+// order, and the conversion to run once they are filled.
+func objectiveScanTargets(objective *work.Objective) ([]any, func() error) {
+	var createdAt, updatedAt, appetiteBasis string
+	var priorPhase, updatedBy, transitionFrom, transitionTo, transitionReason, transitionBy, transitionAt sql.NullString
+	targets := []any{
+		&objective.ID, &objective.Key, &objective.Title, &objective.Description, &objective.DesiredOutcome,
+		&objective.Phase, &priorPhase, &objective.Priority, &objective.Appetite.Value, &objective.Appetite.Unit,
+		&appetiteBasis, &transitionFrom, &transitionTo, &transitionReason, &transitionBy, &transitionAt,
+		&updatedBy, &objective.Version, &createdAt, &updatedAt,
+	}
+	return targets, func() error {
+		objective.Appetite.Basis = work.MeasureBasis(appetiteBasis)
+		if transitionAt.Valid {
+			at, err := parseTime(transitionAt.String)
+			if err != nil {
+				return err
+			}
+			objective.LastPhaseTransition = &work.PhaseTransition{
+				From: work.ObjectivePhase(transitionFrom.String), To: work.ObjectivePhase(transitionTo.String),
+				Reason: transitionReason.String, ActorID: transitionBy.String, At: at,
+			}
+		}
+		objective.PriorPhase = work.ObjectivePhase(priorPhase.String)
+		objective.UpdatedBy = updatedBy.String
+		var err error
+		if objective.CreatedAt, err = parseTime(createdAt); err != nil {
+			return err
+		}
+		objective.UpdatedAt, err = parseTime(updatedAt)
+		return err
+	}
 }
 
 func scanPlan(row scanner) (work.Plan, error) {
@@ -508,39 +555,67 @@ func scanPlan(row scanner) (work.Plan, error) {
 
 func scanWorkItem(row scanner) (work.WorkItem, error) {
 	var item work.WorkItem
+	targets, finish := workItemScanTargets(&item)
+	if err := row.Scan(targets...); err != nil {
+		return work.WorkItem{}, err
+	}
+	if err := finish(); err != nil {
+		return work.WorkItem{}, err
+	}
+	return item, nil
+}
+
+// workItemScanTargets returns the destinations for workItemColumns, in order,
+// and the conversion to run once they are filled.
+func workItemScanTargets(item *work.WorkItem) ([]any, func() error) {
 	var planID, parentID sql.NullString
-	var createdAt, updatedAt string
-	if err := row.Scan(
-		&item.ID,
-		&item.Key,
-		&item.ObjectiveID,
-		&planID,
-		&parentID,
-		&item.Title,
-		&item.Description,
-		&item.Kind,
-		&item.CommitmentState,
-		&item.ExecutionStatus,
-		&item.Priority,
-		&item.EstimatedScope,
-		&item.ExecutionPolicy,
-		&item.RequiredActorKind,
-		&item.AttentionState,
-		&item.Version,
-		&createdAt,
-		&updatedAt,
-	); err != nil {
-		return work.WorkItem{}, err
+	var createdAt, updatedAt, measureBasis, reviewRequirements string
+	targets := []any{
+		&item.ID, &item.Key, &item.ObjectiveID, &planID, &parentID, &item.Title, &item.Description, &item.Kind,
+		&item.CommitmentState, &item.ExecutionStatus, &item.Priority, &item.EstimatedScope,
+		&item.Measure.Value, &item.Measure.Unit, &measureBasis, &item.ExecutionPolicy, &item.RequiredActorKind,
+		&item.AttentionState, &reviewRequirements, &item.Version, &createdAt, &updatedAt,
 	}
-	item.PlanID = planID.String
-	item.ParentID = parentID.String
-	var err error
-	item.CreatedAt, err = parseTime(createdAt)
-	if err != nil {
-		return work.WorkItem{}, err
+	return targets, func() error {
+		item.Measure.Basis = work.MeasureBasis(measureBasis)
+		item.PlanID = planID.String
+		item.ParentID = parentID.String
+		var err error
+		if item.ReviewRequirements, err = decodeReviewRequirements(reviewRequirements); err != nil {
+			return err
+		}
+		if item.CreatedAt, err = parseTime(createdAt); err != nil {
+			return err
+		}
+		item.UpdatedAt, err = parseTime(updatedAt)
+		return err
 	}
-	item.UpdatedAt, err = parseTime(updatedAt)
-	return item, err
+}
+
+type storedReviewRequirement struct {
+	CriterionRef  string `json:"criterion_ref"`
+	ValidatorKind string `json:"validator_kind"`
+}
+
+func encodeReviewRequirements(requirements []work.ReviewRequirement) string {
+	stored := make([]storedReviewRequirement, 0, len(requirements))
+	for _, requirement := range requirements {
+		stored = append(stored, storedReviewRequirement(requirement))
+	}
+	encoded, _ := json.Marshal(stored)
+	return string(encoded)
+}
+
+func decodeReviewRequirements(encoded string) ([]work.ReviewRequirement, error) {
+	var stored []storedReviewRequirement
+	if err := json.Unmarshal([]byte(encoded), &stored); err != nil {
+		return nil, fmt.Errorf("decode review requirements: %w", err)
+	}
+	var requirements []work.ReviewRequirement
+	for _, requirement := range stored {
+		requirements = append(requirements, work.ReviewRequirement(requirement))
+	}
+	return requirements, nil
 }
 
 func scanProfile(row scanner) (output.Profile, error) {

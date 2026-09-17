@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -35,14 +36,16 @@ func (fakeClock) Now() time.Time { return time.Date(2026, 8, 25, 12, 0, 0, 0, ti
 // fakeRegistry lets tests control exactly what Lookup returns, including error injection,
 // without a real SQLite-backed registry.Registry.
 type fakeRegistry struct {
-	mu      sync.Mutex
-	targets map[string]registry.WorkspaceTarget
-	errs    map[string]error
-	calls   int
+	mu                 sync.Mutex
+	targets            map[string]registry.WorkspaceTarget
+	errs               map[string]error
+	canonicalRootErrs  map[string]error
+	calls              int
+	canonicalRootCalls int
 }
 
 func newFakeRegistry() *fakeRegistry {
-	return &fakeRegistry{targets: map[string]registry.WorkspaceTarget{}, errs: map[string]error{}}
+	return &fakeRegistry{targets: map[string]registry.WorkspaceTarget{}, errs: map[string]error{}, canonicalRootErrs: map[string]error{}}
 }
 
 func (r *fakeRegistry) set(target registry.WorkspaceTarget) {
@@ -57,6 +60,16 @@ func (r *fakeRegistry) fail(workspaceID string, err error) {
 	r.errs[workspaceID] = err
 }
 
+// failCanonicalRoot injects a LookupByCanonicalRoot failure at exactly one ancestor level,
+// standing in for a genuine registry fault (a real DB error, a cancelled context) partway
+// through the walk — as opposed to registry.ErrWorkspaceNotFound, which means only "keep
+// walking."
+func (r *fakeRegistry) failCanonicalRoot(canonicalRoot string, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.canonicalRootErrs[canonicalRoot] = err
+}
+
 func (r *fakeRegistry) Lookup(_ context.Context, workspaceID string) (registry.WorkspaceTarget, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -69,6 +82,25 @@ func (r *fakeRegistry) Lookup(_ context.Context, workspaceID string) (registry.W
 		return registry.WorkspaceTarget{}, registry.ErrWorkspaceNotFound
 	}
 	return target, nil
+}
+
+// LookupByCanonicalRoot mirrors the real registry's exact-match point query: one row at
+// most per canonical root, found by scanning this fake's small in-memory map rather than
+// an index. calls is bumped separately from Lookup's so a test can assert the walk stayed
+// bounded to the path's own ancestor count, not to how many workspaces are registered.
+func (r *fakeRegistry) LookupByCanonicalRoot(_ context.Context, canonicalRoot string) (registry.WorkspaceTarget, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.canonicalRootCalls++
+	if err, ok := r.canonicalRootErrs[canonicalRoot]; ok {
+		return registry.WorkspaceTarget{}, err
+	}
+	for _, target := range r.targets {
+		if target.CanonicalRoot == canonicalRoot {
+			return target, nil
+		}
+	}
+	return registry.WorkspaceTarget{}, registry.ErrWorkspaceNotFound
 }
 
 // fakeSharedProvider is one PersistenceProvider Go value that serves many WorkspaceTargets
@@ -122,16 +154,16 @@ func target(id string, generation int64) registry.WorkspaceTarget {
 
 func createObjective(t *testing.T, ctx context.Context, service *app.Service, key string) work.Objective {
 	t.Helper()
-	if _, err := service.RegisterActor(ctx, app.RegisterActorCommand{
+	if _, err := app.UnwrapMutation(service.RegisterActor(ctx, app.RegisterActorCommand{
 		Actor:          work.Actor{ID: "agent:test", Kind: work.ActorTypeAgent, DisplayName: "test"},
 		IdempotencyKey: "register-" + key,
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
-	objective, err := service.CreateObjective(ctx, app.CreateObjectiveCommand{
+	objective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{
 		ActorID: "agent:test", IdempotencyKey: "create-" + key,
 		Key: key, Title: key, DesiredOutcome: "isolation probe", Phase: work.ObjectiveIdea,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,5 +418,132 @@ func TestCloseDrainsAndClosesEveryRuntimeUsingTheRealSQLiteProvider(t *testing.T
 	}
 	if err := router.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestResolveWorkspaceIDForPathFindsTheNearestAncestor is REP-05's first
+// criterion: the nested workspace must win over the outer one, and the number
+// of registry queries must stay bounded to the path's own ancestor depth
+// rather than growing with how many workspaces are registered — the property
+// that distinguishes an ancestor walk from registry enumeration.
+func TestResolveWorkspaceIDForPathFindsTheNearestAncestor(t *testing.T) {
+	ctx := context.Background()
+	outer := t.TempDir()
+	nested := filepath.Join(outer, "nested", "inner")
+	if err := os.MkdirAll(filepath.Join(nested, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outerCanonical, err := registry.CanonicalizeRoot(outer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nestedCanonical, err := registry.CanonicalizeRoot(nested)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reg := newFakeRegistry()
+	outerTarget := target("ws-outer", 1)
+	outerTarget.CanonicalRoot = outerCanonical
+	reg.set(outerTarget)
+	nestedTarget := target("ws-nested", 1)
+	nestedTarget.CanonicalRoot = nestedCanonical
+	reg.set(nestedTarget)
+	router := New(reg, NewProviderManager(newFakeSharedProvider(t.TempDir())), &fakeIDs{}, fakeClock{}, 0)
+	t.Cleanup(func() { _ = router.Close() })
+
+	// A path under the nested workspace resolves to it, not to the outer one
+	// that also contains it.
+	got, err := router.ResolveWorkspaceIDForPath(ctx, filepath.Join(nested, "subdir"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "ws-nested" {
+		t.Fatalf("resolved %q, want the nearest ancestor ws-nested", got)
+	}
+	// The walk from subdir to inner is two levels; it must not have cost more
+	// than a small, bounded number of point queries regardless of how many
+	// workspaces newFakeRegistry happens to hold.
+	if reg.canonicalRootCalls > 3 {
+		t.Fatalf("canonical root lookups = %d, want a small bounded walk, not registry enumeration", reg.canonicalRootCalls)
+	}
+
+	// A sibling path under the outer workspace but outside the nested one
+	// resolves to the outer workspace instead.
+	sibling := filepath.Join(outer, "sibling")
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err = router.ResolveWorkspaceIDForPath(ctx, sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "ws-outer" {
+		t.Fatalf("resolved %q, want the outer ancestor ws-outer", got)
+	}
+}
+
+// TestResolveWorkspaceIDForPathReportsNoMatchAndPendingDistinctly covers the
+// two failure modes the underlying decision left to implementation: nothing
+// registered at all, and a match whose registration never finished.
+func TestResolveWorkspaceIDForPathReportsNoMatchAndPendingDistinctly(t *testing.T) {
+	ctx := context.Background()
+	unclaimed := t.TempDir()
+	pendingRoot := t.TempDir()
+	pendingCanonical, err := registry.CanonicalizeRoot(pendingRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reg := newFakeRegistry()
+	pendingTarget := target("ws-pending", 1)
+	pendingTarget.CanonicalRoot = pendingCanonical
+	pendingTarget.LifecycleState = registry.LifecyclePending
+	reg.set(pendingTarget)
+	router := New(reg, NewProviderManager(newFakeSharedProvider(t.TempDir())), &fakeIDs{}, fakeClock{}, 0)
+	t.Cleanup(func() { _ = router.Close() })
+
+	if _, err := router.ResolveWorkspaceIDForPath(ctx, unclaimed); !errors.Is(err, registry.ErrWorkspaceNotFound) {
+		t.Fatalf("unclaimed path = %v, want ErrWorkspaceNotFound", err)
+	}
+	if _, err := router.ResolveWorkspaceIDForPath(ctx, pendingRoot); !errors.Is(err, registry.ErrWorkspacePending) {
+		t.Fatalf("path under a pending entry = %v, want ErrWorkspacePending", err)
+	}
+}
+
+// TestResolveWorkspaceIDForPathRejectsANonexistentPath covers the one input
+// registry.CanonicalizeRoot itself cannot resolve.
+func TestResolveWorkspaceIDForPathRejectsANonexistentPath(t *testing.T) {
+	ctx := context.Background()
+	router := New(newFakeRegistry(), NewProviderManager(newFakeSharedProvider(t.TempDir())), &fakeIDs{}, fakeClock{}, 0)
+	t.Cleanup(func() { _ = router.Close() })
+
+	if _, err := router.ResolveWorkspaceIDForPath(ctx, filepath.Join(t.TempDir(), "does-not-exist")); !errors.Is(err, ErrWorkspacePathInvalid) {
+		t.Fatalf("nonexistent path = %v, want ErrWorkspacePathInvalid", err)
+	}
+}
+
+// TestResolveWorkspaceIDForPathPropagatesAGenuineRegistryFault covers what the
+// walk must not do with any error besides ErrWorkspaceNotFound: swallow it
+// and keep climbing as though nothing were registered at that level. A
+// transient fault reinterpreted that way could resolve to a wrong, more
+// distant workspace instead of surfacing the fault.
+func TestResolveWorkspaceIDForPathPropagatesAGenuineRegistryFault(t *testing.T) {
+	ctx := context.Background()
+	child := t.TempDir()
+	childCanonical, err := registry.CanonicalizeRoot(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reg := newFakeRegistry()
+	fault := errors.New("registry: query workspace: disk I/O error")
+	reg.failCanonicalRoot(childCanonical, fault)
+	router := New(reg, NewProviderManager(newFakeSharedProvider(t.TempDir())), &fakeIDs{}, fakeClock{}, 0)
+	t.Cleanup(func() { _ = router.Close() })
+
+	_, err = router.ResolveWorkspaceIDForPath(ctx, child)
+	if !errors.Is(err, fault) {
+		t.Fatalf("resolving over a faulting ancestor = %v, want the fault itself surfaced, not treated as a miss", err)
 	}
 }

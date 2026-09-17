@@ -58,7 +58,7 @@ func (s *Service) GetDecision(ctx context.Context, id string) (work.Decision, er
 	return decision, err
 }
 
-func (s *Service) TransitionObjective(ctx context.Context, command TransitionObjectiveCommand) (work.Objective, error) {
+func (s *Service) transitionObjectiveMutation(ctx context.Context, command TransitionObjectiveCommand) (work.Objective, error) {
 	if strings.TrimSpace(command.ActorID) == "" {
 		return work.Objective{}, errors.New("objective transition requires an actor")
 	}
@@ -81,17 +81,17 @@ func (s *Service) TransitionObjective(ctx context.Context, command TransitionObj
 					return work.Objective{}, errors.New("objective cannot enter execution without an approved plan")
 				}
 			}
-			transitioned, err = work.TransitionObjective(objective, command.TargetPhase, command.Reason, s.clock.Now())
+			transitioned, err = work.TransitionObjective(objective, command.TargetPhase, command.Reason, command.ActorID, s.clock.Now())
 			if err != nil {
 				return work.Objective{}, err
 			}
-			transitioned.UpdatedBy = strings.TrimSpace(command.ActorID)
 			if err := repository.UpdateObjective(ctx, transitioned, command.ExpectedVersion); err != nil {
 				return work.Objective{}, err
 			}
 			if err := s.recordActivity(ctx, repository, work.Activity{
-				EntityKind: "objective", EntityID: transitioned.ID, ActorID: command.ActorID,
+				EntityKind: "objective", EntityID: transitioned.ID, ObjectiveID: transitioned.ID, ActorID: command.ActorID,
 				EventType: "objective.phase_changed", Summary: fmt.Sprintf("Objective moved from %s to %s", objective.Phase, transitioned.Phase),
+				PayloadJSON: phaseTransitionPayload(*transitioned.LastPhaseTransition),
 			}); err != nil {
 				return work.Objective{}, err
 			}
@@ -106,7 +106,14 @@ func (s *Service) TransitionObjective(ctx context.Context, command TransitionObj
 	return transitioned, nil
 }
 
-func (s *Service) RecordContext(ctx context.Context, command RecordContextCommand) (work.ContextRecord, error) {
+// phaseTransitionPayload is the from/to/reason shape work-item status changes
+// already write, so every transition stays readable from the change feed.
+func phaseTransitionPayload(transition work.PhaseTransition) json.RawMessage {
+	payload, _ := json.Marshal(map[string]string{"from": string(transition.From), "to": string(transition.To), "reason": transition.Reason})
+	return payload
+}
+
+func (s *Service) recordContextMutation(ctx context.Context, command RecordContextCommand) (work.ContextRecord, error) {
 	if replay, found, err := replayIdempotently[work.ContextRecord](ctx, s, command.ActorID, command.IdempotencyKey, "record_context", command); err != nil {
 		return work.ContextRecord{}, err
 	} else if found {
@@ -144,7 +151,7 @@ func (s *Service) RecordContext(ctx context.Context, command RecordContextComman
 				if err := repository.CreateContextRecord(ctx, record); err != nil {
 					return work.ContextRecord{}, err
 				}
-				if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "context_record", EntityID: record.ID, WorkItemID: record.WorkItemID, ActorID: command.ActorID, EventType: "context_record.recorded", Summary: fmt.Sprintf("Context %s recorded", record.Kind)}); err != nil {
+				if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "context_record", EntityID: record.ID, WorkItemID: record.WorkItemID, ObjectiveID: record.ObjectiveID, ActorID: command.ActorID, EventType: "context_record.recorded", Summary: fmt.Sprintf("Context %s recorded", record.Kind)}); err != nil {
 					return work.ContextRecord{}, err
 				}
 				return record, nil
@@ -166,7 +173,7 @@ func (s *Service) RecordContext(ctx context.Context, command RecordContextComman
 			if err := repository.UpdateContextRecord(ctx, superseded, previous.Version); err != nil {
 				return work.ContextRecord{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "context_record", EntityID: record.ID, WorkItemID: record.WorkItemID, ActorID: command.ActorID, EventType: "context_record.recorded", Summary: fmt.Sprintf("Context %s recorded and predecessor superseded", record.Kind)}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "context_record", EntityID: record.ID, WorkItemID: record.WorkItemID, ObjectiveID: record.ObjectiveID, ActorID: command.ActorID, EventType: "context_record.recorded", Summary: fmt.Sprintf("Context %s recorded and predecessor superseded", record.Kind)}); err != nil {
 				return work.ContextRecord{}, err
 			}
 			return record, nil
@@ -187,7 +194,7 @@ type TransitionContextCommand struct {
 	IdempotencyKey  string
 }
 
-func (s *Service) TransitionContext(ctx context.Context, command TransitionContextCommand) (work.ContextRecord, error) {
+func (s *Service) transitionContextMutation(ctx context.Context, command TransitionContextCommand) (work.ContextRecord, error) {
 	var transitioned work.ContextRecord
 	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		transition := func() (work.ContextRecord, error) {
@@ -206,7 +213,7 @@ func (s *Service) TransitionContext(ctx context.Context, command TransitionConte
 				return work.ContextRecord{}, err
 			}
 			if err := s.recordActivity(ctx, repository, work.Activity{
-				EntityKind: "context_record", EntityID: transitioned.ID, WorkItemID: transitioned.WorkItemID, ActorID: command.ActorID,
+				EntityKind: "context_record", EntityID: transitioned.ID, WorkItemID: transitioned.WorkItemID, ObjectiveID: transitioned.ObjectiveID, ActorID: command.ActorID,
 				EventType: "context_record.status_changed", Summary: fmt.Sprintf("Context marked %s", transitioned.Status),
 			}); err != nil {
 				return work.ContextRecord{}, err
@@ -223,15 +230,19 @@ func (s *Service) TransitionContext(ctx context.Context, command TransitionConte
 }
 
 type AskQuestionCommand struct {
-	ObjectiveID            string
-	WorkItemID             string
-	ActorID                string
-	Question               string
-	RequiresHumanAttention bool
-	IdempotencyKey         string
+	ObjectiveID    string
+	WorkItemID     string
+	ActorID        string
+	Question       string
+	Status         work.QuestionStatus
+	AttentionState work.AttentionState
+	// BlocksWorkItems names the work items the question holds while it is
+	// unresolved, beyond its own work item, which it always holds.
+	BlocksWorkItems []string
+	IdempotencyKey  string
 }
 
-func (s *Service) AskQuestion(ctx context.Context, command AskQuestionCommand) (work.Question, error) {
+func (s *Service) askQuestionMutation(ctx context.Context, command AskQuestionCommand) (work.Question, error) {
 	if replay, found, err := replayIdempotently[work.Question](ctx, s, command.ActorID, command.IdempotencyKey, "ask_question", command); err != nil {
 		return work.Question{}, err
 	} else if found {
@@ -242,12 +253,14 @@ func (s *Service) AskQuestion(ctx context.Context, command AskQuestionCommand) (
 		return work.Question{}, fmt.Errorf("generate question id: %w", err)
 	}
 	question, err := work.NewQuestion(work.Question{
-		ID:                     id,
-		ObjectiveID:            command.ObjectiveID,
-		WorkItemID:             command.WorkItemID,
-		Text:                   command.Question,
-		RequiresHumanAttention: command.RequiresHumanAttention,
-		CreatedBy:              command.ActorID,
+		ID:              id,
+		ObjectiveID:     command.ObjectiveID,
+		WorkItemID:      command.WorkItemID,
+		Text:            command.Question,
+		Status:          command.Status,
+		AttentionState:  command.AttentionState,
+		BlocksWorkItems: command.BlocksWorkItems,
+		CreatedBy:       command.ActorID,
 	}, s.clock.Now())
 	if err != nil {
 		return work.Question{}, err
@@ -260,10 +273,18 @@ func (s *Service) AskQuestion(ctx context.Context, command AskQuestionCommand) (
 			if err := ensureWorkItemScope(ctx, repository, question.ObjectiveID, question.WorkItemID); err != nil {
 				return work.Question{}, err
 			}
+			for _, workItemID := range question.BlocksWorkItems {
+				if workItemID == question.WorkItemID {
+					continue
+				}
+				if err := ensureBlockableWorkItem(ctx, repository, question.ObjectiveID, workItemID); err != nil {
+					return work.Question{}, err
+				}
+			}
 			if err := repository.CreateQuestion(ctx, question); err != nil {
 				return work.Question{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "question", EntityID: question.ID, WorkItemID: question.WorkItemID, ActorID: command.ActorID, EventType: "question.asked", Summary: "Question asked"}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "question", EntityID: question.ID, WorkItemID: question.WorkItemID, ObjectiveID: question.ObjectiveID, ActorID: command.ActorID, EventType: "question.asked", Summary: "Question asked"}); err != nil {
 				return work.Question{}, err
 			}
 			return question, nil
@@ -292,7 +313,95 @@ type WaiveQuestionCommand struct {
 	IdempotencyKey  string
 }
 
-func (s *Service) AnswerQuestion(ctx context.Context, command AnswerQuestionCommand) (work.Question, error) {
+type SharpenQuestionCommand struct {
+	QuestionID      string
+	ActorID         string
+	Question        string
+	ExpectedVersion int
+	IdempotencyKey  string
+}
+
+type LinkQuestionBlockerCommand struct {
+	QuestionID      string
+	WorkItemID      string
+	ActorID         string
+	ExpectedVersion int
+	IdempotencyKey  string
+}
+
+func (s *Service) sharpenQuestionMutation(ctx context.Context, command SharpenQuestionCommand) (work.Question, error) {
+	var sharpened work.Question
+	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
+		result, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "sharpen_question", command, func() (work.Question, error) {
+			question, err := repository.Question(ctx, command.QuestionID)
+			if err != nil {
+				return work.Question{}, err
+			}
+			if question.Version != command.ExpectedVersion {
+				return work.Question{}, ports.ErrVersionConflict
+			}
+			updated, err := work.SharpenQuestion(question, command.Question)
+			if err != nil {
+				return work.Question{}, err
+			}
+			if err := repository.UpdateQuestion(ctx, updated, command.ExpectedVersion); err != nil {
+				return work.Question{}, err
+			}
+			payload, _ := json.Marshal(struct {
+				PreviousText string `json:"previous_text"`
+			}{question.Text})
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "question", EntityID: updated.ID, WorkItemID: updated.WorkItemID, ObjectiveID: updated.ObjectiveID, ActorID: command.ActorID, EventType: "question.sharpened", Summary: "Unsharp question phrased and opened", PayloadJSON: payload}); err != nil {
+				return work.Question{}, err
+			}
+			return updated, nil
+		})
+		sharpened = result
+		return err
+	}); err != nil {
+		return work.Question{}, fmt.Errorf("sharpen question: %w", err)
+	}
+	return sharpened, nil
+}
+
+func (s *Service) linkQuestionBlockerMutation(ctx context.Context, command LinkQuestionBlockerCommand) (work.Question, error) {
+	var linked work.Question
+	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
+		result, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "link_question_blocker", command, func() (work.Question, error) {
+			question, err := repository.Question(ctx, command.QuestionID)
+			if err != nil {
+				return work.Question{}, err
+			}
+			if question.Version != command.ExpectedVersion {
+				return work.Question{}, ports.ErrVersionConflict
+			}
+			if err := ensureBlockableWorkItem(ctx, repository, question.ObjectiveID, command.WorkItemID); err != nil {
+				return work.Question{}, err
+			}
+			updated, err := work.LinkQuestionBlocker(question, command.WorkItemID)
+			if err != nil {
+				return work.Question{}, err
+			}
+			workItemID := updated.BlocksWorkItems[len(updated.BlocksWorkItems)-1]
+			if err := repository.UpdateQuestion(ctx, updated, command.ExpectedVersion); err != nil {
+				return work.Question{}, err
+			}
+			if err := repository.CreateQuestionBlock(ctx, updated.ID, workItemID, command.ActorID, s.clock.Now().UTC()); err != nil {
+				return work.Question{}, err
+			}
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "question", EntityID: updated.ID, WorkItemID: workItemID, ObjectiveID: updated.ObjectiveID, ActorID: command.ActorID, EventType: "question.blocks_linked", Summary: "Question now blocks this work item"}); err != nil {
+				return work.Question{}, err
+			}
+			return updated, nil
+		})
+		linked = result
+		return err
+	}); err != nil {
+		return work.Question{}, fmt.Errorf("link question blocker: %w", err)
+	}
+	return linked, nil
+}
+
+func (s *Service) answerQuestionMutation(ctx context.Context, command AnswerQuestionCommand) (work.Question, error) {
 	var answered work.Question
 	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		result, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "answer_question", command, func() (work.Question, error) {
@@ -310,7 +419,7 @@ func (s *Service) AnswerQuestion(ctx context.Context, command AnswerQuestionComm
 			if err := repository.UpdateQuestion(ctx, updated, command.ExpectedVersion); err != nil {
 				return work.Question{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "question", EntityID: updated.ID, WorkItemID: updated.WorkItemID, ActorID: command.ActorID, EventType: "question.answered", Summary: "Question answered"}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "question", EntityID: updated.ID, WorkItemID: updated.WorkItemID, ObjectiveID: updated.ObjectiveID, ActorID: command.ActorID, EventType: "question.answered", Summary: "Question answered"}); err != nil {
 				return work.Question{}, err
 			}
 			return updated, nil
@@ -323,7 +432,7 @@ func (s *Service) AnswerQuestion(ctx context.Context, command AnswerQuestionComm
 	return answered, nil
 }
 
-func (s *Service) WaiveQuestion(ctx context.Context, command WaiveQuestionCommand) (work.Question, error) {
+func (s *Service) waiveQuestionMutation(ctx context.Context, command WaiveQuestionCommand) (work.Question, error) {
 	var waived work.Question
 	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		result, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "waive_question", command, func() (work.Question, error) {
@@ -341,7 +450,7 @@ func (s *Service) WaiveQuestion(ctx context.Context, command WaiveQuestionComman
 			if err := repository.UpdateQuestion(ctx, updated, command.ExpectedVersion); err != nil {
 				return work.Question{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "question", EntityID: updated.ID, WorkItemID: updated.WorkItemID, ActorID: command.ActorID, EventType: "question.waived", Summary: "Question waived"}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "question", EntityID: updated.ID, WorkItemID: updated.WorkItemID, ObjectiveID: updated.ObjectiveID, ActorID: command.ActorID, EventType: "question.waived", Summary: "Question waived"}); err != nil {
 				return work.Question{}, err
 			}
 			return updated, nil
@@ -366,7 +475,7 @@ type RecordDecisionCommand struct {
 	IdempotencyKey string
 }
 
-func (s *Service) RecordDecision(ctx context.Context, command RecordDecisionCommand) (work.Decision, error) {
+func (s *Service) recordDecisionMutation(ctx context.Context, command RecordDecisionCommand) (work.Decision, error) {
 	if replay, found, err := replayIdempotently[work.Decision](ctx, s, command.ActorID, command.IdempotencyKey, "record_decision", command); err != nil {
 		return work.Decision{}, err
 	} else if found {
@@ -402,7 +511,7 @@ func (s *Service) RecordDecision(ctx context.Context, command RecordDecisionComm
 				if err := repository.CreateDecision(ctx, decision); err != nil {
 					return work.Decision{}, err
 				}
-				if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "decision", EntityID: decision.ID, WorkItemID: decision.WorkItemID, ActorID: command.ActorID, EventType: "decision.recorded", Summary: "Decision recorded"}); err != nil {
+				if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "decision", EntityID: decision.ID, WorkItemID: decision.WorkItemID, ObjectiveID: decision.ObjectiveID, ActorID: command.ActorID, EventType: "decision.recorded", Summary: "Decision recorded"}); err != nil {
 					return work.Decision{}, err
 				}
 				return decision, nil
@@ -424,7 +533,7 @@ func (s *Service) RecordDecision(ctx context.Context, command RecordDecisionComm
 			if err := repository.UpdateDecision(ctx, superseded); err != nil {
 				return work.Decision{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "decision", EntityID: decision.ID, WorkItemID: decision.WorkItemID, ActorID: command.ActorID, EventType: "decision.recorded", Summary: "Decision recorded and predecessor superseded"}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "decision", EntityID: decision.ID, WorkItemID: decision.WorkItemID, ObjectiveID: decision.ObjectiveID, ActorID: command.ActorID, EventType: "decision.recorded", Summary: "Decision recorded and predecessor superseded"}); err != nil {
 				return work.Decision{}, err
 			}
 			return decision, nil
@@ -451,6 +560,49 @@ func ensureWorkItemScope(ctx context.Context, repository ports.Repository, objec
 	return nil
 }
 
+// normalizeReviewRequirements checks declared reviews against the validator
+// kinds Throughline records. Successor use is evidence about an accepted
+// output being reused, never a review of a work item.
+func normalizeReviewRequirements(requirements []work.ReviewRequirement) ([]work.ReviewRequirement, error) {
+	normalized, err := work.NormalizeReviewRequirements(requirements)
+	if err != nil {
+		return nil, err
+	}
+	for _, requirement := range normalized {
+		kind := output.ValidatorKind(requirement.ValidatorKind)
+		if !kind.Supported() || kind == output.ValidatorSuccessorUse {
+			return nil, fmt.Errorf("review requirement validator kind %q is not a review kind", requirement.ValidatorKind)
+		}
+	}
+	return normalized, nil
+}
+
+// ensureBlockableWorkItem admits an explicit blocking link only to a work
+// item of the question's objective that can still be executed. A done or
+// cancelled item has no outgoing transition and a rejected or superseded one
+// can never be claimed, so a link to either would be recorded and displayed
+// as a block that holds nothing.
+func ensureBlockableWorkItem(ctx context.Context, repository ports.Repository, objectiveID, workItemID string) error {
+	workItemID = strings.TrimSpace(workItemID)
+	if workItemID == "" {
+		return errors.New("blocking link requires a work item")
+	}
+	item, err := repository.WorkItem(ctx, workItemID)
+	if err != nil {
+		return fmt.Errorf("load blocked work item: %w", err)
+	}
+	if item.ObjectiveID != objectiveID {
+		return errors.New("work item belongs to another objective")
+	}
+	if item.ExecutionStatus == work.StatusDone || item.ExecutionStatus == work.StatusCancelled {
+		return fmt.Errorf("a %s work item cannot be blocked by a question", item.ExecutionStatus)
+	}
+	if item.CommitmentState == work.ItemRejected || item.CommitmentState == work.ItemSuperseded {
+		return fmt.Errorf("a %s work item cannot be blocked by a question", item.CommitmentState)
+	}
+	return nil
+}
+
 type ProposedExpectedOutput struct {
 	Name            string
 	ProfileName     string
@@ -473,6 +625,7 @@ type ProposedWorkItem struct {
 	ExecutionPolicy      work.ExecutionPolicy
 	RequiredActorKind    work.ActorKind
 	RequiredCapabilities []string
+	ReviewRequirements   []work.ReviewRequirement
 	DependsOn            []string
 	AcceptanceCriteria   []ProposedAcceptanceCriterion
 	ExpectedOutputs      []ProposedExpectedOutput
@@ -537,7 +690,7 @@ type generatedExternalAction struct {
 	command ProposedExternalAction
 }
 
-func (s *Service) ProposePlan(ctx context.Context, command ProposePlanCommand) (ports.PlanContext, error) {
+func (s *Service) proposePlanMutation(ctx context.Context, command ProposePlanCommand) (ports.PlanContext, error) {
 	if replay, found, err := replayIdempotently[ports.PlanContext](ctx, s, command.ActorID, command.IdempotencyKey, "propose_plan", command); err != nil {
 		return ports.PlanContext{}, err
 	} else if found {
@@ -711,7 +864,7 @@ func (s *Service) ProposePlan(ctx context.Context, command ProposePlanCommand) (
 				}
 			}
 			if err := s.recordActivity(ctx, repository, work.Activity{
-				EntityKind: "plan", EntityID: plan.ID, ActorID: command.ActorID,
+				EntityKind: "plan", EntityID: plan.ID, ObjectiveID: plan.ObjectiveID, ActorID: command.ActorID,
 				EventType: "plan.proposed", Summary: fmt.Sprintf("Plan revision %d proposed with %d work items", plan.Revision, len(items)),
 			}); err != nil {
 				return ports.PlanContext{}, err
@@ -750,22 +903,27 @@ func (s *Service) generatePlanItems(commands []ProposedWorkItem, plan work.Plan,
 
 	items := make([]generatedPlanItem, 0, len(commands))
 	for _, command := range commands {
+		reviewRequirements, err := normalizeReviewRequirements(command.ReviewRequirements)
+		if err != nil {
+			return nil, err
+		}
 		item, err := work.NewWorkItem(work.WorkItem{
-			ID:                idsByRef[strings.TrimSpace(command.ClientRef)],
-			Key:               command.Key,
-			ObjectiveID:       plan.ObjectiveID,
-			PlanID:            plan.ID,
-			ParentID:          idsByRef[strings.TrimSpace(command.ParentRef)],
-			Title:             command.Title,
-			Description:       command.Description,
-			Kind:              command.Kind,
-			CommitmentState:   work.ItemProposed,
-			ExecutionStatus:   work.StatusBacklog,
-			Priority:          command.Priority,
-			EstimatedScope:    command.EstimatedScope,
-			ExecutionPolicy:   command.ExecutionPolicy,
-			RequiredActorKind: command.RequiredActorKind,
-			AttentionState:    work.AttentionNone,
+			ID:                 idsByRef[strings.TrimSpace(command.ClientRef)],
+			Key:                command.Key,
+			ObjectiveID:        plan.ObjectiveID,
+			PlanID:             plan.ID,
+			ParentID:           idsByRef[strings.TrimSpace(command.ParentRef)],
+			Title:              command.Title,
+			Description:        command.Description,
+			Kind:               command.Kind,
+			CommitmentState:    work.ItemProposed,
+			ExecutionStatus:    work.StatusBacklog,
+			Priority:           command.Priority,
+			EstimatedScope:     command.EstimatedScope,
+			ExecutionPolicy:    command.ExecutionPolicy,
+			RequiredActorKind:  command.RequiredActorKind,
+			AttentionState:     work.AttentionNone,
+			ReviewRequirements: reviewRequirements,
 		}, now)
 		if err != nil {
 			return nil, err
@@ -880,7 +1038,7 @@ type RequestApprovalCommand struct {
 	ExpectedTargetVersion int
 }
 
-func (s *Service) RequestApproval(ctx context.Context, command RequestApprovalCommand) (work.Approval, error) {
+func (s *Service) requestApprovalMutation(ctx context.Context, command RequestApprovalCommand) (work.Approval, error) {
 	if replay, found, err := replayIdempotently[work.Approval](ctx, s, command.ActorID, command.IdempotencyKey, "request_approval", command); err != nil {
 		return work.Approval{}, err
 	} else if found {
@@ -951,7 +1109,7 @@ func (s *Service) RequestApproval(ctx context.Context, command RequestApprovalCo
 			if err := repository.CreateApproval(ctx, approval); err != nil {
 				return work.Approval{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "approval", EntityID: approval.ID, WorkItemID: approval.WorkItemID, ActorID: command.ActorID, EventType: "approval.requested", Summary: "Approval requested"}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "approval", EntityID: approval.ID, WorkItemID: approval.WorkItemID, ObjectiveID: approval.ObjectiveID, ActorID: command.ActorID, EventType: "approval.requested", Summary: "Approval requested"}); err != nil {
 				return work.Approval{}, err
 			}
 			return approval, nil
@@ -984,7 +1142,7 @@ func (s *Service) GetApproval(ctx context.Context, id string) (work.Approval, er
 	return approval, err
 }
 
-func (s *Service) ResolveApproval(ctx context.Context, command ResolveApprovalCommand) (work.Approval, error) {
+func (s *Service) resolveApprovalMutation(ctx context.Context, command ResolveApprovalCommand) (work.Approval, error) {
 	var result work.Approval
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		resolved, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "resolve_approval", command, func() (work.Approval, error) {
@@ -1005,7 +1163,7 @@ func (s *Service) ResolveApproval(ctx context.Context, command ResolveApprovalCo
 			if err := repository.UpdateApproval(ctx, approval, command.ExpectedVersion); err != nil {
 				return work.Approval{}, err
 			}
-			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "approval", EntityID: approval.ID, WorkItemID: approval.WorkItemID, ActorID: command.ActorID, EventType: "approval.resolved", Summary: fmt.Sprintf("Approval marked %s", approval.Status)}); err != nil {
+			if err := s.recordActivity(ctx, repository, work.Activity{EntityKind: "approval", EntityID: approval.ID, WorkItemID: approval.WorkItemID, ObjectiveID: approval.ObjectiveID, ActorID: command.ActorID, EventType: "approval.resolved", Summary: fmt.Sprintf("Approval marked %s", approval.Status)}); err != nil {
 				return work.Approval{}, err
 			}
 			return approval, nil
@@ -1019,7 +1177,7 @@ func (s *Service) ResolveApproval(ctx context.Context, command ResolveApprovalCo
 	return result, nil
 }
 
-func (s *Service) ReviewPlan(ctx context.Context, command ReviewPlanCommand) (work.Plan, error) {
+func (s *Service) reviewPlanMutation(ctx context.Context, command ReviewPlanCommand) (work.Plan, error) {
 	if replay, found, err := replayIdempotently[work.Plan](ctx, s, command.ReviewerActorID, command.IdempotencyKey, "review_plan", command); err != nil {
 		return work.Plan{}, err
 	} else if found {
@@ -1073,7 +1231,7 @@ func (s *Service) ReviewPlan(ctx context.Context, command ReviewPlanCommand) (wo
 				return work.Plan{}, err
 			}
 			if err := s.recordActivity(ctx, repository, work.Activity{
-				EntityKind: "plan", EntityID: reviewed.ID, ActorID: command.ReviewerActorID,
+				EntityKind: "plan", EntityID: reviewed.ID, ObjectiveID: reviewed.ObjectiveID, ActorID: command.ReviewerActorID,
 				EventType: "plan.reviewed", Summary: fmt.Sprintf("Plan revision %d marked %s", reviewed.Revision, reviewed.CommitmentState),
 			}); err != nil {
 				return work.Plan{}, err
@@ -1101,7 +1259,7 @@ type ProposeOutputProfileCommand struct {
 	Supersedes     string
 }
 
-func (s *Service) ProposeOutputProfile(ctx context.Context, command ProposeOutputProfileCommand) (output.Profile, error) {
+func (s *Service) proposeOutputProfileMutation(ctx context.Context, command ProposeOutputProfileCommand) (output.Profile, error) {
 	if replay, found, err := replayIdempotently[output.Profile](ctx, s, command.ActorID, command.IdempotencyKey, "propose_output_profile", command); err != nil {
 		return output.Profile{}, err
 	} else if found {
@@ -1204,7 +1362,7 @@ type ReviewOutputProfileCommand struct {
 	Reason          string
 }
 
-func (s *Service) ReviewOutputProfile(ctx context.Context, command ReviewOutputProfileCommand) (output.Profile, error) {
+func (s *Service) reviewOutputProfileMutation(ctx context.Context, command ReviewOutputProfileCommand) (output.Profile, error) {
 	var reviewed output.Profile
 	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		result, err := executeIdempotently(ctx, s, repository, command.ReviewerActorID, command.IdempotencyKey, "review_output_profile", command, func() (output.Profile, error) {
@@ -1242,6 +1400,65 @@ func (s *Service) ReviewOutputProfile(ctx context.Context, command ReviewOutputP
 		return output.Profile{}, fmt.Errorf("review output profile: %w", err)
 	}
 	return reviewed, nil
+}
+
+// ListObjectives returns every objective, including those with no work items.
+func (s *Service) ListObjectives(ctx context.Context) ([]work.Objective, error) {
+	objectives, err := s.store.ListObjectives(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list objectives: %w", err)
+	}
+	return objectives, nil
+}
+
+// ResolveObjectiveIn matches a reference against objectives the caller already
+// holds. It is the single statement of what an objective_id may be, so a caller
+// with the slice in hand needs no second read and cannot answer the same field
+// differently from one that does.
+//
+// One pass, identifier first: an identifier is the canonical immutable address,
+// and keys are unique, so a key can only ever be a second-best match for the
+// same reference.
+//
+// An empty reference is not an error and not a match. It returns the zero
+// objective, which every caller reads as "no filter" — an absent objective_id
+// selects the whole workspace. A caller that needs a reference to be present
+// must reject the empty one itself, as ResolveObjective does.
+func ResolveObjectiveIn(objectives []work.Objective, reference string) (work.Objective, error) {
+	reference = strings.TrimSpace(reference)
+	if reference == "" {
+		return work.Objective{}, nil
+	}
+	var byKey work.Objective
+	for _, objective := range objectives {
+		if objective.ID == reference {
+			return objective, nil
+		}
+		if objective.Key == reference && byKey.ID == "" {
+			byKey = objective
+		}
+	}
+	if byKey.ID != "" {
+		return byKey, nil
+	}
+	return work.Objective{}, fmt.Errorf("resolve objective %q: %w", reference, ports.ErrNotFound)
+}
+
+// ResolveObjective accepts either an objective's identifier or the readable key
+// it is known by, so a caller that has only the key written down can address it
+// without first listing the board. It reads the objectives table rather than
+// opening a transaction, because resolving an address is a read and a workspace
+// holds few objectives. Unlike ResolveObjectiveIn it requires a reference: there
+// is no objective to return for the absence of one.
+func (s *Service) ResolveObjective(ctx context.Context, reference string) (work.Objective, error) {
+	if strings.TrimSpace(reference) == "" {
+		return work.Objective{}, fmt.Errorf("resolve objective: %w", ports.ErrNotFound)
+	}
+	objectives, err := s.ListObjectives(ctx)
+	if err != nil {
+		return work.Objective{}, err
+	}
+	return ResolveObjectiveIn(objectives, reference)
 }
 
 func (s *Service) GetObjectiveContext(ctx context.Context, id string) (ports.ObjectiveContext, error) {
@@ -1289,7 +1506,7 @@ func (s *Service) SelectObjectiveContext(ctx context.Context, query ObjectiveCon
 		return ObjectiveContextSnapshot{}, err
 	}
 	context := selection.Context
-	snapshot := ObjectiveContextSnapshot{Objective: context.Objective, SelectedContext: limitSlice(context.ContextRecords, limit), Plans: limitSlice(approvedPlans(context.Plans), limit), Questions: limitSlice(openQuestions(context.Questions), limit), Decisions: limitSlice(context.Decisions, limit), Approvals: limitSlice(context.Approvals, limit), RecentChanges: selection.RecentChanges}
+	snapshot := ObjectiveContextSnapshot{Objective: context.Objective, SelectedContext: limitSlice(context.ContextRecords, limit), Plans: limitSlice(approvedPlans(context.Plans), limit), Questions: limitSlice(unresolvedQuestions(context.Questions), limit), Decisions: limitSlice(context.Decisions, limit), Approvals: limitSlice(context.Approvals, limit), RecentChanges: selection.RecentChanges}
 	for _, item := range selection.WorkItems {
 		snapshot.ActorRelevantWork = append(snapshot.ActorRelevantWork, item)
 		for _, revision := range item.OutputRevisions {
@@ -1349,10 +1566,13 @@ func approvedPlans(plans []ports.PlanContext) []ports.PlanContext {
 	return result
 }
 
-func openQuestions(questions []work.Question) []work.Question {
+// unresolvedQuestions keeps unsharp questions beside open ones: a resuming
+// session that saw only open questions would read an objective whose
+// unphrased areas still hold work as having nothing left to ask.
+func unresolvedQuestions(questions []work.Question) []work.Question {
 	result := make([]work.Question, 0, len(questions))
 	for _, question := range questions {
-		if question.Status == work.QuestionOpen {
+		if question.Status.Unresolved() {
 			result = append(result, question)
 		}
 	}
@@ -1364,6 +1584,14 @@ func limitSlice[T any](values []T, limit int) []T {
 		return values
 	}
 	return values[:limit]
+}
+
+func (s *Service) ListQuestionsNeedingAttention(ctx context.Context) ([]work.Question, error) {
+	questions, err := s.store.ListQuestionsNeedingAttention(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list questions needing attention: %w", err)
+	}
+	return questions, nil
 }
 
 func (s *Service) ListOutputProfiles(ctx context.Context) ([]output.Profile, error) {

@@ -42,8 +42,13 @@ type relation struct {
 	Cardinality string `json:"cardinality"`
 }
 type lifecycle struct {
-	ID          string      `json:"id"`
-	Entity      string      `json:"entity"`
+	ID     string `json:"id"`
+	Entity string `json:"entity"`
+	// Kinds scopes a lifecycle to specific values of a discriminator field on
+	// Entity, when one entity's valid transitions depend on it — ContextRecord
+	// is the current example, where Kind determines which states and edges
+	// apply. Omitted for a lifecycle with no such discriminator.
+	Kinds       []string    `json:"kinds,omitempty"`
 	States      []string    `json:"states"`
 	Transitions [][2]string `json:"transitions"`
 	ResumeRule  string      `json:"resume_rule,omitempty"`

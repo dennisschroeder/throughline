@@ -29,6 +29,181 @@ func TestNewArtifactValidatesExternalURI(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "URI") {
 		t.Fatalf("expected URI error, got %v", err)
 	}
+
+	// "not a URI" is rejected by the whitespace it contains, not because it lacks a
+	// scheme; a schemeless relative reference with no whitespace at all must still be
+	// rejected on its own, or it would be accepted with none of the workspace: scheme's
+	// containment guarantee applied to it.
+	_, err = NewArtifact(Artifact{ID: "artifact-3", WorkItemID: "item-1", Kind: "document", URI: "docs/report.md", AttachedBy: "agent:writer"}, now)
+	if err == nil || !strings.Contains(err.Error(), "URI") {
+		t.Fatalf("expected URI error for a schemeless relative reference, got %v", err)
+	}
+}
+
+// TestNewArtifactAcceptsAWorkspaceRelativeReference is REP-05's first artifact
+// criterion: a relative reference is a distinct, explicitly marked form, not
+// inferred from a URI that happens to lack a scheme.
+func TestNewArtifactAcceptsAWorkspaceRelativeReference(t *testing.T) {
+	now := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	for _, spelling := range []string{"workspace:docs/report.md", "workspace:/docs/report.md", "workspace:///docs/report.md"} {
+		artifact, err := NewArtifact(Artifact{
+			ID: "artifact-1", WorkItemID: "item-1", Kind: "document", URI: spelling, AttachedBy: "agent:writer",
+		}, now)
+		if err != nil {
+			t.Fatalf("%s: %v", spelling, err)
+		}
+		if artifact.URI != "workspace:docs/report.md" {
+			t.Fatalf("%s normalized to %q, want the canonical spelling", spelling, artifact.URI)
+		}
+	}
+}
+
+// TestNewArtifactRejectsAWorkspaceReferenceCarryingLostComponents guards against
+// silent information loss: a host, userinfo, query, or fragment on a
+// workspace: URI would otherwise vanish from the reconstructed workspace:<path>
+// form, letting two references the caller meant as distinct collide under the
+// dedup lookup as though they were spellings of the same thing.
+func TestNewArtifactRejectsAWorkspaceReferenceCarryingLostComponents(t *testing.T) {
+	now := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	for _, uri := range []string{
+		"workspace:docs/report.md?v=2",
+		"workspace:docs/report.md#section",
+		"workspace://host/docs/report.md",
+		"workspace://user:pass@host/docs/report.md",
+		"workspace://user@/docs/report.md", // userinfo without a host
+	} {
+		_, err := NewArtifact(Artifact{
+			ID: "artifact-1", WorkItemID: "item-1", Kind: "document", URI: uri, AttachedBy: "agent:writer",
+		}, now)
+		if err == nil {
+			t.Fatalf("%s: accepted, want rejection of the component that would be silently dropped", uri)
+		}
+	}
+}
+
+// TestNewArtifactNormalizesAWorkspaceReferenceIdempotently guards against a
+// canonical form that fails its own validator on a second pass: the
+// hierarchical spelling of a workspace: URI decodes percent-encoding before
+// this function ever sees it, so a literal "?" or "#" in a filename must be
+// re-escaped on the way out, not written back raw where it would reparse as
+// a query or fragment next time.
+func TestNewArtifactNormalizesAWorkspaceReferenceIdempotently(t *testing.T) {
+	now := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	first, err := NewArtifact(Artifact{
+		ID: "artifact-1", WorkItemID: "item-1", Kind: "document", URI: "workspace:///notes%3F.md", AttachedBy: "agent:writer",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewArtifact(Artifact{
+		ID: "artifact-2", WorkItemID: "item-1", Kind: "document", URI: first.URI, AttachedBy: "agent:writer",
+	}, now)
+	if err != nil {
+		t.Fatalf("the URI this function returned was rejected by the same function: %v", err)
+	}
+	if second.URI != first.URI {
+		t.Fatalf("re-normalizing %q produced %q, want it unchanged", first.URI, second.URI)
+	}
+}
+
+// TestNewArtifactNormalizesAPercentEncodedLeadingSlashIdempotently covers the
+// opaque spelling specifically: an opaque path decodes to a leading slash
+// (workspace:%2Fdocs%2Freport.md decodes to "/docs/report.md") the same way
+// the hierarchical form's already-decoded Path does, but only the
+// hierarchical branch trimmed that leading slash before this fix — so the
+// opaque form's first normalization produced "workspace:/docs/report.md",
+// and re-normalizing that output silently dropped the slash a second time
+// instead of returning it unchanged.
+func TestNewArtifactNormalizesAPercentEncodedLeadingSlashIdempotently(t *testing.T) {
+	now := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	first, err := NewArtifact(Artifact{
+		ID: "artifact-1", WorkItemID: "item-1", Kind: "document", URI: "workspace:%2Fdocs%2Freport.md", AttachedBy: "agent:writer",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.URI != "workspace:docs/report.md" {
+		t.Fatalf("normalized URI = %q, want the leading slash trimmed like the hierarchical form", first.URI)
+	}
+	second, err := NewArtifact(Artifact{
+		ID: "artifact-2", WorkItemID: "item-1", Kind: "document", URI: first.URI, AttachedBy: "agent:writer",
+	}, now)
+	if err != nil {
+		t.Fatalf("the URI this function returned was rejected by the same function: %v", err)
+	}
+	if second.URI != first.URI {
+		t.Fatalf("re-normalizing %q produced %q, want it unchanged", first.URI, second.URI)
+	}
+}
+
+// TestNewArtifactDeduplicatesWorkspaceReferencesAcrossSpellings is REP-05's
+// second criterion applied to the relative form: the opaque and hierarchical
+// spellings of a workspace: URI naming the same literal file must normalize
+// to the same string, or the two forms would silently defeat ArtifactByURI's
+// dedup lookup for exactly the filenames that need percent-encoding at all.
+func TestNewArtifactDeduplicatesWorkspaceReferencesAcrossSpellings(t *testing.T) {
+	now := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	opaque, err := NewArtifact(Artifact{
+		ID: "artifact-1", WorkItemID: "item-1", Kind: "document", URI: "workspace:notes%3F.md", AttachedBy: "agent:writer",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hierarchical, err := NewArtifact(Artifact{
+		ID: "artifact-2", WorkItemID: "item-1", Kind: "document", URI: "workspace:///notes%3F.md", AttachedBy: "agent:writer",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opaque.URI != hierarchical.URI {
+		t.Fatalf("opaque form normalized to %q, hierarchical form to %q, want the same string", opaque.URI, hierarchical.URI)
+	}
+}
+
+// TestNewArtifactRejectsAWorkspaceReferenceThatEscapesTheRoot is REP-05's second
+// artifact criterion, the containment half: no cleaning of a workspace-relative
+// path may climb above canonical_root, and this must hold lexically since the
+// domain layer never sees canonical_root itself.
+func TestNewArtifactRejectsAWorkspaceReferenceThatEscapesTheRoot(t *testing.T) {
+	now := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	for _, escaping := range []string{
+		"workspace:../escape.md",
+		"workspace:./a/../../escape.md",
+		"workspace:..",
+		"workspace:",
+	} {
+		_, err := NewArtifact(Artifact{
+			ID: "artifact-1", WorkItemID: "item-1", Kind: "document", URI: escaping, AttachedBy: "agent:writer",
+		}, now)
+		if err == nil {
+			t.Fatalf("%s: escaping reference accepted", escaping)
+		}
+	}
+}
+
+// TestNewArtifactNormalizesEquivalentAbsoluteURIsIdentically is REP-05's second
+// artifact criterion, the dedup half: two differently-spelled references to the
+// same resource must compare equal, since that equality is what the existing
+// ArtifactByURI lookup in attachArtifactMutation relies on to deduplicate.
+func TestNewArtifactNormalizesEquivalentAbsoluteURIsIdentically(t *testing.T) {
+	now := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	for _, pair := range [][2]string{
+		{"file:///a/./b.md", "file:///a/b.md"},
+		{"file:///a/x/../b.md", "file:///a/b.md"},
+		{"https://example.com/docs//report.md", "https://example.com/docs/report.md"},
+	} {
+		first, err := NewArtifact(Artifact{ID: "artifact-1", WorkItemID: "item-1", Kind: "document", URI: pair[0], AttachedBy: "agent:writer"}, now)
+		if err != nil {
+			t.Fatalf("%s: %v", pair[0], err)
+		}
+		second, err := NewArtifact(Artifact{ID: "artifact-2", WorkItemID: "item-1", Kind: "document", URI: pair[1], AttachedBy: "agent:writer"}, now)
+		if err != nil {
+			t.Fatalf("%s: %v", pair[1], err)
+		}
+		if first.URI != second.URI {
+			t.Fatalf("%q and %q normalized to %q and %q, want the same string", pair[0], pair[1], first.URI, second.URI)
+		}
+	}
 }
 
 func TestHumanReviewRequiresNamedVerifierAndRationale(t *testing.T) {
@@ -231,5 +406,34 @@ func activeProfile(validation json.RawMessage) Profile {
 		Version:        1,
 		LifecycleState: ProfileActive,
 		Validation:     validation,
+	}
+}
+
+func TestNewWorkItemValidationRecordBindsTheItemAsItsOnlySubject(t *testing.T) {
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	record, err := NewWorkItemValidationRecord("review-1", " item-1 ", 42, "code-review", ValidatorHumanReview, VerdictPassed, nil, "human:reviewer", "", json.RawMessage(`{"rationale":"Read the diff."}`), true, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.WorkItemID != "item-1" || record.OutputRevisionID != "" || record.SubjectSequence != 42 || !record.Degraded || record.Version != 1 {
+		t.Fatalf("work item review = %#v", record)
+	}
+	for name, build := range map[string]func() (ValidationRecord, error){
+		"no work item": func() (ValidationRecord, error) {
+			return NewWorkItemValidationRecord("r", " ", 1, "code-review", ValidatorProbe, VerdictPassed, nil, "agent:ci", "", nil, false, now)
+		},
+		"successor use": func() (ValidationRecord, error) {
+			return NewWorkItemValidationRecord("r", "item-1", 1, "code-review", ValidatorSuccessorUse, VerdictPassed, nil, "agent:ci", "", nil, false, now)
+		},
+		"negative sequence": func() (ValidationRecord, error) {
+			return NewWorkItemValidationRecord("r", "item-1", -1, "code-review", ValidatorProbe, VerdictPassed, nil, "agent:ci", "", nil, false, now)
+		},
+		"human review without rationale": func() (ValidationRecord, error) {
+			return NewWorkItemValidationRecord("r", "item-1", 1, "code-review", ValidatorHumanReview, VerdictPassed, nil, "human:reviewer", "", nil, false, now)
+		},
+	} {
+		if _, err := build(); err == nil {
+			t.Fatalf("%s was accepted", name)
+		}
 	}
 }

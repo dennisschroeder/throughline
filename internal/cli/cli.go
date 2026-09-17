@@ -68,6 +68,16 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return 0
+	case "capability":
+		if len(args) < 2 || args[1] != "grant" {
+			fmt.Fprintln(stderr, "usage: throughline capability grant --actor <actor-id> --capability <slug> --as <human-actor-id> [--description <text>] [workspace directory]")
+			return 2
+		}
+		if err := runCapabilityGrant(ctx, args[2:], stdout, stderr); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
 	case "unregister":
 		if err := runUnregister(ctx, args[1:], stdout, stderr); err != nil {
 			fmt.Fprintf(stderr, "throughline unregister: %v\n", err)
@@ -309,7 +319,7 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	}
 	fmt.Fprintln(stdout, "throughline doctor")
 
-	workspace, workspaceErr := config.Find(directory)
+	workspace, workspaceErr := config.FindReadOnly(directory)
 	switch {
 	case workspaceErr == nil:
 		fmt.Fprintf(stdout, "workspace: found workspace_id=%s at %s\n", workspace.Config.WorkspaceID, workspace.Root)
@@ -341,6 +351,10 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		}
 	}
 
+	if workspaceErr == nil {
+		reportSchema(ctx, stdout, workspace.DatabasePath)
+	}
+
 	health, healthErr := fetchHealth(ctx, *addr)
 	if healthErr != nil {
 		fmt.Fprintf(stdout, "daemon: unreachable at %s (%v)\n", *addr, healthErr)
@@ -349,6 +363,28 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	}
 	fmt.Fprintf(stdout, "daemon: reachable, version=%s\n", health.Version)
 	return nil
+}
+
+// reportSchema tells doctor's reader whether the workspace database matches
+// this binary, which is where the update-restart remediation for commands that
+// open the database becomes discoverable. It never migrates.
+func reportSchema(ctx context.Context, stdout io.Writer, databasePath string) {
+	if _, err := os.Stat(databasePath); err != nil {
+		fmt.Fprintf(stdout, "schema: database not readable at %s (%v)\n", databasePath, err)
+		fmt.Fprintln(stdout, "  remediation: check the workspace's database path, or run `throughline init` for a new workspace")
+		return
+	}
+	database, err := throughlinesqlite.OpenReadOnly(ctx, databasePath)
+	if err != nil {
+		fmt.Fprintf(stdout, "schema: %v\n", err)
+		return
+	}
+	defer database.Close()
+	if err := database.CheckSchemaCurrent(ctx); err != nil {
+		fmt.Fprintf(stdout, "schema: %v\n", err)
+		return
+	}
+	fmt.Fprintln(stdout, "schema: current")
 }
 
 // runDaemonStatus prints throughline daemon status --json's stable machine-readable
@@ -950,7 +986,7 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	if err := registerWorkspace(ctx, registryHandle, workspace, ""); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(workspace.DatabasePath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(workspace.DatabasePath), 0o700); err != nil {
 		return fmt.Errorf("create database directory: %w", err)
 	}
 	database, err := throughlinesqlite.Open(ctx, workspace.DatabasePath)
@@ -1065,5 +1101,5 @@ func runUnregister(ctx context.Context, args []string, stdout, stderr io.Writer)
 }
 
 func writeUsage(writer io.Writer) {
-	fmt.Fprintln(writer, "usage: throughline <init|unregister|setup|uninstall|ready|show|mcp|doctor|daemon <start|stop|restart|status|logs|rotate-credential>|version> [arguments]")
+	fmt.Fprintln(writer, "usage: throughline <init|unregister|setup|uninstall|ready|show|capability grant|mcp|doctor|daemon <start|stop|restart|status|logs|rotate-credential>|version> [arguments]")
 }

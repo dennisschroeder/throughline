@@ -169,3 +169,32 @@ func TestTransitionWorkItemRequiresReasonsForCancellationAndBackwardEdges(t *tes
 		})
 	}
 }
+
+// TestNewActivityRequiresTheObjectiveOfObjectiveScopedEvents makes a missing
+// binding fail at the write instead of vanishing from the objective feed.
+func TestNewActivityRequiresTheObjectiveOfObjectiveScopedEvents(t *testing.T) {
+	now := time.Date(2026, 8, 21, 14, 0, 0, 0, time.UTC)
+	base := Activity{ID: "activity-1", EntityID: "entity-1", ActorID: "human:owner", EventType: "test.event", Summary: "Test event."}
+	for _, kind := range []string{"objective", "plan", "question", "decision", "context_record"} {
+		unbound := base
+		unbound.EntityKind = kind
+		if _, err := NewActivity(unbound, now); err == nil {
+			t.Fatalf("%s activity without an objective was accepted", kind)
+		}
+		unbound.ObjectiveID = "objective-1"
+		if _, err := NewActivity(unbound, now); err != nil {
+			t.Fatalf("%s activity with its objective: %v", kind, err)
+		}
+	}
+	itemScoped := base
+	itemScoped.EntityKind = "claim"
+	itemScoped.WorkItemID = "item-1"
+	if _, err := NewActivity(itemScoped, now); err == nil {
+		t.Fatal("work-item activity without its objective was accepted")
+	}
+	workspaceScoped := base
+	workspaceScoped.EntityKind = "actor"
+	if _, err := NewActivity(workspaceScoped, now); err != nil {
+		t.Fatalf("workspace-level activity needs no objective: %v", err)
+	}
+}
