@@ -319,7 +319,7 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	}
 	fmt.Fprintln(stdout, "throughline doctor")
 
-	workspace, workspaceErr := config.Find(directory)
+	workspace, workspaceErr := config.FindReadOnly(directory)
 	switch {
 	case workspaceErr == nil:
 		fmt.Fprintf(stdout, "workspace: found workspace_id=%s at %s\n", workspace.Config.WorkspaceID, workspace.Root)

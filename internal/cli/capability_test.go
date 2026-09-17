@@ -333,6 +333,55 @@ func TestDoctorReportsASchemaBehindTheBinary(t *testing.T) {
 	}
 }
 
+// TestDoctorNeverRepairsWorkspaceConfigPermissions covers the gap
+// TestDoctorReportsASchemaBehindTheBinary's own database check left open:
+// doctor resolves the workspace through config.Find, which loads config.toml
+// through the same repairing path throughline init uses, so a read-only
+// doctor call chmodded the workspace directory to 0700 and config.toml to
+// 0600 on every run regardless of what they were set to before.
+func TestDoctorNeverRepairsWorkspaceConfigPermissions(t *testing.T) {
+	root, workspace := initWorkspaceWithActors(t)
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previousWD) })
+
+	if err := os.Chmod(workspace.Directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(workspace.ConfigPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(workspace.Directory, 0o700)
+		_ = os.Chmod(workspace.ConfigPath, 0o600)
+	})
+
+	var stdout, stderr bytes.Buffer
+	if code := Run(context.Background(), []string{"doctor", "--addr", "127.0.0.1:1"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("doctor exited %d: %s", code, stderr.String())
+	}
+
+	directoryInfo, err := os.Stat(workspace.Directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := directoryInfo.Mode().Perm(); got != 0o755 {
+		t.Fatalf("doctor changed %s mode to %v; expected the read-only command to preserve 0755", workspace.Directory, got)
+	}
+	configInfo, err := os.Stat(workspace.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := configInfo.Mode().Perm(); got != 0o644 {
+		t.Fatalf("doctor changed %s mode to %v; expected the read-only command to preserve 0644", workspace.ConfigPath, got)
+	}
+}
+
 // TestDoctorSchemaLineOnAMissingOrUnmigratedDatabase covers the two states
 // doctor must report without creating or migrating anything.
 func TestDoctorSchemaLineOnAMissingOrUnmigratedDatabase(t *testing.T) {
