@@ -1149,12 +1149,18 @@ updating the Homebrew tap.
 - `get_changes` for this objective returned planning records (`decision.recorded`,
   `context_record.recorded`, `objective.phase_changed`) in the objective-filtered feed, confirming
   REP-07.
-- `record_validation` with `work_item_id` **could not be verified in this session**: the connected
-  MCP client's cached input schema for this one tool still lacks `work_item_id` even after an
-  explicit reload, while `get_item` and `board_overview` return current data over the same
-  connection. This looks like a stale schema cached by the MCP client integration specifically for
-  this tool, not a server defect — `get_item` on the same work item shows `review_requirements` and
-  the REP-09 gate fields correctly. Not independently confirmed; flagged rather than assumed fixed.
+- `record_validation` with `work_item_id` **initially could not be verified in this session**: the
+  connected MCP client's cached input schema for this one tool lacked `work_item_id` even after an
+  explicit reload, while `get_item` and `board_overview` returned current data over the same
+  connection — a stale client-side schema for this one tool, not a server defect. Confirmed the
+  following day (2026-09-18), same session, after the MCP connection had cycled on its own (new
+  tools absent the day before, e.g. `resolve_workspace`, `list_objectives`, appeared in the deferred
+  list): `record_validation` with `work_item_id: 01a07794-2d52-73b9-a5bc-d8d3044d36a4` and
+  `validator_kind: human_review` created `ValidationRecord 01a0b50d-272d-79ee-9983-4862e3c16d36`
+  against the real REP-09 work item. (First retry used `validator_kind: manual`, correctly refused
+  server-side with `unsupported validator kind "manual"` — confirming the request now reaches the
+  server's own validation rather than failing client-side — before finding `human_review` in
+  `internal/domain/output/revisions.go`'s `ValidatorKind.supported()` list.)
 - `throughline capability grant`: refusal for a non-human granter confirmed
   (`agent:claude-code` → `capability smoke_test can only be granted by a registered human actor;
   agent:claude-code has kind agent`); success with `--as human:dennis` confirmed (`granted
