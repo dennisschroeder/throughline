@@ -677,3 +677,37 @@ func TestWorkCannotHangOffAnotherRunsWork(t *testing.T) {
 		t.Fatalf("a parent inside the same run was refused: %v", err)
 	}
 }
+
+// TestDependenciesCannotCrossRuns is the ordering half of run separateness. A
+// dependency decides when work becomes ready, so an edge across runs would
+// make one run wait on another — and the sanctioned way to use an earlier
+// run's result is to bind its exact accepted output revision.
+func TestDependenciesCannotCrossRuns(t *testing.T) {
+	h := newRunHarness(t, "cross-run-dependency.db", nil, 2)
+	first, err := h.createRun("run-1", "create-1", "agent:one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.createRun("run-2", "create-2", "agent:one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := second.WorkItems[0]
+	_, err = app.UnwrapMutation(h.service.LinkDependency(h.ctx, app.LinkDependencyCommand{
+		WorkItemID: child.ID, DependsOnWorkItemID: first.WorkItems[0].ID, Kind: work.DependencyHard,
+		ActorID: "agent:one", ExpectedVersion: child.Version, IdempotencyKey: "link-cross-run",
+	}))
+	if err == nil {
+		t.Fatal("a dependency was linked across two runs")
+	}
+	if !strings.Contains(err.Error(), "plan run") {
+		t.Fatalf("the refusal does not name the run boundary: %v", err)
+	}
+	// Inside one run it is ordinary.
+	if _, err := app.UnwrapMutation(h.service.LinkDependency(h.ctx, app.LinkDependencyCommand{
+		WorkItemID: second.WorkItems[0].ID, DependsOnWorkItemID: second.WorkItems[1].ID, Kind: work.DependencySoft,
+		ActorID: "agent:one", ExpectedVersion: child.Version, IdempotencyKey: "link-same-run",
+	})); err != nil {
+		t.Fatalf("a dependency inside one run was refused: %v", err)
+	}
+}

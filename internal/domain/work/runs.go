@@ -557,15 +557,14 @@ func RunCreationFingerprint(planID string, bindings []RunInputBinding) string {
 // that Run is active, work proposed outside a Run never executes, and work
 // that predates Runs keeps the behavior it always had.
 func RunGateSatisfied(origin WorkItemOrigin, runActive bool) (bool, string) {
-	switch origin {
-	case OriginPlanStep, OriginRunLocal:
+	if origin.BelongsToRun() {
 		if runActive {
 			return true, ""
 		}
 		return false, "work belonging to a plan run can only be executed while that run is active"
-	case OriginUnplanned:
-		return false, "work proposed outside a plan run is not executable; take it into an active run first"
-	default:
-		return true, ""
 	}
+	if origin == OriginUnplanned {
+		return false, "work proposed outside a plan run is not executable; take it into an active run first"
+	}
+	return true, ""
 }
