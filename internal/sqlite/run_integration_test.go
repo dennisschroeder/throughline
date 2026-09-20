@@ -1304,3 +1304,39 @@ VALUES ('literal-a', 'RUN-A/1', ?, 'Not in the class step key namespace', '', 'r
 		t.Fatalf("proposed steps = %#v", proposed.Steps)
 	}
 }
+
+// TestTheReservedNamespaceCheckHandlesMultiByteKeys guards the prefix
+// comparison's other edge: SQLite's substr and length both count characters
+// rather than bytes, so a key outside the Latin range must still be compared
+// against itself and not against a truncation of it.
+func TestTheReservedNamespaceCheckHandlesMultiByteKeys(t *testing.T) {
+	h := newRunHarness(t, "namespace-multibyte.db", nil, 0)
+	if _, err := h.database.db.ExecContext(h.ctx, `
+INSERT INTO work_items (id, key, objective_id, title, description, kind, commitment_state, execution_status,
+  priority, estimated_scope, execution_policy, required_actor_kind, attention_state, origin, version, created_at, updated_at)
+VALUES ('multibyte-squatter', 'PRÜFUNG-Ü/1', ?, 'Predates the reservation', '', 'research', 'accepted', 'ready',
+  'medium', 'small', 'autonomous_with_report', 'agent', 'none', 'legacy', 1, '2026-08-21T15:00:00.000000000Z', '2026-08-21T15:00:00.000000000Z')`,
+		h.objective.ID); err != nil {
+		t.Fatal(err)
+	}
+	proposeStep := func(key, idempotencyKey string, revision int) error {
+		_, err := app.UnwrapMutation(h.service.ProposePlan(h.ctx, app.ProposePlanCommand{
+			ObjectiveID: h.objective.ID, ActorID: "agent:one", IdempotencyKey: idempotencyKey,
+			Title: "Multi-byte step key", Revision: revision,
+			Steps: []app.ProposedPlanStep{{
+				ClientRef: "only", Key: key, Title: "A key outside the Latin range", Kind: "research", Required: true,
+				Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
+				ExecutionPolicy: work.PolicyAutonomousWithReport, RequiredActorKind: work.ActorAgent,
+			}},
+		}))
+		return err
+	}
+	if err := proposeStep("PRÜFUNG-Ü", "propose-multibyte-taken", 2); err == nil {
+		t.Fatal("a step whose multi-byte namespace is already occupied was accepted")
+	}
+	// A shorter key that is a byte-level, but not character-level, prefix of
+	// the occupied one must not be mistaken for it.
+	if err := proposeStep("PRÜFUNG", "propose-multibyte-free", 3); err != nil {
+		t.Fatalf("a step with a free multi-byte namespace was refused: %v", err)
+	}
+}
