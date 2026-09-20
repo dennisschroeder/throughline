@@ -2,13 +2,17 @@ package sqlite
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/dennisschroeder/throughline/internal/app"
+	"github.com/dennisschroeder/throughline/internal/domain/authority"
+	"github.com/dennisschroeder/throughline/internal/domain/output"
 	"github.com/dennisschroeder/throughline/internal/domain/work"
 	"github.com/dennisschroeder/throughline/internal/ports"
 )
@@ -20,6 +24,8 @@ type runHarness struct {
 	t         *testing.T
 	ctx       context.Context
 	service   *app.Service
+	database  *Database
+	ids       *planningIDs
 	path      string
 	objective work.Objective
 	plan      work.Plan
@@ -37,8 +43,9 @@ func newRunHarness(t *testing.T, name string, inputs []app.ProposedPlanInput, ma
 	if err := database.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	service := app.NewService(database.Store(), &planningIDs{}, &planningClock{})
-	harness := &runHarness{t: t, ctx: ctx, service: service, path: path}
+	ids := &planningIDs{}
+	service := app.NewService(database.Store(), ids, &planningClock{})
+	harness := &runHarness{t: t, ctx: ctx, service: service, database: database, ids: ids, path: path}
 	for _, actor := range []app.RegisterActorCommand{
 		{Actor: work.Actor{ID: "human:owner", Kind: work.ActorTypeHuman, DisplayName: "Owner"}, IdempotencyKey: "register-owner"},
 		{Actor: work.Actor{ID: "agent:one", Kind: work.ActorTypeAgent, DisplayName: "Agent One"}, IdempotencyKey: "register-one"},
@@ -789,5 +796,410 @@ func TestMigration0018PreservesExistingWorkAsLegacyExecution(t *testing.T) {
 	}
 	if claimed.WorkItem.Origin != work.OriginLegacy || claimed.WorkItem.PlanRunID != "" {
 		t.Fatalf("migrated legacy work item = %#v", claimed.WorkItem)
+	}
+}
+
+// TestClosingARunSettlesALapsedClaim is a regression: a claim whose lease ran
+// out is still an open row, and its owner may no longer release it. Closing a
+// run had to settle it through the ordinary expiry path instead, or one lapsed
+// lease would make the run impossible to close at all.
+func TestClosingARunSettlesALapsedClaim(t *testing.T) {
+	h := newRunHarness(t, "lapsed-claim.db", nil, 0)
+	run, err := h.createRun("run-1", "create-1", "agent:one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := run.WorkItems[0]
+	ready, err := app.UnwrapMutation(h.service.TransitionWorkItem(h.ctx, app.TransitionWorkItemCommand{
+		WorkItemID: first.ID, TargetStatus: work.StatusReady, ActorID: "agent:one",
+		Reason: "Queue the first step.", ExpectedVersion: first.Version, IdempotencyKey: "ready-first",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := app.UnwrapMutation(h.service.ClaimWorkItem(h.ctx, app.ClaimWorkItemCommand{
+		WorkItemID: first.ID, ActorID: "agent:one", ExpectedVersion: ready.Version,
+		LeaseDuration: work.MinClaimLeaseDuration, IdempotencyKey: "claim-first",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Move past the lease without releasing it, the way a crashed agent would.
+	lapsed := app.NewService(h.database.Store(), h.ids, &advancingClock{now: claimed.Claim.ExpiresAt.Add(time.Minute)})
+	if _, err := app.UnwrapMutation(lapsed.ClosePlanRun(h.ctx, app.ClosePlanRunCommand{
+		PlanRunID: run.Run.ID, ActorID: "human:owner", IdempotencyKey: "cancel-with-lapsed-claim",
+		ExpectedVersion: run.Run.Version, TargetStatus: work.PlanRunCancelled, Reason: "The agent never came back.",
+	})); err != nil {
+		t.Fatalf("a lapsed claim made the run impossible to close: %v", err)
+	}
+	itemContext, err := h.service.GetWorkItem(h.ctx, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range itemContext.Claims {
+		if candidate.ReleasedAt.IsZero() {
+			t.Fatalf("closing the run left claim %s open: %#v", candidate.ID, candidate)
+		}
+	}
+}
+
+// TestPlanContextListsEveryRunsWorkItems pins what the plan-shaped read
+// actually contains, because the definition and the work instantiated from it
+// are easy to conflate: the definition is fixed, and Items grows with each run.
+func TestPlanContextListsEveryRunsWorkItems(t *testing.T) {
+	h := newRunHarness(t, "plan-items.db", nil, 2)
+	if _, err := h.createRun("run-1", "create-1", "agent:one"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.createRun("run-2", "create-2", "agent:one"); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := h.service.GetObjectiveContext(h.ctx, h.objective.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered.Plans) != 1 {
+		t.Fatalf("recovered %d plan revisions, want 1", len(recovered.Plans))
+	}
+	plan := recovered.Plans[0]
+	if len(plan.Steps) != 2 {
+		t.Fatalf("the definition changed when runs were created: %d steps", len(plan.Steps))
+	}
+	if len(plan.Items) != 4 {
+		t.Fatalf("plan items after two runs = %d, want 4 — one per step per run", len(plan.Items))
+	}
+	runs := map[string]int{}
+	for _, item := range plan.Items {
+		if item.WorkItem.PlanRunID == "" {
+			t.Fatalf("a materialized item lost its run: %#v", item.WorkItem)
+		}
+		runs[item.WorkItem.PlanRunID]++
+	}
+	if len(runs) != 2 {
+		t.Fatalf("plan items span %d runs, want 2: %#v", len(runs), runs)
+	}
+}
+
+// TestAClosedRunRefusesNewEffectsButKeepsRecordingStartedOnes is the external
+// effect half of the run gate, including its one deliberate exception: a run
+// that has ended authorizes nothing new, and an execution that was already
+// under way when it ended may still record what actually happened.
+func TestAClosedRunRefusesNewEffectsButKeepsRecordingStartedOnes(t *testing.T) {
+	h := newRunHarness(t, "run-effects.db", nil, 0)
+	run, err := h.createRun("run-1", "create-1", "agent:one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := run.WorkItems[0]
+	ready, err := app.UnwrapMutation(h.service.TransitionWorkItem(h.ctx, app.TransitionWorkItemCommand{
+		WorkItemID: item.ID, TargetStatus: work.StatusReady, ActorID: "agent:one",
+		Reason: "Queue the first step.", ExpectedVersion: item.Version, IdempotencyKey: "ready-first",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := app.UnwrapMutation(h.service.ClaimWorkItem(h.ctx, app.ClaimWorkItemCommand{
+		WorkItemID: item.ID, ActorID: "agent:one", ExpectedVersion: ready.Version,
+		LeaseDuration: time.Hour, IdempotencyKey: "claim-first", TransitionToInProgress: true,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	item = claimed.WorkItem
+	evidence, err := app.UnwrapMutation(h.service.AttachArtifact(h.ctx, app.AttachArtifactCommand{
+		WorkItemID: item.ID, ActorID: "agent:one", ExpectedVersion: item.Version, IdempotencyKey: "attach-evidence",
+		Kind: "document", URI: "throughline://run/effect-evidence", Title: "Effect evidence",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	item = evidence.WorkItem
+
+	subject := json.RawMessage(`{"action_type":"knowledge.publish","target":{"collection":"runs"},"arguments":[],"scope":{"workspace":"local"},"permissions":["knowledge.write"],"credential_requirements":[],"constraints":{}}`)
+	proposed, err := app.UnwrapMutation(h.service.ProposeExternalAction(h.ctx, app.ProposeExternalActionCommand{
+		WorkItemID: item.ID, ActorID: "agent:one", ExpectedVersion: item.Version, IdempotencyKey: "propose-effect",
+		Required: false, Title: "Publish from inside the run", Rationale: "An effect that starts while the run is active.", Subject: subject,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	item.Version++
+	requested, err := app.UnwrapMutation(h.service.RequestExternalActionApproval(h.ctx, app.RequestExternalActionApprovalCommand{
+		ActionID: proposed.Action.ID, ActorID: "agent:one", ExpectedActionVersion: proposed.Action.Version,
+		ExpectedSubjectHash: proposed.Revision.AuthorizationSubjectHash, IdempotencyKey: "request-effect",
+		ApprovedForActorID: "agent:one", Constraints: json.RawMessage(`{}`), Request: "Authorize this exact publication.",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := app.UnwrapMutation(h.service.ResolveExternalActionApproval(h.ctx, app.ResolveExternalActionApprovalCommand{
+		ApprovalID: requested.ID, ActorID: "human:owner", ExpectedActionVersion: proposed.Action.Version,
+		IdempotencyKey: "resolve-effect", Decision: authority.ApprovalApproved, Rationale: "The scope is appropriate.",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := h.service.CheckActionAuthorization(h.ctx, app.CheckActionAuthorizationQuery{
+		ActionID: resolved.Action.ID, ActorID: "agent:one", SubjectHash: proposed.Revision.AuthorizationSubjectHash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decision.Authorized {
+		t.Fatalf("an authorized action inside an active run = %#v", decision)
+	}
+	started, err := app.UnwrapMutation(h.service.StartExternalActionExecution(h.ctx, app.StartExternalActionExecutionCommand{
+		ActionID: resolved.Action.ID, ActorID: "agent:one", ExpectedActionVersion: resolved.Action.Version,
+		IdempotencyKey: "start-effect", SubjectHash: proposed.Revision.AuthorizationSubjectHash, AuthorityGrantID: resolved.Grant.ID,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A second action is proposed and authorized but never started, so what it
+	// answers after the run ends is about the gate, not about its own state.
+	secondSubject := json.RawMessage(`{"action_type":"knowledge.publish","target":{"collection":"runs","shelf":"second"},"arguments":[],"scope":{"workspace":"local"},"permissions":["knowledge.write"],"credential_requirements":[],"constraints":{}}`)
+	current, err := h.service.GetWorkItem(h.ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondProposed, err := app.UnwrapMutation(h.service.ProposeExternalAction(h.ctx, app.ProposeExternalActionCommand{
+		WorkItemID: item.ID, ActorID: "agent:one", ExpectedVersion: current.WorkItem.Version, IdempotencyKey: "propose-second-effect",
+		Required: false, Title: "Publish again after the run ends", Rationale: "Must be refused once the run is terminal.", Subject: secondSubject,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRequested, err := app.UnwrapMutation(h.service.RequestExternalActionApproval(h.ctx, app.RequestExternalActionApprovalCommand{
+		ActionID: secondProposed.Action.ID, ActorID: "agent:one", ExpectedActionVersion: secondProposed.Action.Version,
+		ExpectedSubjectHash: secondProposed.Revision.AuthorizationSubjectHash, IdempotencyKey: "request-second-effect",
+		ApprovedForActorID: "agent:one", Constraints: json.RawMessage(`{}`), Request: "Authorize the second publication.",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondResolved, err := app.UnwrapMutation(h.service.ResolveExternalActionApproval(h.ctx, app.ResolveExternalActionApprovalCommand{
+		ApprovalID: secondRequested.ID, ActorID: "human:owner", ExpectedActionVersion: secondProposed.Action.Version,
+		IdempotencyKey: "resolve-second-effect", Decision: authority.ApprovalApproved, Rationale: "Approved before the run ended.",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := app.UnwrapMutation(h.service.ClosePlanRun(h.ctx, app.ClosePlanRunCommand{
+		PlanRunID: run.Run.ID, ActorID: "human:owner", IdempotencyKey: "cancel-run",
+		ExpectedVersion: run.Run.Version, TargetStatus: work.PlanRunCancelled, Reason: "The source went away mid-flight.",
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing new may be authorized or started.
+	afterDecision, err := h.service.CheckActionAuthorization(h.ctx, app.CheckActionAuthorizationQuery{
+		ActionID: secondResolved.Action.ID, ActorID: "agent:one", SubjectHash: secondProposed.Revision.AuthorizationSubjectHash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterDecision.Authorized || afterDecision.Denial == nil || afterDecision.Denial.Reason != authority.DenialRunNotActive {
+		t.Fatalf("authorization check after the run closed = %#v", afterDecision)
+	}
+	var refusal app.AuthorizationError
+	_, err = app.UnwrapMutation(h.service.StartExternalActionExecution(h.ctx, app.StartExternalActionExecutionCommand{
+		ActionID: secondResolved.Action.ID, ActorID: "agent:one", ExpectedActionVersion: secondResolved.Action.Version,
+		IdempotencyKey: "start-second-effect", SubjectHash: secondProposed.Revision.AuthorizationSubjectHash, AuthorityGrantID: secondResolved.Grant.ID,
+	}))
+	if !errors.As(err, &refusal) || refusal.Decision.Denial == nil || refusal.Decision.Denial.Reason != authority.DenialRunNotActive {
+		t.Fatalf("starting an effect after the run closed = %v", err)
+	}
+
+	// The effect that was already under way still records what happened.
+	completed, err := app.UnwrapMutation(h.service.CompleteExternalActionExecution(h.ctx, app.CompleteExternalActionExecutionCommand{
+		ExecutionID: started.Execution.ID, ActorID: "agent:one", ExpectedActionVersion: started.Action.Version,
+		IdempotencyKey: "complete-effect", State: authority.ExecutionSucceeded,
+		Result: json.RawMessage(`{"status":"published"}`), EvidenceArtifactID: evidence.Artifact.ID,
+	}))
+	if err != nil {
+		t.Fatalf("a run that ended mid-flight refused the historical result of an effect it had authorized: %v", err)
+	}
+	if completed.Execution.State != authority.ExecutionSucceeded {
+		t.Fatalf("completed execution = %#v", completed.Execution)
+	}
+}
+
+// TestPatchedRunCapacityIsActuallyStored is a regression: the objective update
+// once omitted the capacity column, so raising the limit was reported as
+// successful, survived in the idempotency record, and was silently absent from
+// the database the next read saw.
+func TestPatchedRunCapacityIsActuallyStored(t *testing.T) {
+	h := newRunHarness(t, "patched-capacity.db", nil, 0)
+	objective, err := h.service.ResolveObjective(h.ctx, h.objective.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raised := 2
+	if _, err := app.UnwrapMutation(h.service.PatchObjective(h.ctx, app.PatchObjectiveCommand{
+		ObjectiveID: h.objective.ID, ActorID: "human:owner", IdempotencyKey: "raise-capacity",
+		ExpectedVersion: objective.Version, MaxConcurrentRuns: &raised,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := h.service.ResolveObjective(h.ctx, h.objective.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.MaxConcurrentRuns != 2 {
+		t.Fatalf("stored max concurrent runs = %d, want 2 — the patch was reported but not written", stored.MaxConcurrentRuns)
+	}
+	if stored.Mode != work.ObjectiveFinite {
+		t.Fatalf("patching capacity changed the objective's mode: %#v", stored)
+	}
+	// And the raised limit is the one the capacity check actually applies.
+	if _, err := h.createRun("run-1", "create-1", "agent:one"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.createRun("run-2", "create-2", "agent:one"); err != nil {
+		t.Fatalf("the raised limit was not honoured: %v", err)
+	}
+}
+
+// TestARunKeyIsComparedAfterNormalization is a regression: the lookup once used
+// the raw request key while storage trimmed it, so a retry differing only by
+// whitespace missed the run it had already created and was refused for capacity.
+func TestARunKeyIsComparedAfterNormalization(t *testing.T) {
+	h := newRunHarness(t, "run-key-whitespace.db", nil, 0)
+	first, err := h.createRun("daily", "create-by-one", "agent:one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := h.createRun("  daily  ", "create-by-two", "agent:two")
+	if err != nil {
+		t.Fatalf("a retry differing only by whitespace was refused: %v", err)
+	}
+	if replayed.Run.ID != first.Run.ID {
+		t.Fatalf("whitespace produced a second run: %s and %s", first.Run.ID, replayed.Run.ID)
+	}
+}
+
+// TestAnAmbiguousBindingIsRefused is a regression: the shape used to be chosen
+// by precedence, so a binding carrying two shapes silently lost one — and a
+// later replay that changed only the discarded part looked identical.
+func TestAnAmbiguousBindingIsRefused(t *testing.T) {
+	h := newRunHarness(t, "ambiguous-binding.db", []app.ProposedPlanInput{{Name: "window", Required: true, Ordinal: 1}}, 0)
+	if _, err := h.createRun("ambiguous", "create-ambiguous", "agent:one", app.RunInputBindingCommand{
+		Name: "window", Value: "2026-Q1", Locator: "file:///archive.md", Digest: "sha256:abc",
+	}); err == nil {
+		t.Fatal("a binding filling two shapes was accepted")
+	}
+	if _, err := h.createRun("empty", "create-empty", "agent:one", app.RunInputBindingCommand{Name: "window"}); err == nil {
+		t.Fatal("a binding filling no shape was accepted")
+	}
+}
+
+// TestAPlanStepMayOnlyRequireAnAcceptedRevision is a regression: an approved
+// definition is immutable and copied into every run, so a requirement on a
+// revision that was never accepted would block every one of them forever.
+func TestAPlanStepMayOnlyRequireAnAcceptedRevision(t *testing.T) {
+	h := newRunHarness(t, "unaccepted-requirement.db", nil, 0)
+	run, err := h.createRun("run-1", "create-1", "agent:one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := run.WorkItems[0]
+	defined, err := app.UnwrapMutation(h.service.DefineExpectedOutput(h.ctx, app.DefineExpectedOutputCommand{
+		WorkItemID: item.ID, ActorID: "agent:one", Name: "A produced dossier", ProfileName: "research_dossier",
+		ProfileVersion: 1, Ordinal: 1, Required: true, ExpectedVersion: item.Version, IdempotencyKey: "define-output",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	produced, err := app.UnwrapMutation(h.service.CreateOutputRevision(h.ctx, app.CreateOutputRevisionCommand{
+		ExpectedOutputID: defined.ID, ActorID: "agent:one", IdempotencyKey: "produce-revision", ContentDigest: "sha256:draft",
+		Artifacts: []app.OutputArtifactInput{{Kind: "document", URI: "file:///draft.md", Title: "Draft", Role: "primary"}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if produced.AcceptanceState == output.RevisionAccepted {
+		t.Fatalf("the fixture revision was accepted before the test could use it: %#v", produced)
+	}
+	if _, err := app.UnwrapMutation(h.service.ProposePlan(h.ctx, app.ProposePlanCommand{
+		ObjectiveID: h.objective.ID, ActorID: "agent:one", IdempotencyKey: "propose-unaccepted",
+		Title: "Requires an unaccepted revision", Revision: 2,
+		Steps: []app.ProposedPlanStep{{
+			ClientRef: "only", Key: "RUN-UNACCEPTED", Title: "Needs a reviewed input", Kind: "research", Required: true,
+			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
+			ExecutionPolicy: work.PolicyAutonomousWithReport, RequiredActorKind: work.ActorAgent,
+			OutputRequirements: []app.ProposedStepOutputRequirement{{RequiredOutputRevisionID: produced.ID, Required: true}},
+		}},
+	})); err == nil {
+		t.Fatal("a plan step requiring an unaccepted output revision was persisted")
+	}
+}
+
+// TestPlanStepKeysAreUniqueAcrossTheWorkspace is a regression: a run
+// materializes "<step key>/<run sequence>", and work item keys are globally
+// unique, so two objectives declaring the same step key would collide on their
+// first runs — long after the plans were written and approved.
+func TestPlanStepKeysAreUniqueAcrossTheWorkspace(t *testing.T) {
+	h := newRunHarness(t, "step-key-uniqueness.db", nil, 0)
+	other, err := app.UnwrapMutation(h.service.CreateObjective(h.ctx, app.CreateObjectiveCommand{
+		ActorID: "human:owner", IdempotencyKey: "create-other", Key: "OBJ-OTHER-KEYS",
+		Title: "Another objective", DesiredOutcome: "Must not reuse a step key.", Phase: work.ObjectivePlanning,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = app.UnwrapMutation(h.service.ProposePlan(h.ctx, app.ProposePlanCommand{
+		ObjectiveID: other.ID, ActorID: "agent:one", IdempotencyKey: "propose-colliding",
+		Title: "Colliding definition", Revision: 1,
+		Steps: []app.ProposedPlanStep{{
+			ClientRef: "first", Key: "RUN-FIRST", Title: "Same key as another objective's step", Kind: "research", Required: true,
+			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
+			ExecutionPolicy: work.PolicyAutonomousWithReport, RequiredActorKind: work.ActorAgent,
+		}},
+	}))
+	if err == nil {
+		t.Fatal("two objectives were allowed to declare the same plan step key")
+	}
+	if !strings.Contains(err.Error(), "RUN-FIRST") {
+		t.Fatalf("the refusal does not name the colliding key: %v", err)
+	}
+}
+
+// TestAStepDefinitionRejectsDuplicateOrdinals is a regression: a run
+// materializes a step's criteria and outputs into one work item, where the same
+// ordinals are unique, so a duplicate accepted at proposal time would approve
+// an immutable definition that no run could instantiate.
+func TestAStepDefinitionRejectsDuplicateOrdinals(t *testing.T) {
+	h := newRunHarness(t, "duplicate-ordinals.db", nil, 0)
+	for name, step := range map[string]app.ProposedPlanStep{
+		"duplicate criterion ordinals": {
+			ClientRef: "only", Key: "RUN-DUP-CRITERIA", Title: "Two criteria at ordinal 1", Kind: "research", Required: true,
+			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
+			ExecutionPolicy: work.PolicyAutonomousWithReport, RequiredActorKind: work.ActorAgent,
+			AcceptanceCriteria: []app.ProposedAcceptanceCriterion{
+				{Text: "The first condition.", Required: true, Ordinal: 1},
+				{Text: "The second condition.", Required: true, Ordinal: 1},
+			},
+		},
+		"duplicate expected output ordinals": {
+			ClientRef: "only", Key: "RUN-DUP-OUTPUTS", Title: "Two outputs at ordinal 1", Kind: "research", Required: true,
+			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
+			ExecutionPolicy: work.PolicyAutonomousWithReport, RequiredActorKind: work.ActorAgent,
+			ExpectedOutputs: []app.ProposedExpectedOutput{
+				{Name: "First", ProfileName: "research_dossier", ProfileVersion: 1, Required: true, Ordinal: 1},
+				{Name: "Second", ProfileName: "research_dossier", ProfileVersion: 1, Required: true, Ordinal: 1},
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := app.UnwrapMutation(h.service.ProposePlan(h.ctx, app.ProposePlanCommand{
+				ObjectiveID: h.objective.ID, ActorID: "agent:one", IdempotencyKey: "propose-" + name,
+				Title: "Uninstantiable definition", Revision: 2, Steps: []app.ProposedPlanStep{step},
+			})); err == nil {
+				t.Fatalf("a step with %s was persisted", name)
+			}
+		})
 	}
 }

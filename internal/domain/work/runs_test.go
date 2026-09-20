@@ -292,3 +292,19 @@ func TestWorkItemProvenanceIsConsistent(t *testing.T) {
 		})
 	}
 }
+
+// TestBindingFingerprintsAreUnambiguous is a regression: the fields were once
+// joined with a separator, so two bindings whose values contained that
+// separator could serialize identically and a changed run would look replayed.
+func TestBindingFingerprintsAreUnambiguous(t *testing.T) {
+	left := RunInputBinding{Name: "window", Kind: BindingExternal, Locator: "a\x00b", SourceVersion: "c"}
+	right := RunInputBinding{Name: "window", Kind: BindingExternal, Locator: "a", SourceVersion: "b\x00c"}
+	if left.Fingerprint() == right.Fingerprint() {
+		t.Fatal("two different bindings produced the same fingerprint")
+	}
+	shifted := RunInputBinding{Name: "win", Kind: BindingValue, Value: "dowvalue"}
+	unshifted := RunInputBinding{Name: "window", Kind: BindingValue, Value: "value"}
+	if shifted.Fingerprint() == unshifted.Fingerprint() {
+		t.Fatal("a field boundary shift produced the same fingerprint")
+	}
+}

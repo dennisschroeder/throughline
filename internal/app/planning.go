@@ -1002,8 +1002,15 @@ func (s *Service) validateStepDefinition(ctx context.Context, repository ports.R
 		}
 	}
 	for _, requirement := range step.Definition.OutputRequirements {
-		if _, err := repository.OutputRevision(ctx, requirement.RequiredOutputRevisionID); err != nil {
+		revision, err := repository.OutputRevision(ctx, requirement.RequiredOutputRevisionID)
+		if err != nil {
 			return fmt.Errorf("plan step %q output requirement: %w", step.Key, err)
+		}
+		// Acceptance is checked now rather than when a run copies it. The
+		// definition is immutable once approved, so a revision that was never
+		// accepted would block every run materialized from this step forever.
+		if revision.AcceptanceState != output.RevisionAccepted {
+			return fmt.Errorf("plan step %q requires output revision %s, which is %s; a plan definition may only require an accepted revision", step.Key, revision.ID, revision.AcceptanceState)
 		}
 	}
 	return nil

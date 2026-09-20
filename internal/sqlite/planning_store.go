@@ -27,12 +27,17 @@ func (r *transactionRepository) UpdateObjective(ctx context.Context, objective w
 	arguments := []any{objective.Title, objective.Description, objective.DesiredOutcome, objective.Phase, nullableString(string(objective.PriorPhase)),
 		objective.Priority, objective.Appetite.Value, objective.Appetite.Unit, objective.Appetite.Basis}
 	arguments = append(arguments, phaseTransitionColumns(objective.LastPhaseTransition)...)
+	arguments = append(arguments, objective.Mode, objective.MaxConcurrentRuns)
 	arguments = append(arguments, nullableString(objective.UpdatedBy), objective.Version, formatTime(objective.UpdatedAt), objective.ID, expectedVersion)
+	// mode is written here although it never changes: the update sets every
+	// column the objective carries, so a field added later cannot be silently
+	// dropped from the write while the caller is told the change landed.
 	result, err := r.transaction.ExecContext(ctx, `
 UPDATE objectives
 SET title = ?, description = ?, desired_outcome = ?, phase = ?, prior_phase = ?, priority = ?,
     appetite_value = ?, appetite_unit = ?, appetite_basis = ?,
     phase_transition_from = ?, phase_transition_to = ?, phase_transition_reason = ?, phase_transition_by = ?, phase_transition_at = ?,
+    mode = ?, max_concurrent_runs = ?,
     updated_by = ?, version = ?, updated_at = ?
 WHERE id = ? AND version = ?`, arguments...)
 	if err != nil {

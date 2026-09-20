@@ -84,7 +84,11 @@ func (s *Service) createPlanRunMutation(ctx context.Context, command CreatePlanR
 	if strings.TrimSpace(command.ActorID) == "" {
 		return ports.PlanRunContext{}, errors.New("creating a plan run requires an actor")
 	}
-	if strings.TrimSpace(command.RunKey) == "" {
+	// The run key is normalized here, before it is used to look anything up.
+	// Trimming it only on the way into storage would make a retry that differs
+	// by whitespace miss the run it already created.
+	command.RunKey = strings.TrimSpace(command.RunKey)
+	if command.RunKey == "" {
 		return ports.PlanRunContext{}, errors.New("creating a plan run requires a run key")
 	}
 	if strings.TrimSpace(command.PlanID) == "" {
@@ -123,7 +127,14 @@ func (s *Service) materializePlanRun(ctx context.Context, repository ports.Repos
 	if err != nil {
 		return ports.PlanRunContext{}, err
 	}
-	bindings, err := s.buildRunInputBindings(command, inputs, now)
+	// The run's identity is generated before its bindings so each binding is
+	// built once, already pointing at the run it belongs to. A replayed run
+	// key discards this identifier unused, which costs nothing.
+	runID, err := s.ids.New()
+	if err != nil {
+		return ports.PlanRunContext{}, fmt.Errorf("generate plan run id: %w", err)
+	}
+	bindings, err := s.buildRunInputBindings(command, inputs, runID, now)
 	if err != nil {
 		return ports.PlanRunContext{}, err
 	}
@@ -175,10 +186,6 @@ func (s *Service) materializePlanRun(ctx context.Context, repository ports.Repos
 	if err != nil {
 		return ports.PlanRunContext{}, err
 	}
-	runID, err := s.ids.New()
-	if err != nil {
-		return ports.PlanRunContext{}, fmt.Errorf("generate plan run id: %w", err)
-	}
 	run, err := work.NewPlanRun(work.PlanRun{
 		ID: runID, ObjectiveID: objective.ID, PlanID: plan.ID, RunKey: command.RunKey,
 		Sequence: sequence, BindingFingerprint: fingerprint, StartedBy: command.ActorID,
@@ -189,14 +196,8 @@ func (s *Service) materializePlanRun(ctx context.Context, repository ports.Repos
 	if err := repository.CreatePlanRun(ctx, run); err != nil {
 		return ports.PlanRunContext{}, err
 	}
-	for index := range bindings {
-		bindings[index].PlanRunID = run.ID
-		bound, err := work.NewRunInputBinding(bindings[index], now)
-		if err != nil {
-			return ports.PlanRunContext{}, err
-		}
-		bindings[index] = bound
-		if err := repository.CreateRunInputBinding(ctx, bound); err != nil {
+	for _, binding := range bindings {
+		if err := repository.CreateRunInputBinding(ctx, binding); err != nil {
 			return ports.PlanRunContext{}, err
 		}
 	}
@@ -228,7 +229,7 @@ func (s *Service) materializePlanRun(ctx context.Context, repository ports.Repos
 // buildRunInputBindings matches the supplied bindings against what the plan
 // declares. Every required input must be bound at creation; an optional one
 // left out simply stays unbound, and nothing can be added afterwards.
-func (s *Service) buildRunInputBindings(command CreatePlanRunCommand, inputs []work.PlanInput, now time.Time) ([]work.RunInputBinding, error) {
+func (s *Service) buildRunInputBindings(command CreatePlanRunCommand, inputs []work.PlanInput, runID string, now time.Time) ([]work.RunInputBinding, error) {
 	byName := make(map[string]work.PlanInput, len(inputs))
 	for _, input := range inputs {
 		byName[input.Name] = input
@@ -249,9 +250,16 @@ func (s *Service) buildRunInputBindings(command CreatePlanRunCommand, inputs []w
 		if err != nil {
 			return nil, fmt.Errorf("generate run input binding id: %w", err)
 		}
+		kind, err := bindingKind(supplied)
+		if err != nil {
+			return nil, err
+		}
 		binding, err := work.NewRunInputBinding(work.RunInputBinding{
-			ID: id, PlanRunID: "pending", PlanInputID: input.ID, Name: name,
-			Kind: bindingKind(supplied), Value: supplied.Value, OutputRevisionID: supplied.OutputRevisionID,
+			// Name is taken from the declared input rather than from the
+			// request, so a binding can never name something the plan does
+			// not declare.
+			ID: id, PlanRunID: runID, PlanInputID: input.ID, Name: input.Name,
+			Kind: kind, Value: supplied.Value, OutputRevisionID: supplied.OutputRevisionID,
 			Locator: supplied.Locator, SourceVersion: supplied.SourceVersion, Digest: supplied.Digest,
 			CreatedBy: command.ActorID,
 		}, now)
@@ -268,16 +276,32 @@ func (s *Service) buildRunInputBindings(command CreatePlanRunCommand, inputs []w
 	return bindings, nil
 }
 
-// bindingKind reads the shape off the command. Exactly one of the three shapes
-// may be filled; the domain constructor rejects the rest.
-func bindingKind(supplied RunInputBindingCommand) work.RunInputBindingKind {
+// bindingKind reads the shape off the command and refuses an ambiguous one.
+// Picking a winner by precedence would silently discard the rest of what the
+// caller sent, and a run key replayed with only the discarded part changed
+// would then resolve to the existing run as if nothing had changed.
+func bindingKind(supplied RunInputBindingCommand) (work.RunInputBindingKind, error) {
+	value := strings.TrimSpace(supplied.Value) != ""
+	revision := strings.TrimSpace(supplied.OutputRevisionID) != ""
+	external := strings.TrimSpace(supplied.Locator) != "" ||
+		strings.TrimSpace(supplied.SourceVersion) != "" ||
+		strings.TrimSpace(supplied.Digest) != ""
+	filled := 0
+	for _, shape := range []bool{value, revision, external} {
+		if shape {
+			filled++
+		}
+	}
+	if filled != 1 {
+		return "", fmt.Errorf("binding for plan input %q must fill exactly one shape — a value, one exact accepted output revision, or an external reference — but fills %d", strings.TrimSpace(supplied.Name), filled)
+	}
 	switch {
-	case strings.TrimSpace(supplied.OutputRevisionID) != "":
-		return work.BindingOutputRevision
-	case strings.TrimSpace(supplied.Locator) != "":
-		return work.BindingExternal
+	case revision:
+		return work.BindingOutputRevision, nil
+	case external:
+		return work.BindingExternal, nil
 	default:
-		return work.BindingValue
+		return work.BindingValue, nil
 	}
 }
 
@@ -363,7 +387,7 @@ func (s *Service) materializeStep(ctx context.Context, repository ports.Reposito
 		return work.WorkItem{}, err
 	}
 	if err := repository.CreateWorkItem(ctx, item); err != nil {
-		return work.WorkItem{}, fmt.Errorf("materialize plan step %q: %w", step.Key, err)
+		return work.WorkItem{}, fmt.Errorf("materialize plan step %q as work item %q: %w", step.Key, item.Key, err)
 	}
 	for _, capability := range step.Definition.RequiredCapabilities {
 		if err := repository.AddWorkItemCapability(ctx, item.ID, capability); err != nil {
@@ -537,28 +561,28 @@ func (s *Service) closePlanRunMutation(ctx context.Context, command ClosePlanRun
 					return ports.PlanRunContext{}, err
 				}
 			}
-			result, err := work.ClosePlanRun(run, command.TargetStatus, command.ActorID, command.Reason, facts, now)
+			ended, err := work.ClosePlanRun(run, command.TargetStatus, command.ActorID, command.Reason, facts, now)
 			if err != nil {
 				return ports.PlanRunContext{}, err
 			}
-			if err := repository.UpdatePlanRun(ctx, result, command.ExpectedVersion); err != nil {
+			if err := repository.UpdatePlanRun(ctx, ended, command.ExpectedVersion); err != nil {
 				return ports.PlanRunContext{}, err
 			}
-			if err := s.settleRunWork(ctx, repository, result, command, now); err != nil {
+			if err := s.settleRunWork(ctx, repository, ended, command, now); err != nil {
 				return ports.PlanRunContext{}, err
 			}
-			payload, err := json.Marshal(map[string]string{"status": string(result.Status), "reason": strings.TrimSpace(command.Reason)})
+			payload, err := json.Marshal(map[string]string{"status": string(ended.Status), "reason": strings.TrimSpace(command.Reason)})
 			if err != nil {
 				return ports.PlanRunContext{}, err
 			}
 			if err := s.recordActivity(ctx, repository, work.Activity{
-				EntityKind: "plan_run", EntityID: result.ID, ObjectiveID: result.ObjectiveID, ActorID: command.ActorID,
+				EntityKind: "plan_run", EntityID: ended.ID, ObjectiveID: ended.ObjectiveID, ActorID: command.ActorID,
 				EventType: "plan_run.closed", PayloadJSON: payload,
-				Summary: fmt.Sprintf("Plan run %d closed as %s", result.Sequence, result.Status),
+				Summary: fmt.Sprintf("Plan run %d closed as %s", ended.Sequence, ended.Status),
 			}); err != nil {
 				return ports.PlanRunContext{}, err
 			}
-			return s.planRunContext(ctx, repository, result)
+			return s.planRunContext(ctx, repository, ended)
 		})
 		result = closed
 		return err
@@ -582,6 +606,14 @@ func (s *Service) settleRunWork(ctx context.Context, repository ports.Repository
 		return err
 	}
 	for _, item := range items {
+		// An expired lease already holds nothing, but its row is still open.
+		// Sweeping it through the ordinary expiry path first means the release
+		// below only ever sees live claims, which is the only kind their owner
+		// may release — otherwise one lapsed lease would make the run
+		// impossible to close at all.
+		if _, err := repository.ExpireClaims(ctx, item.ID, now); err != nil {
+			return err
+		}
 		if item.ExecutionStatus == work.StatusDone || item.ExecutionStatus == work.StatusCancelled {
 			continue
 		}

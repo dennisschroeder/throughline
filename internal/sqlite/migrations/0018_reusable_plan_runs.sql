@@ -56,9 +56,16 @@ CREATE TABLE plan_steps (
   version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
   created_at TEXT NOT NULL,
   UNIQUE(plan_id, client_ref),
-  UNIQUE(plan_id, key),
   UNIQUE(plan_id, ordinal)
 );
+
+-- A step key is globally unique, like a work item key, because each run
+-- materializes its work item as "<step key>/<run sequence>" and work_items.key
+-- is itself globally unique. Two objectives that both declared a step called
+-- "research" would otherwise collide on their first runs, and the failure
+-- would surface as an opaque uniqueness error at run creation rather than when
+-- the plan was written.
+CREATE UNIQUE INDEX plan_steps_key_is_unique ON plan_steps(key);
 
 CREATE TABLE plan_step_dependencies (
   plan_step_id TEXT NOT NULL REFERENCES plan_steps(id) ON DELETE CASCADE,

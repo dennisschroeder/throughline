@@ -2032,6 +2032,11 @@ type createObjectiveInput struct {
 	Phase          work.ObjectivePhase `json:"phase"`
 	Priority       work.Priority       `json:"priority"`
 	Appetite       measureInput        `json:"appetite"`
+	// Mode says how the objective ends and cannot be changed afterwards;
+	// MaxConcurrentRuns caps its concurrently active plan runs. Both default
+	// to the safe values — a finite objective running one plan run at a time.
+	Mode              work.ObjectiveMode `json:"mode,omitempty"`
+	MaxConcurrentRuns int                `json:"max_concurrent_runs,omitempty"`
 }
 
 func (a *adapter) createObjective(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
@@ -2039,7 +2044,7 @@ func (a *adapter) createObjective(ctx context.Context, service *app.Service, raw
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	command := app.CreateObjectiveCommand{ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome, Phase: in.Phase, Priority: in.Priority, Appetite: in.Appetite.toMeasure()}
+	command := app.CreateObjectiveCommand{ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome, Phase: in.Phase, Priority: in.Priority, Appetite: in.Appetite.toMeasure(), Mode: in.Mode, MaxConcurrentRuns: in.MaxConcurrentRuns}
 	return service.CreateObjective(ctx, command)
 }
 
@@ -2054,6 +2059,10 @@ type patchObjectiveInput struct {
 	DesiredOutcome  *string        `json:"desired_outcome"`
 	Priority        *work.Priority `json:"priority"`
 	Appetite        *measureInput  `json:"appetite"`
+	// Mode has no field here: it is fixed at creation, because changing it
+	// would retroactively change what completing this objective and every run
+	// recorded under it meant.
+	MaxConcurrentRuns *int `json:"max_concurrent_runs"`
 }
 
 func (a *adapter) patchObjective(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
@@ -2070,6 +2079,7 @@ func (a *adapter) patchObjective(ctx context.Context, service *app.Service, raw 
 		appetite := in.Appetite.toMeasure()
 		command.Appetite = &appetite
 	}
+	command.MaxConcurrentRuns = in.MaxConcurrentRuns
 	return service.PatchObjective(ctx, command)
 }
 

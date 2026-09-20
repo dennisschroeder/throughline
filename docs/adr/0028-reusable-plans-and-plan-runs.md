@@ -40,17 +40,27 @@ Supporting choices, each following a recorded decision on the objective:
 - **The run key is resolved objective-wide and actor-independently, before capacity.** It names the
   business execution instance across harness retries and actor changes; a retry must find the run it
   already created rather than be refused for capacity that run itself occupies.
-- **A PlanStep may require only one exact accepted OutputRevision.** A profile-and-version
-  constraint stays available on a live WorkItem through `add_output_requirement`, but expressing one
-  in a definition would make run creation reach implicitly into whatever another run happened to
-  accept — the `latest` behaviour the model rules out.
+- **A PlanStep may require only one exact accepted OutputRevision**, and its acceptance is checked
+  when the plan is proposed, not when a run copies it. A profile-and-version constraint stays
+  available on a live WorkItem through `add_output_requirement`, but expressing one in a definition
+  would make run creation reach implicitly into whatever another run happened to accept — the
+  `latest` behaviour the model rules out. An approved definition is immutable and copied into every
+  run, so a requirement on a revision that was never accepted would block all of them forever.
+- **A PlanStep key is unique across the workspace**, like a WorkItem key. A run materializes its
+  work as `<step key>/<run sequence>`, the sequence is objective-scoped, and `work_items.key` is
+  globally unique — so two objectives that both declared a step called `research` would collide on
+  their first runs. Enforcing it on the definition turns that into a refusal when the plan is
+  written instead of an opaque uniqueness error months later.
 
 ## Consequences
 
 `propose_plan` changed shape: `items` became `steps`, and a step is `required` unless the MCP caller
 marks it `optional`. Plans proposed before this change keep their WorkItems and are readable as
-before; `PlanContext.Items` is now the legacy half of that contract and is empty for every plan
-proposed since.
+before. `PlanContext.Items` still lists every WorkItem linked to the revision — a legacy plan's own
+items, and the items each run materialized from it — because a materialized item keeps `plan_id`
+pointing at the revision it came from, which is what the existing plan-approved gate reads. It no
+longer says which run an item belongs to; `PlanRunContext` answers that, and so does the item's own
+`plan_run_id`.
 
 The migration is purely additive and invents nothing. Every WorkItem that existed before it is
 marked `legacy` and keeps its data, activity and behaviour, with no run of its own — including items

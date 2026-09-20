@@ -534,6 +534,17 @@ func (s *Service) CheckActionAuthorization(ctx context.Context, query CheckActio
 		}
 		if !matched {
 			decision = authority.AuthorizationDecision{Denial: &authority.AuthorizationDenial{Reason: authority.DenialCapabilityMismatch}}
+			return nil
+		}
+		// The check answers the same question starting the effect would ask,
+		// so it applies the same run gate. A caller that is told "authorized"
+		// and then refused at the start would have learned nothing useful.
+		if err := requireExecutableWork(ctx, repository, action.WorkItemID); err != nil {
+			var refusal AuthorizationError
+			if !errors.As(err, &refusal) {
+				return err
+			}
+			decision = refusal.Decision
 		}
 		return nil
 	})

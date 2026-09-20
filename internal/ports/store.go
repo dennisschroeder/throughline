@@ -243,10 +243,12 @@ type PlannedWorkItem struct {
 	ExternalActions      []authority.ExternalAction
 }
 
-// PlanContext is a plan revision and its reusable definition. Items carries
-// the executable work items of a legacy plan — plans proposed before Plan
-// Runs, which wrote work items directly — and is empty for every plan
-// proposed since.
+// PlanContext is a plan revision, its reusable definition, and every work item
+// currently linked to it: the items a legacy plan created directly, plus the
+// items every run of this revision materialized. Inputs and Steps are the
+// definition and are the same whatever has been run from it; Items grows with
+// each run and says nothing about which run an item belongs to — PlanRunContext
+// answers that.
 type PlanContext struct {
 	Plan             work.Plan
 	Inputs           []work.PlanInput

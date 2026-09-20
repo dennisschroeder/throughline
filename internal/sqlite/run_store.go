@@ -65,9 +65,18 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		step.ExecutionPolicy, step.RequiredActorKind, encodeReviewRequirements(step.ReviewRequirements),
 		step.Ordinal, string(definition), formatTime(step.CreatedAt))
 	if err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("plan step key %q is already used by another plan; step keys are unique across the workspace because each run materializes its work item as \"<step key>/<run sequence>\": %w", step.Key, err)
+		}
 		return fmt.Errorf("insert plan step: %w", err)
 	}
 	return nil
+}
+
+// isUniqueViolation recognizes a SQLite uniqueness failure from its message,
+// which is the only thing the CGo-free driver exposes without a typed error.
+func isUniqueViolation(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
 
 const planStepSelect = `

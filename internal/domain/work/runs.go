@@ -226,6 +226,11 @@ func (d StepDefinition) validate() error {
 			return errors.New("plan step required capability cannot be empty")
 		}
 	}
+	// Ordinals are unique within the step, because a run materializes them
+	// into one work item where the same uniqueness is enforced. A duplicate
+	// accepted here would approve an immutable definition that no run could
+	// ever instantiate.
+	criterionOrdinals := map[int]bool{}
 	for _, criterion := range d.AcceptanceCriteria {
 		if strings.TrimSpace(criterion.Text) == "" {
 			return errors.New("plan step acceptance criterion requires text")
@@ -233,14 +238,32 @@ func (d StepDefinition) validate() error {
 		if criterion.Ordinal < 1 {
 			return errors.New("plan step acceptance criterion ordinal must be positive")
 		}
+		if criterionOrdinals[criterion.Ordinal] {
+			return fmt.Errorf("plan step declares acceptance criterion ordinal %d twice", criterion.Ordinal)
+		}
+		criterionOrdinals[criterion.Ordinal] = true
 	}
+	outputOrdinals := map[int]bool{}
+	outputNames := map[string]bool{}
 	for _, expected := range d.ExpectedOutputs {
-		if strings.TrimSpace(expected.Name) == "" || strings.TrimSpace(expected.ProfileName) == "" {
+		name := strings.TrimSpace(expected.Name)
+		if name == "" || strings.TrimSpace(expected.ProfileName) == "" {
 			return errors.New("plan step expected output requires a name and a profile")
 		}
 		if expected.ProfileVersion < 1 {
 			return errors.New("plan step expected output requires an exact profile version")
 		}
+		if expected.Ordinal < 1 {
+			return errors.New("plan step expected output ordinal must be positive")
+		}
+		if outputOrdinals[expected.Ordinal] {
+			return fmt.Errorf("plan step declares expected output ordinal %d twice", expected.Ordinal)
+		}
+		if outputNames[name] {
+			return fmt.Errorf("plan step declares expected output %q twice", name)
+		}
+		outputOrdinals[expected.Ordinal] = true
+		outputNames[name] = true
 	}
 	for _, requirement := range d.OutputRequirements {
 		if strings.TrimSpace(requirement.RequiredOutputRevisionID) == "" {
@@ -482,8 +505,15 @@ func NewRunInputBinding(binding RunInputBinding, now time.Time) (RunInputBinding
 // Fingerprint is the binding's contribution to its Run's creation
 // fingerprint: the content that must match for a replayed run_key to mean the
 // same Run.
+//
+// Each field is length-prefixed rather than separator-joined, so no two
+// different bindings can serialize the same way whatever their values contain.
 func (b RunInputBinding) Fingerprint() string {
-	return strings.Join([]string{b.Name, string(b.Kind), b.Value, b.OutputRevisionID, b.Locator, b.SourceVersion, b.Digest}, "\x00")
+	var builder strings.Builder
+	for _, field := range []string{b.Name, string(b.Kind), b.Value, b.OutputRevisionID, b.Locator, b.SourceVersion, b.Digest} {
+		fmt.Fprintf(&builder, "%d:%s", len(field), field)
+	}
+	return builder.String()
 }
 
 // RunCreationFingerprint identifies what a Run was created from. A run_key
