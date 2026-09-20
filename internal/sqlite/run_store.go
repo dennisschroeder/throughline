@@ -79,8 +79,13 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 // reservation, and finding it when the plan is written beats failing every run
 // of an approved definition nobody can then change.
 func (r *transactionRepository) MaterializedKeyNamespaceTaken(ctx context.Context, stepKey string) (bool, error) {
+	// The prefix is compared with substr rather than matched with GLOB or
+	// LIKE: a step key containing a wildcard or a character class would
+	// otherwise be read as a pattern and match the wrong keys while missing
+	// its own.
+	namespace := work.MaterializedKeyNamespace(stepKey)
 	return queryBoolean(ctx, r.transaction,
-		"SELECT EXISTS(SELECT 1 FROM work_items WHERE key GLOB ?)", work.MaterializedKeyNamespace(stepKey)+"*")
+		"SELECT EXISTS(SELECT 1 FROM work_items WHERE substr(key, 1, length(?)) = ?)", namespace, namespace)
 }
 
 // isUniqueViolation recognizes a SQLite uniqueness failure from its message,

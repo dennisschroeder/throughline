@@ -1273,3 +1273,34 @@ VALUES ('legacy-squatter', 'RUN-LEGACY/1', ?, 'Predates the reservation', '', 'r
 		t.Fatalf("the refusal does not name the step key: %v", err)
 	}
 }
+
+// TestTheReservedNamespaceCheckTreatsAStepKeyAsText guards the prefix
+// comparison: a step key carrying a character class would, matched as a
+// pattern, find keys that are not in its namespace and miss the ones that are.
+func TestTheReservedNamespaceCheckTreatsAStepKeyAsText(t *testing.T) {
+	h := newRunHarness(t, "namespace-literal.db", nil, 0)
+	if _, err := h.database.db.ExecContext(h.ctx, `
+INSERT INTO work_items (id, key, objective_id, title, description, kind, commitment_state, execution_status,
+  priority, estimated_scope, execution_policy, required_actor_kind, attention_state, origin, version, created_at, updated_at)
+VALUES ('literal-a', 'RUN-A/1', ?, 'Not in the class step key namespace', '', 'research', 'accepted', 'ready',
+  'medium', 'small', 'autonomous_with_report', 'agent', 'none', 'legacy', 1, '2026-08-21T15:00:00.000000000Z', '2026-08-21T15:00:00.000000000Z')`,
+		h.objective.ID); err != nil {
+		t.Fatal(err)
+	}
+	// "RUN-[A]" is a pattern that would match "RUN-A"; as text it does not.
+	proposed, err := app.UnwrapMutation(h.service.ProposePlan(h.ctx, app.ProposePlanCommand{
+		ObjectiveID: h.objective.ID, ActorID: "agent:one", IdempotencyKey: "propose-class-key",
+		Title: "A step key that looks like a pattern", Revision: 2,
+		Steps: []app.ProposedPlanStep{{
+			ClientRef: "only", Key: "RUN-[A]", Title: "Its key is text, not a pattern", Kind: "research", Required: true,
+			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
+			ExecutionPolicy: work.PolicyAutonomousWithReport, RequiredActorKind: work.ActorAgent,
+		}},
+	}))
+	if err != nil {
+		t.Fatalf("a step key containing a character class was read as a pattern: %v", err)
+	}
+	if len(proposed.Steps) != 1 {
+		t.Fatalf("proposed steps = %#v", proposed.Steps)
+	}
+}
