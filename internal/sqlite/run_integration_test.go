@@ -1340,3 +1340,100 @@ VALUES ('multibyte-squatter', 'PRÜFUNG-Ü/1', ?, 'Predates the reservation', ''
 		t.Fatalf("a step with a free multi-byte namespace was refused: %v", err)
 	}
 }
+
+// TestACopiedAuthorizationSubjectIsIdenticalInEveryRun is the static-subject
+// claim made checkable: Throughline substitutes nothing into a plan step's
+// authorization subject, so what each run asks to be authorized is byte for
+// byte what the reviewed definition recorded — and the two runs' actions are
+// still separate records with their own identities.
+func TestACopiedAuthorizationSubjectIsIdenticalInEveryRun(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "static-subject.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	service := app.NewService(database.Store(), &planningIDs{}, &planningClock{})
+	for _, actor := range []app.RegisterActorCommand{
+		{Actor: work.Actor{ID: "human:owner", Kind: work.ActorTypeHuman, DisplayName: "Owner"}, IdempotencyKey: "register-owner"},
+		{Actor: work.Actor{ID: "agent:one", Kind: work.ActorTypeAgent, DisplayName: "Agent One"}, IdempotencyKey: "register-one"},
+	} {
+		if _, err := app.UnwrapMutation(service.RegisterActor(ctx, actor)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	objective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{
+		ActorID: "human:owner", IdempotencyKey: "create-objective", Key: "OBJ-STATIC",
+		Title: "A step carrying an external action", DesiredOutcome: "Every run asks for exactly what was reviewed.",
+		Phase: work.ObjectivePlanning, MaxConcurrentRuns: 2,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := `{"action_type":"tool.install","target":{"tool":"throughline"},"arguments":[],"scope":{},"permissions":["filesystem.write"],"credential_requirements":[],"constraints":{}}`
+	plan, err := app.UnwrapMutation(service.ProposePlan(ctx, app.ProposePlanCommand{
+		ObjectiveID: objective.ID, ActorID: "agent:one", IdempotencyKey: "propose-plan",
+		Title: "Install something", Revision: 1,
+		Steps: []app.ProposedPlanStep{{
+			ClientRef: "install", Key: "STATIC-INSTALL", Title: "Install the reviewed thing", Kind: "tool_installation", Required: true,
+			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
+			ExecutionPolicy: work.PolicyAutonomousWithReport, RequiredActorKind: work.ActorAgent,
+			ExternalActions: []app.ProposedExternalAction{{
+				Required: true, Title: "Install the reviewed thing", Rationale: "Installation is an externally authorized effect.",
+				AuthorizationSubject: json.RawMessage(subject),
+			}},
+		}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.UnwrapMutation(service.ReviewPlan(ctx, app.ReviewPlanCommand{
+		PlanID: plan.Plan.ID, ReviewerActorID: "human:owner", IdempotencyKey: "approve-plan",
+		Decision: work.PlanApproved, Reason: "The subject says exactly what it authorizes.", ExpectedVersion: 1,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.UnwrapMutation(service.TransitionObjective(ctx, app.TransitionObjectiveCommand{
+		ObjectiveID: objective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:owner",
+		IdempotencyKey: "execute", Reason: "Run it twice.", ExpectedVersion: 1,
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	var hashes []string
+	var actionIDs []string
+	for index, runKey := range []string{"static-1", "static-2"} {
+		run, err := app.UnwrapMutation(service.CreatePlanRun(ctx, app.CreatePlanRunCommand{
+			ObjectiveID: objective.ID, PlanID: plan.Plan.ID, ActorID: "agent:one",
+			IdempotencyKey: "create-" + runKey, RunKey: runKey,
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		itemContext, err := service.GetWorkItem(ctx, run.WorkItems[0].ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(itemContext.ExternalActions) != 1 {
+			t.Fatalf("run %d copied %d external actions, want 1", index+1, len(itemContext.ExternalActions))
+		}
+		detail := itemContext.ExternalActions[0]
+		if string(detail.Revision.AuthorizationSubject) == "" {
+			t.Fatalf("run %d copied an empty authorization subject", index+1)
+		}
+		hashes = append(hashes, detail.Revision.AuthorizationSubjectHash)
+		actionIDs = append(actionIDs, detail.Action.ID)
+		if detail.Action.State != authority.ActionProposed || detail.Revision.Revision != 1 {
+			t.Fatalf("run %d copied action = %#v", index+1, detail.Action)
+		}
+	}
+	if hashes[0] != hashes[1] {
+		t.Fatalf("the same reviewed subject produced different hashes in two runs: %q and %q", hashes[0], hashes[1])
+	}
+	if actionIDs[0] == actionIDs[1] {
+		t.Fatalf("the two runs share external action %s", actionIDs[0])
+	}
+}

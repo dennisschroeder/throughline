@@ -113,10 +113,17 @@ rather than edited away.
 
 ### N1 — RPR-FSR delivered
 
-Commits `d11d3b7` (implementation), `747dbad`, `91c216b`, `ab4b189` (repairs), `5cb466b` (a test).
-All six gates green in order at `5cb466b`.
+Commits `d11d3b7` (implementation), `747dbad`, `91c216b`, `ab4b189` (repairs), `5cb466b` and
+`41bd4c8` (tests and this document), and `HEAD` (the regenerated model). All six gates green in
+order at `HEAD`.
 
-**Gate loop: 0 of 3 attempts spent.** The gate was never red at a commit. It went red repeatedly
+**Gate loop: 1 of 3 attempts spent.** The gate was red once at a commit, and the way it happened is
+worth recording. `ab4b189` changed `internal/sqlite/run_store.go`, which is a mapped source, and was
+committed after running commands 1 and 3–6 but not command 2 — the generated model was left stale,
+and stayed stale through the two commits after it. Two written claims of "all six green" were
+therefore wrong when made. It surfaced on the next full run of the gate in order, which is the only
+reason it surfaced at all: running five of six commands and reporting green is not a smaller version
+of running the gate, it is not running it. It went red repeatedly
 *during* the work — roughly forty test failures as the old plan-writes-work-items contract was
 pulled out of five packages — but that is the edit cycle, not the fix loop the budget is for. The
 budget counts attempts to repair an already-delivered node, and none were needed.
@@ -148,6 +155,12 @@ local database, where a sargable range bound would add multi-byte boundary fragi
 gain. A third full-strength pass on the repository is the measurement that is missing.
 
 ### Feedback on the frozen design
+
+**Running part of the gate is not running the gate.** See the gate loop above: command 2 is the
+only one that is cheap to skip and invisible when skipped, because nothing else in the build reads
+the generated digest. Skipping it three commits running produced two false "green" claims. The fix
+is mechanical — run all six, in order, every time — and the reason it is worth writing down is that
+the shortcut felt reasonable each time it was taken.
 
 **The gate caught nothing the reviewers caught.** All six commands were green at `d11d3b7`, and eight
 material defects were sitting in that commit — including `patch_objective` reporting a capacity
