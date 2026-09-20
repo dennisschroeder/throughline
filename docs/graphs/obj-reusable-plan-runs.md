@@ -154,7 +154,46 @@ share a step key; and the non-sargable prefix query runs once per step at propos
 local database, where a sargable range bound would add multi-byte boundary fragility for no measured
 gain. A third full-strength pass on the repository is the measurement that is missing.
 
+### N2 — RPR-RR delivered
+
+Commits `05cd22e` (implementation and proofs), `61de85f` (review repairs), `53a90ed` (a simplicity
+repair). All six gates green in order at `53a90ed`.
+
+**Gate loop: 1 of 3 attempts spent** — the same way as in N1, and for the same reason. `a824053`
+changed `internal/mcp/server.go`, a mapped source, and was committed after running commands 1 and
+3–6 but not 2. It was caught by the next full run and amended. Writing the lesson down in this file
+after N1 did not prevent it recurring three hours later; only running all six, in order, before the
+commit does.
+
+**Review loop: 2 of 5 passes spent, 4 material findings, 0 outstanding.** Both result passes ran
+degraded: the pinned reviewer `gpt-5.6-sol` exhausted its provider credits mid-slice and stayed out
+for two days, so the passes ran on `gemini-3.1-pro-high` and `gemini-3.8-flash-medium` against code
+excerpts rather than the repository.
+
+| Pass | Reader | Findings |
+|---|---|---|
+| 1 | `gemini-3.1-pro-high` (degraded from `gpt-5.6-sol`) | 3 — 2 accepted, 1 rejected |
+| 2 | `gemini-3.8-flash-medium` (degraded) | 0 |
+| KISS | `gemini-3.1-pro-high` | 3 proposed — 1 accepted, 2 rejected |
+
+**The most valuable finding was about a test, not about the code.** The reviewer noticed that the
+concurrency test accepted `database is locked` as a valid refusal, so it would pass whether or not
+the capacity limit was enforced. Removing that acceptance made the test fail — and the failure was
+real: write transactions began deferred, so two concurrent creations stayed within the limit only
+because SQLite aborted one on the lock upgrade. The limit was holding by accident, and the caller
+was told the database was locked rather than that it was at capacity. `_txlock=immediate` fixed the
+mechanism; the test now names which rule did the refusing.
+
 ### Feedback on the frozen design
+
+**A test that accepts too many outcomes proves nothing, and looks like coverage.** This is the N2
+lesson and it generalizes past this objective. The concurrency test was named for the invariant, ran
+green, and would have passed against an implementation that enforced nothing — because its list of
+acceptable failures included one that meant "the database got in the way" rather than "the rule
+refused you". The frozen graph's edge conditions are all of the form "the gate said green"; nothing
+in it asks whether a passing test could also pass for the wrong reason. Worth a rule of its own: a
+test that accepts more than one failure mode has to say, for each, why that mode is the system
+working.
 
 **Running part of the gate is not running the gate.** See the gate loop above: command 2 is the
 only one that is cheap to skip and invisible when skipped, because nothing else in the build reads
