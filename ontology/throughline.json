@@ -1,119 +1,1131 @@
 {
   "schema_version": "1.0",
-  "model_version": "1.2.0",
+  "model_version": "1.3.0",
   "bootstrap": "Throughline is a local, authoritative coordination state layer for domain-neutral work. It records intent, plans, work, outputs, validation, reuse, and delegated authority; it does not orchestrate agents or perform external effects. Capability does not imply Authority. Call get_semantic_model for details.",
   "entities": [
-    {"id":"objective","name":"Objective","definition":"A durable goal that groups work items. It carries the edge, reason, actor and time of its most recent phase transition."},
-    {"id":"plan","name":"Plan","definition":"A versioned proposal for achieving an objective; approval commits work without executing it."},
-    {"id":"work_item","name":"WorkItem","definition":"A proposed, executable, reviewable, or trackable unit of domain-neutral work."},
-    {"id":"context_record","name":"ContextRecord","definition":"Typed authoritative context such as a requirement, constraint, assumption, finding, risk, success metric, non-goal, or affected party/surface."},
-    {"id":"acceptance_criterion","name":"AcceptanceCriterion","definition":"An individually stateful condition used to judge completion."},
-    {"id":"output_profile","name":"OutputProfile","definition":"An immutable, versioned, governed definition of an output class."},
-    {"id":"expected_output","name":"ExpectedOutput","definition":"A work-item-specific contract bound to one exact output profile version."},
-    {"id":"output_revision","name":"OutputRevision","definition":"An immutable produced candidate bound to an expected output and profile version."},
-    {"id":"validation_record","name":"ValidationRecord","definition":"An append-only verdict and evidence record whose subject is exactly one output revision or one work item. On a work item it is a review: it records that the work was checked, by whom, with what verdict and whether the pass was degraded, never how the review was performed."},
-    {"id":"output_requirement","name":"OutputRequirement","definition":"A dependency on an accepted output revision or compatible profile."},
-    {"id":"dependency","name":"Dependency","definition":"A directed, typed relationship between work items."},
-    {"id":"decision","name":"Decision","definition":"A concise durable choice with rationale and scope."},
-    {"id":"question","name":"Question","definition":"A question about an objective: unsharp while an in-scope area is visible but not yet phrasable, open once phrased, then answered or waived. It stores its own attention state, and while unsharp or open it blocks every work item it is linked to; a question asked on a work item is always linked to that item. Links are never removed, so only answering or waiving clears them."},
-    {"id":"approval","name":"Approval","definition":"A durable request and decision for a governed target."},
-    {"id":"artifact","name":"Artifact","definition":"A typed external reference, not a large database blob."},
-    {"id":"claim","name":"Claim","definition":"A time-limited lease that an actor is working a work item."},
-    {"id":"activity","name":"Activity","definition":"An append-only audit event for a material state change or action."},
-    {"id":"actor","name":"Actor","definition":"A trusted-local human, agent, or service identity."},
-    {"id":"capability","name":"Capability","definition":"A vendor-neutral ability required or offered by an actor."},
-    {"id":"external_action","name":"ExternalAction","definition":"A versioned proposal for an observable side effect outside Throughline."},
-    {"id":"authorization_subject","name":"AuthorizationSubject","definition":"The canonical authorization-relevant subset of an external action revision."},
-    {"id":"authority_grant","name":"AuthorityGrant","definition":"A principal-bound grant for one exact authorization subject within constraints and lifetime."},
-    {"id":"blocker","name":"Blocker","definition":"A persisted manual or derived reason work cannot proceed; manual blockers are auditable."},
-    {"id":"progress","name":"Progress","definition":"A concise durable checkpoint of completed, remaining, discovered, and blocking work; never raw model reasoning."},
-    {"id":"attention","name":"Attention","definition":"An orthogonal request for human review, decision, clarification, or intervention on a work item or a question; it is not a workflow status. The target stores the requested state."},
-    {"id":"execution_policy","name":"ExecutionPolicy","definition":"The autonomy gate for claiming or executing a work item; it never grants external authority."}
+    {
+      "id": "objective",
+      "name": "Objective",
+      "definition": "A durable goal that groups work items. It carries the edge, reason, actor and time of its most recent phase transition, a mode fixed at creation that says how it ends, and a cap on how many of its plan runs may be active at once."
+    },
+    {
+      "id": "plan",
+      "name": "Plan",
+      "definition": "A versioned, reusable definition of how an objective's work is done: the inputs it declares and the steps it is made of. Approving a revision commits the definition; it creates no work. Instantiating it as a PlanRun does."
+    },
+    {
+      "id": "work_item",
+      "name": "WorkItem",
+      "definition": "A proposed, executable, reviewable, or trackable unit of domain-neutral work. Work executes only as part of an active PlanRun; work recorded outside a run is a proposal, and work that predates runs is marked legacy and keeps its historical behaviour."
+    },
+    {
+      "id": "context_record",
+      "name": "ContextRecord",
+      "definition": "Typed authoritative context such as a requirement, constraint, assumption, finding, risk, success metric, non-goal, or affected party/surface."
+    },
+    {
+      "id": "acceptance_criterion",
+      "name": "AcceptanceCriterion",
+      "definition": "An individually stateful condition used to judge completion."
+    },
+    {
+      "id": "output_profile",
+      "name": "OutputProfile",
+      "definition": "An immutable, versioned, governed definition of an output class."
+    },
+    {
+      "id": "expected_output",
+      "name": "ExpectedOutput",
+      "definition": "A work-item-specific contract bound to one exact output profile version."
+    },
+    {
+      "id": "output_revision",
+      "name": "OutputRevision",
+      "definition": "An immutable produced candidate bound to an expected output and profile version."
+    },
+    {
+      "id": "validation_record",
+      "name": "ValidationRecord",
+      "definition": "An append-only verdict and evidence record whose subject is exactly one output revision or one work item. On a work item it is a review: it records that the work was checked, by whom, with what verdict and whether the pass was degraded, never how the review was performed."
+    },
+    {
+      "id": "output_requirement",
+      "name": "OutputRequirement",
+      "definition": "A dependency on an accepted output revision or compatible profile."
+    },
+    {
+      "id": "dependency",
+      "name": "Dependency",
+      "definition": "A directed, typed relationship between work items."
+    },
+    {
+      "id": "decision",
+      "name": "Decision",
+      "definition": "A concise durable choice with rationale and scope."
+    },
+    {
+      "id": "question",
+      "name": "Question",
+      "definition": "A question about an objective: unsharp while an in-scope area is visible but not yet phrasable, open once phrased, then answered or waived. It stores its own attention state, and while unsharp or open it blocks every work item it is linked to; a question asked on a work item is always linked to that item. Links are never removed, so only answering or waiving clears them."
+    },
+    {
+      "id": "approval",
+      "name": "Approval",
+      "definition": "A durable request and decision for a governed target."
+    },
+    {
+      "id": "artifact",
+      "name": "Artifact",
+      "definition": "A typed external reference, not a large database blob."
+    },
+    {
+      "id": "claim",
+      "name": "Claim",
+      "definition": "A time-limited lease that an actor is working a work item."
+    },
+    {
+      "id": "activity",
+      "name": "Activity",
+      "definition": "An append-only audit event for a material state change or action."
+    },
+    {
+      "id": "actor",
+      "name": "Actor",
+      "definition": "A trusted-local human, agent, or service identity."
+    },
+    {
+      "id": "capability",
+      "name": "Capability",
+      "definition": "A vendor-neutral ability required or offered by an actor."
+    },
+    {
+      "id": "external_action",
+      "name": "ExternalAction",
+      "definition": "A versioned proposal for an observable side effect outside Throughline."
+    },
+    {
+      "id": "authorization_subject",
+      "name": "AuthorizationSubject",
+      "definition": "The canonical authorization-relevant subset of an external action revision."
+    },
+    {
+      "id": "authority_grant",
+      "name": "AuthorityGrant",
+      "definition": "A principal-bound grant for one exact authorization subject within constraints and lifetime."
+    },
+    {
+      "id": "blocker",
+      "name": "Blocker",
+      "definition": "A persisted manual or derived reason work cannot proceed; manual blockers are auditable."
+    },
+    {
+      "id": "progress",
+      "name": "Progress",
+      "definition": "A concise durable checkpoint of completed, remaining, discovered, and blocking work; never raw model reasoning."
+    },
+    {
+      "id": "attention",
+      "name": "Attention",
+      "definition": "An orthogonal request for human review, decision, clarification, or intervention on a work item or a question; it is not a workflow status. The target stores the requested state."
+    },
+    {
+      "id": "execution_policy",
+      "name": "ExecutionPolicy",
+      "definition": "The autonomy gate for claiming or executing a work item; it never grants external authority."
+    },
+    {
+      "id": "plan_input",
+      "name": "PlanInput",
+      "definition": "A named value a plan revision declares it needs. The plan names it; a run binds it. Throughline computes none of them and derives no date, period or schedule of its own."
+    },
+    {
+      "id": "plan_step",
+      "name": "PlanStep",
+      "definition": "One reusable unit of a plan definition, with its own criteria, expected outputs, exact output requirements, capabilities and external action proposals. A step is never executable; each run materializes a fresh work item from it."
+    },
+    {
+      "id": "plan_run",
+      "name": "PlanRun",
+      "definition": "One durable, separately auditable execution of one exact approved plan revision. A run is created active, ends only when someone explicitly closes it, and is never reset or reopened for a repetition."
+    },
+    {
+      "id": "run_input_binding",
+      "name": "RunInputBinding",
+      "definition": "What one run was given for one plan input: a literal value, one exact accepted output revision, or an external reference with an immutable version or content digest. It is written when the run is created and never changed."
+    },
+    {
+      "id": "objective_mode",
+      "name": "ObjectiveMode",
+      "definition": "Whether an objective is finite or ongoing. It says how the objective ends, is independent of its phase, carries no cadence meaning, and is fixed at creation."
+    },
+    {
+      "id": "work_item_origin",
+      "name": "WorkItemOrigin",
+      "definition": "Where a work item came from, which decides whether it may execute: materialized from a plan step inside a run, proposed outside any run and therefore not executable, or legacy execution that predates plan runs."
+    }
   ],
   "relations": [
-    {"id":"objective_groups_work_item","from":"objective","to":"work_item","cardinality":"one_to_many"},
-    {"id":"objective_has_plan","from":"objective","to":"plan","cardinality":"one_to_many"},
-    {"id":"plan_proposes_work_item","from":"plan","to":"work_item","cardinality":"one_to_many"},
-    {"id":"work_item_has_context_record","from":"work_item","to":"context_record","cardinality":"one_to_many"},
-    {"id":"work_item_requires_output","from":"work_item","to":"expected_output","cardinality":"one_to_many"},
-    {"id":"expected_output_uses_output_profile","from":"expected_output","to":"output_profile","cardinality":"many_to_one"},
-    {"id":"expected_output_has_revision","from":"expected_output","to":"output_revision","cardinality":"one_to_many"},
-    {"id":"output_revision_has_validation","from":"output_revision","to":"validation_record","cardinality":"one_to_many"},
-    {"id":"work_item_has_review","from":"work_item","to":"validation_record","cardinality":"one_to_many"},
-    {"id":"work_item_depends_on_work_item","from":"work_item","to":"work_item","cardinality":"many_to_many"},
-    {"id":"work_item_requires_output_requirement","from":"work_item","to":"output_requirement","cardinality":"one_to_many"},
-    {"id":"output_requirement_reuses_output_revision","from":"output_requirement","to":"output_revision","cardinality":"many_to_one"},
-    {"id":"output_requirement_accepts_output_profile","from":"output_requirement","to":"output_profile","cardinality":"many_to_one"},
-    {"id":"work_item_has_external_action","from":"work_item","to":"external_action","cardinality":"one_to_many"},
-    {"id":"external_action_has_authorization_subject","from":"external_action","to":"authorization_subject","cardinality":"one_to_many"},
-    {"id":"authority_grant_covers_authorization_subject","from":"authority_grant","to":"authorization_subject","cardinality":"many_to_one"},
-    {"id":"authority_grant_binds_principal","from":"authority_grant","to":"actor","cardinality":"many_to_one"},
-    {"id":"work_item_has_blocker","from":"work_item","to":"blocker","cardinality":"one_to_many"},
-    {"id":"work_item_has_progress","from":"work_item","to":"progress","cardinality":"one_to_many"},
-    {"id":"work_item_has_attention","from":"work_item","to":"attention","cardinality":"many_to_one"},
-    {"id":"question_has_attention","from":"question","to":"attention","cardinality":"many_to_one"},
-    {"id":"question_blocks_work_item","from":"question","to":"work_item","cardinality":"many_to_many"},
-    {"id":"work_item_uses_execution_policy","from":"work_item","to":"execution_policy","cardinality":"many_to_one"}
+    {
+      "id": "objective_groups_work_item",
+      "from": "objective",
+      "to": "work_item",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "objective_has_plan",
+      "from": "objective",
+      "to": "plan",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "plan_proposes_work_item",
+      "from": "plan",
+      "to": "work_item",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "work_item_has_context_record",
+      "from": "work_item",
+      "to": "context_record",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "work_item_requires_output",
+      "from": "work_item",
+      "to": "expected_output",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "expected_output_uses_output_profile",
+      "from": "expected_output",
+      "to": "output_profile",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "expected_output_has_revision",
+      "from": "expected_output",
+      "to": "output_revision",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "output_revision_has_validation",
+      "from": "output_revision",
+      "to": "validation_record",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "work_item_has_review",
+      "from": "work_item",
+      "to": "validation_record",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "work_item_depends_on_work_item",
+      "from": "work_item",
+      "to": "work_item",
+      "cardinality": "many_to_many"
+    },
+    {
+      "id": "work_item_requires_output_requirement",
+      "from": "work_item",
+      "to": "output_requirement",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "output_requirement_reuses_output_revision",
+      "from": "output_requirement",
+      "to": "output_revision",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "output_requirement_accepts_output_profile",
+      "from": "output_requirement",
+      "to": "output_profile",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "work_item_has_external_action",
+      "from": "work_item",
+      "to": "external_action",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "external_action_has_authorization_subject",
+      "from": "external_action",
+      "to": "authorization_subject",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "authority_grant_covers_authorization_subject",
+      "from": "authority_grant",
+      "to": "authorization_subject",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "authority_grant_binds_principal",
+      "from": "authority_grant",
+      "to": "actor",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "work_item_has_blocker",
+      "from": "work_item",
+      "to": "blocker",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "work_item_has_progress",
+      "from": "work_item",
+      "to": "progress",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "work_item_has_attention",
+      "from": "work_item",
+      "to": "attention",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "question_has_attention",
+      "from": "question",
+      "to": "attention",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "question_blocks_work_item",
+      "from": "question",
+      "to": "work_item",
+      "cardinality": "many_to_many"
+    },
+    {
+      "id": "work_item_uses_execution_policy",
+      "from": "work_item",
+      "to": "execution_policy",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "plan_declares_plan_input",
+      "from": "plan",
+      "to": "plan_input",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "plan_consists_of_plan_step",
+      "from": "plan",
+      "to": "plan_step",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "plan_step_depends_on_plan_step",
+      "from": "plan_step",
+      "to": "plan_step",
+      "cardinality": "many_to_many"
+    },
+    {
+      "id": "objective_has_plan_run",
+      "from": "objective",
+      "to": "plan_run",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "plan_run_instantiates_plan",
+      "from": "plan_run",
+      "to": "plan",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "plan_run_binds_run_input_binding",
+      "from": "plan_run",
+      "to": "run_input_binding",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "run_input_binding_binds_plan_input",
+      "from": "run_input_binding",
+      "to": "plan_input",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "run_input_binding_references_output_revision",
+      "from": "run_input_binding",
+      "to": "output_revision",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "plan_run_materializes_work_item",
+      "from": "plan_run",
+      "to": "work_item",
+      "cardinality": "one_to_many"
+    },
+    {
+      "id": "work_item_originates_from_plan_step",
+      "from": "work_item",
+      "to": "plan_step",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "objective_uses_objective_mode",
+      "from": "objective",
+      "to": "objective_mode",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "work_item_uses_work_item_origin",
+      "from": "work_item",
+      "to": "work_item_origin",
+      "cardinality": "many_to_one"
+    }
   ],
   "lifecycles": [
-    {"id":"objective_phase","entity":"objective","states":["idea","discovery","planning","execution","evaluation","completed","paused","cancelled"],"transitions":[["idea","discovery"],["discovery","planning"],["planning","execution"],["execution","evaluation"],["execution","planning"],["evaluation","completed"],["evaluation","planning"],["evaluation","execution"],["idea","paused"],["discovery","paused"],["planning","paused"],["execution","paused"],["evaluation","paused"],["paused","idea"],["paused","discovery"],["paused","planning"],["paused","execution"],["paused","evaluation"],["idea","cancelled"],["discovery","cancelled"],["planning","cancelled"],["execution","cancelled"],["evaluation","cancelled"],["paused","cancelled"]],"resume_rule":"A paused objective can resume only to its recorded prior_phase."},
-    {"id":"plan_commitment","entity":"plan","states":["draft","proposed","approved","rejected","superseded"],"transitions":[["draft","proposed"],["proposed","approved"],["proposed","rejected"],["approved","superseded"]]},
-    {"id":"work_item_execution","entity":"work_item","states":["backlog","ready","in_progress","review","done","cancelled"],"transitions":[["backlog","ready"],["ready","in_progress"],["in_progress","ready"],["in_progress","review"],["review","in_progress"],["review","done"],["backlog","cancelled"],["ready","cancelled"],["in_progress","cancelled"],["review","cancelled"]]},
-    {"id":"output_profile_lifecycle","entity":"output_profile","states":["draft","proposed","active","rejected","superseded"],"transitions":[["draft","proposed"],["proposed","active"],["proposed","rejected"],["active","superseded"]]},
-    {"id":"external_action_lifecycle","entity":"external_action","states":["proposed","authorized","executing","succeeded","failed","rejected","cancelled","expired"],"transitions":[["proposed","authorized"],["authorized","executing"],["executing","succeeded"],["executing","failed"],["proposed","rejected"],["proposed","cancelled"],["authorized","expired"]]},
-    {"id":"manual_blocker_lifecycle","entity":"blocker","states":["active","resolved"],"transitions":[["active","resolved"]]},
-    {"id":"question_lifecycle","entity":"question","states":["unsharp","open","answered","waived"],"transitions":[["unsharp","open"],["unsharp","waived"],["open","answered"],["open","waived"]]},
-    {"id":"context_record_assumption_lifecycle","entity":"context_record","kinds":["assumption"],"states":["untested","validating","validated","invalidated","superseded"],"transitions":[["untested","validating"],["validating","validated"],["validating","invalidated"],["untested","superseded"],["validating","superseded"],["validated","superseded"],["invalidated","superseded"]]},
-    {"id":"context_record_success_metric_lifecycle","entity":"context_record","kinds":["success_metric"],"states":["untested","validating","validated","invalidated","waived","superseded"],"transitions":[["untested","validating"],["validating","validated"],["validating","invalidated"],["untested","waived"],["validating","waived"],["untested","superseded"],["validating","superseded"],["validated","superseded"],["invalidated","superseded"],["waived","superseded"]]},
-    {"id":"context_record_proposal_lifecycle","entity":"context_record","kinds":["requirement","constraint","risk","non_goal","affected"],"states":["proposed","accepted","waived","superseded"],"transitions":[["proposed","accepted"],["accepted","waived"],["proposed","superseded"],["accepted","superseded"],["waived","superseded"]]},
-    {"id":"context_record_finding_lifecycle","entity":"context_record","kinds":["finding"],"states":["recorded","superseded"],"transitions":[["recorded","superseded"]]}
+    {
+      "id": "objective_phase",
+      "entity": "objective",
+      "states": [
+        "idea",
+        "discovery",
+        "planning",
+        "execution",
+        "evaluation",
+        "completed",
+        "paused",
+        "cancelled"
+      ],
+      "transitions": [
+        [
+          "idea",
+          "discovery"
+        ],
+        [
+          "discovery",
+          "planning"
+        ],
+        [
+          "planning",
+          "execution"
+        ],
+        [
+          "execution",
+          "evaluation"
+        ],
+        [
+          "execution",
+          "planning"
+        ],
+        [
+          "evaluation",
+          "completed"
+        ],
+        [
+          "evaluation",
+          "planning"
+        ],
+        [
+          "evaluation",
+          "execution"
+        ],
+        [
+          "idea",
+          "paused"
+        ],
+        [
+          "discovery",
+          "paused"
+        ],
+        [
+          "planning",
+          "paused"
+        ],
+        [
+          "execution",
+          "paused"
+        ],
+        [
+          "evaluation",
+          "paused"
+        ],
+        [
+          "paused",
+          "idea"
+        ],
+        [
+          "paused",
+          "discovery"
+        ],
+        [
+          "paused",
+          "planning"
+        ],
+        [
+          "paused",
+          "execution"
+        ],
+        [
+          "paused",
+          "evaluation"
+        ],
+        [
+          "idea",
+          "cancelled"
+        ],
+        [
+          "discovery",
+          "cancelled"
+        ],
+        [
+          "planning",
+          "cancelled"
+        ],
+        [
+          "execution",
+          "cancelled"
+        ],
+        [
+          "evaluation",
+          "cancelled"
+        ],
+        [
+          "paused",
+          "cancelled"
+        ]
+      ],
+      "resume_rule": "A paused objective can resume only to its recorded prior_phase."
+    },
+    {
+      "id": "plan_commitment",
+      "entity": "plan",
+      "states": [
+        "draft",
+        "proposed",
+        "approved",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": [
+        [
+          "draft",
+          "proposed"
+        ],
+        [
+          "proposed",
+          "approved"
+        ],
+        [
+          "proposed",
+          "rejected"
+        ],
+        [
+          "approved",
+          "superseded"
+        ]
+      ]
+    },
+    {
+      "id": "work_item_execution",
+      "entity": "work_item",
+      "states": [
+        "backlog",
+        "ready",
+        "in_progress",
+        "review",
+        "done",
+        "cancelled"
+      ],
+      "transitions": [
+        [
+          "backlog",
+          "ready"
+        ],
+        [
+          "ready",
+          "in_progress"
+        ],
+        [
+          "in_progress",
+          "ready"
+        ],
+        [
+          "in_progress",
+          "review"
+        ],
+        [
+          "review",
+          "in_progress"
+        ],
+        [
+          "review",
+          "done"
+        ],
+        [
+          "backlog",
+          "cancelled"
+        ],
+        [
+          "ready",
+          "cancelled"
+        ],
+        [
+          "in_progress",
+          "cancelled"
+        ],
+        [
+          "review",
+          "cancelled"
+        ]
+      ]
+    },
+    {
+      "id": "output_profile_lifecycle",
+      "entity": "output_profile",
+      "states": [
+        "draft",
+        "proposed",
+        "active",
+        "rejected",
+        "superseded"
+      ],
+      "transitions": [
+        [
+          "draft",
+          "proposed"
+        ],
+        [
+          "proposed",
+          "active"
+        ],
+        [
+          "proposed",
+          "rejected"
+        ],
+        [
+          "active",
+          "superseded"
+        ]
+      ]
+    },
+    {
+      "id": "external_action_lifecycle",
+      "entity": "external_action",
+      "states": [
+        "proposed",
+        "authorized",
+        "executing",
+        "succeeded",
+        "failed",
+        "rejected",
+        "cancelled",
+        "expired"
+      ],
+      "transitions": [
+        [
+          "proposed",
+          "authorized"
+        ],
+        [
+          "authorized",
+          "executing"
+        ],
+        [
+          "executing",
+          "succeeded"
+        ],
+        [
+          "executing",
+          "failed"
+        ],
+        [
+          "proposed",
+          "rejected"
+        ],
+        [
+          "proposed",
+          "cancelled"
+        ],
+        [
+          "authorized",
+          "expired"
+        ]
+      ]
+    },
+    {
+      "id": "manual_blocker_lifecycle",
+      "entity": "blocker",
+      "states": [
+        "active",
+        "resolved"
+      ],
+      "transitions": [
+        [
+          "active",
+          "resolved"
+        ]
+      ]
+    },
+    {
+      "id": "question_lifecycle",
+      "entity": "question",
+      "states": [
+        "unsharp",
+        "open",
+        "answered",
+        "waived"
+      ],
+      "transitions": [
+        [
+          "unsharp",
+          "open"
+        ],
+        [
+          "unsharp",
+          "waived"
+        ],
+        [
+          "open",
+          "answered"
+        ],
+        [
+          "open",
+          "waived"
+        ]
+      ]
+    },
+    {
+      "id": "context_record_assumption_lifecycle",
+      "entity": "context_record",
+      "kinds": [
+        "assumption"
+      ],
+      "states": [
+        "untested",
+        "validating",
+        "validated",
+        "invalidated",
+        "superseded"
+      ],
+      "transitions": [
+        [
+          "untested",
+          "validating"
+        ],
+        [
+          "validating",
+          "validated"
+        ],
+        [
+          "validating",
+          "invalidated"
+        ],
+        [
+          "untested",
+          "superseded"
+        ],
+        [
+          "validating",
+          "superseded"
+        ],
+        [
+          "validated",
+          "superseded"
+        ],
+        [
+          "invalidated",
+          "superseded"
+        ]
+      ]
+    },
+    {
+      "id": "context_record_success_metric_lifecycle",
+      "entity": "context_record",
+      "kinds": [
+        "success_metric"
+      ],
+      "states": [
+        "untested",
+        "validating",
+        "validated",
+        "invalidated",
+        "waived",
+        "superseded"
+      ],
+      "transitions": [
+        [
+          "untested",
+          "validating"
+        ],
+        [
+          "validating",
+          "validated"
+        ],
+        [
+          "validating",
+          "invalidated"
+        ],
+        [
+          "untested",
+          "waived"
+        ],
+        [
+          "validating",
+          "waived"
+        ],
+        [
+          "untested",
+          "superseded"
+        ],
+        [
+          "validating",
+          "superseded"
+        ],
+        [
+          "validated",
+          "superseded"
+        ],
+        [
+          "invalidated",
+          "superseded"
+        ],
+        [
+          "waived",
+          "superseded"
+        ]
+      ]
+    },
+    {
+      "id": "context_record_proposal_lifecycle",
+      "entity": "context_record",
+      "kinds": [
+        "requirement",
+        "constraint",
+        "risk",
+        "non_goal",
+        "affected"
+      ],
+      "states": [
+        "proposed",
+        "accepted",
+        "waived",
+        "superseded"
+      ],
+      "transitions": [
+        [
+          "proposed",
+          "accepted"
+        ],
+        [
+          "accepted",
+          "waived"
+        ],
+        [
+          "proposed",
+          "superseded"
+        ],
+        [
+          "accepted",
+          "superseded"
+        ],
+        [
+          "waived",
+          "superseded"
+        ]
+      ]
+    },
+    {
+      "id": "context_record_finding_lifecycle",
+      "entity": "context_record",
+      "kinds": [
+        "finding"
+      ],
+      "states": [
+        "recorded",
+        "superseded"
+      ],
+      "transitions": [
+        [
+          "recorded",
+          "superseded"
+        ]
+      ]
+    },
+    {
+      "id": "plan_run_status",
+      "entity": "plan_run",
+      "states": [
+        "active",
+        "succeeded",
+        "failed",
+        "cancelled"
+      ],
+      "transitions": [
+        [
+          "active",
+          "succeeded"
+        ],
+        [
+          "active",
+          "failed"
+        ],
+        [
+          "active",
+          "cancelled"
+        ]
+      ],
+      "resume_rule": "A terminal plan run is irreversible: it is never reopened, reset or re-run. Repeating the work means creating another run of the same approved revision."
+    }
   ],
   "invariants": [
-    {"id":"no_self_dependency","statement":"A work item cannot depend on itself; hard prerequisite cycles are rejected."},
-    {"id":"claims_are_leases","statement":"At most one unexpired active claim exists per work item; claims are reclaimable leases."},
-    {"id":"optimistic_concurrency","statement":"Mutations use expected_version and reject mismatches without overwriting current state."},
-    {"id":"accepted_output_required","statement":"Expected outputs are satisfied only by accepted immutable revisions with passed or waived validations."},
-    {"id":"declared_review_required","statement":"A work item that declares review requirements reaches done only when, for each, the latest work-item validation with the same criterion reference and validator kind passed or was waived and no work was recorded on the item after it; an item that declares none has no review requirement."},
-    {"id":"capability_not_authority","statement":"Capability does not imply Authority; external effects require a matching principal-bound grant."},
-    {"id":"external_effect_boundary","statement":"Throughline never executes an ExternalAction; external actors record execution and evidence."},
-    {"id":"canonical_authorization","statement":"Authorization uses the same canonical subject serialization and hash for proposal, grant, check, and audit."},
-    {"id":"profile_immutability","statement":"Active output profile versions and produced output revisions are immutable; changes create new versions."},
-    {"id":"execution_policy_not_authority","statement":"Execution policy governs internal work autonomy and never grants authority for an ExternalAction."},
-    {"id":"objective_phase_moves_explicitly","statement":"An objective changes phase only through an explicit transition with a recorded reason and actor; recording work against it never advances the phase, and objectives are not claimed or leased."},
-    {"id":"attention_is_orthogonal","statement":"Attention requests human intervention without changing the work-item execution status."},
-    {"id":"questions_block_linked_work","statement":"An unsharp or open question blocks claiming and readiness of every work item it is linked to; the block clears only when the question is answered or waived."},
-    {"id":"progress_is_concise","statement":"Progress records concise checkpoints and never raw model reasoning."}
+    {
+      "id": "no_self_dependency",
+      "statement": "A work item cannot depend on itself; hard prerequisite cycles are rejected."
+    },
+    {
+      "id": "claims_are_leases",
+      "statement": "At most one unexpired active claim exists per work item; claims are reclaimable leases."
+    },
+    {
+      "id": "optimistic_concurrency",
+      "statement": "Mutations use expected_version and reject mismatches without overwriting current state."
+    },
+    {
+      "id": "accepted_output_required",
+      "statement": "Expected outputs are satisfied only by accepted immutable revisions with passed or waived validations."
+    },
+    {
+      "id": "declared_review_required",
+      "statement": "A work item that declares review requirements reaches done only when, for each, the latest work-item validation with the same criterion reference and validator kind passed or was waived and no work was recorded on the item after it; an item that declares none has no review requirement."
+    },
+    {
+      "id": "capability_not_authority",
+      "statement": "Capability does not imply Authority; external effects require a matching principal-bound grant."
+    },
+    {
+      "id": "external_effect_boundary",
+      "statement": "Throughline never executes an ExternalAction; external actors record execution and evidence."
+    },
+    {
+      "id": "canonical_authorization",
+      "statement": "Authorization uses the same canonical subject serialization and hash for proposal, grant, check, and audit."
+    },
+    {
+      "id": "profile_immutability",
+      "statement": "Active output profile versions and produced output revisions are immutable; changes create new versions."
+    },
+    {
+      "id": "execution_policy_not_authority",
+      "statement": "Execution policy governs internal work autonomy and never grants authority for an ExternalAction."
+    },
+    {
+      "id": "objective_phase_moves_explicitly",
+      "statement": "An objective changes phase only through an explicit transition with a recorded reason and actor; recording work against it never advances the phase, and objectives are not claimed or leased."
+    },
+    {
+      "id": "attention_is_orthogonal",
+      "statement": "Attention requests human intervention without changing the work-item execution status."
+    },
+    {
+      "id": "questions_block_linked_work",
+      "statement": "An unsharp or open question blocks claiming and readiness of every work item it is linked to; the block clears only when the question is answered or waived."
+    },
+    {
+      "id": "progress_is_concise",
+      "statement": "Progress records concise checkpoints and never raw model reasoning."
+    },
+    {
+      "id": "runs_are_separate",
+      "statement": "Each plan run is a permanently separate, auditable instance. Creating a later run of the same approved revision leaves every earlier run, and everything it produced, unchanged."
+    },
+    {
+      "id": "run_materializes_every_step",
+      "statement": "Creating a plan run materializes exactly one fresh work item per plan step, with its own criteria, outputs, requirements, capabilities and copied external actions, or it stores nothing at all."
+    },
+    {
+      "id": "execution_requires_active_run",
+      "statement": "Claims, executing work-item transitions and the start of an external action require an active plan run and an objective in execution. Work proposed outside a run is never executable; only migrated legacy execution is exempt."
+    },
+    {
+      "id": "run_key_is_objective_scoped",
+      "statement": "A run key is unique within its objective and resolved independently of the actor. The same key with the same revision and bindings returns the existing run; the same key with different content is a conflict."
+    },
+    {
+      "id": "run_capacity_is_objective_wide",
+      "statement": "An objective caps its concurrently active plan runs across every revision, with one as the default. Run-key replay is resolved before the capacity check."
+    },
+    {
+      "id": "bindings_are_immutable",
+      "statement": "A run input binding is written when its run is created and never changed. A run binds an earlier run's result only as one exact accepted output revision; Throughline never resolves latest, previous or last-successful."
+    },
+    {
+      "id": "runs_end_explicitly",
+      "statement": "A plan run never ends from the state of its work. Success requires every required step's work item done, every remaining item terminal and all output and action obligations met; failure and cancellation require a rationale and close the run's remaining work and claims atomically."
+    },
+    {
+      "id": "plan_definitions_are_not_rewritten",
+      "statement": "An approved plan revision is never edited and never superseded by observation. A durable change to how the work is done is a new revision, reviewed and approved on its own."
+    }
   ],
   "source_mappings": [
-    {"id":"architecture_core_concepts","path":"docs/implementation-handoff.md","heading":"## 4. Core concepts and terminology"},
-    {"id":"mcp_adapter","path":"internal/mcp/server.go","symbol":"NewServer"},
-    {"id":"work_types","path":"internal/domain/work/types.go","symbol":"type Objective struct"},
-    {"id":"work_planning","path":"internal/domain/work/planning.go","symbol":"TransitionObjective"},
-    {"id":"work_execution","path":"internal/domain/work/execution.go","symbol":"TransitionWorkItem"},
-    {"id":"work_coordination","path":"internal/domain/work/coordination.go","symbol":"EvaluateTransitionGate"},
-    {"id":"output_profiles","path":"internal/domain/output/types.go","symbol":"type Profile struct"},
-    {"id":"output_reuse","path":"internal/domain/output/revisions.go","symbol":"type OutputRequirement struct"},
-    {"id":"authority_actions","path":"internal/domain/authority/actions.go","symbol":"type CanonicalAuthorizationSubject struct"},
-    {"id":"authority_subject","path":"internal/domain/authority/subject.go","symbol":"CanonicalizeSubject"},
-    {"id":"migration_initial","path":"internal/sqlite/migrations/0001_initial.sql","symbol":"CREATE TABLE objectives"},
-    {"id":"migration_planning","path":"internal/sqlite/migrations/0002_intent_planning.sql","symbol":"CREATE TABLE context_records"},
-    {"id":"migration_execution","path":"internal/sqlite/migrations/0003_durable_execution_graph.sql","symbol":"CREATE TABLE acceptance_criteria"},
-    {"id":"migration_coordination","path":"internal/sqlite/migrations/0004_safe_multi_actor_coordination.sql","symbol":"CREATE TABLE actors"},
-    {"id":"migration_authority","path":"internal/sqlite/migrations/0005_external_actions_and_authority.sql","symbol":"CREATE TABLE external_actions"},
-    {"id":"migration_blockers","path":"internal/sqlite/migrations/0006_manual_blockers.sql","symbol":"CREATE TABLE manual_blockers"},
-    {"id":"migration_profile_versions","path":"internal/sqlite/migrations/0007_output_profile_state_versions.sql","symbol":"ALTER TABLE output_profiles"},
-    {"id":"migration_approval_versions","path":"internal/sqlite/migrations/0008_generic_approval_versions.sql","symbol":"ALTER TABLE approvals"},
-    {"id":"migration_idempotency","path":"internal/sqlite/migrations/0009_idempotency_without_actor_foreign_key.sql","symbol":"CREATE TABLE idempotency_records_new"},
-    {"id":"migration_success_metric_lifecycle","path":"internal/sqlite/migrations/0010_success_metric_validation_lifecycle.sql","symbol":"UPDATE context_records"},
-    {"id":"migration_relation_versions","path":"internal/sqlite/migrations/0011_relation_versions.sql","symbol":"ALTER TABLE decisions"},
-    {"id":"migration_criterion_supersession","path":"internal/sqlite/migrations/0012_acceptance_criterion_supersession.sql","symbol":"CREATE TABLE acceptance_criteria_new"},
-    {"id":"migration_priority_measure_context_kinds","path":"internal/sqlite/migrations/0013_priority_measure_context_kinds.sql","symbol":"ALTER TABLE objectives ADD COLUMN priority"},
-    {"id":"migration_activity_objective_binding","path":"internal/sqlite/migrations/0014_activity_objective_binding.sql","symbol":"ALTER TABLE activity ADD COLUMN objective_id"},
-    {"id":"migration_question_frontier_and_blocks","path":"internal/sqlite/migrations/0015_question_frontier_and_blocks.sql","symbol":"CREATE TABLE question_blocks"},
-    {"id":"migration_work_item_reviews","path":"internal/sqlite/migrations/0016_work_item_reviews.sql","symbol":"CREATE TABLE output_validations"},
-    {"id":"migration_objective_phase_transition","path":"internal/sqlite/migrations/0017_objective_phase_transition.sql","symbol":"ALTER TABLE objectives ADD COLUMN phase_transition_from"},
-    {"id":"work_review_evidence","path":"internal/domain/work/review.go","symbol":"EvaluateReviewEvidence"},
-    {"id":"mutation_effects","path":"internal/sqlite/effects.go","symbol":"effectTables"},
-    {"id":"capability_grant_cli","path":"internal/cli/capability.go","symbol":"runCapabilityGrant"}
+    {
+      "id": "architecture_core_concepts",
+      "path": "docs/implementation-handoff.md",
+      "heading": "## 4. Core concepts and terminology"
+    },
+    {
+      "id": "mcp_adapter",
+      "path": "internal/mcp/server.go",
+      "symbol": "NewServer"
+    },
+    {
+      "id": "work_types",
+      "path": "internal/domain/work/types.go",
+      "symbol": "type Objective struct"
+    },
+    {
+      "id": "work_planning",
+      "path": "internal/domain/work/planning.go",
+      "symbol": "TransitionObjective"
+    },
+    {
+      "id": "work_execution",
+      "path": "internal/domain/work/execution.go",
+      "symbol": "TransitionWorkItem"
+    },
+    {
+      "id": "work_coordination",
+      "path": "internal/domain/work/coordination.go",
+      "symbol": "EvaluateTransitionGate"
+    },
+    {
+      "id": "output_profiles",
+      "path": "internal/domain/output/types.go",
+      "symbol": "type Profile struct"
+    },
+    {
+      "id": "output_reuse",
+      "path": "internal/domain/output/revisions.go",
+      "symbol": "type OutputRequirement struct"
+    },
+    {
+      "id": "authority_actions",
+      "path": "internal/domain/authority/actions.go",
+      "symbol": "type CanonicalAuthorizationSubject struct"
+    },
+    {
+      "id": "authority_subject",
+      "path": "internal/domain/authority/subject.go",
+      "symbol": "CanonicalizeSubject"
+    },
+    {
+      "id": "migration_initial",
+      "path": "internal/sqlite/migrations/0001_initial.sql",
+      "symbol": "CREATE TABLE objectives"
+    },
+    {
+      "id": "migration_planning",
+      "path": "internal/sqlite/migrations/0002_intent_planning.sql",
+      "symbol": "CREATE TABLE context_records"
+    },
+    {
+      "id": "migration_execution",
+      "path": "internal/sqlite/migrations/0003_durable_execution_graph.sql",
+      "symbol": "CREATE TABLE acceptance_criteria"
+    },
+    {
+      "id": "migration_coordination",
+      "path": "internal/sqlite/migrations/0004_safe_multi_actor_coordination.sql",
+      "symbol": "CREATE TABLE actors"
+    },
+    {
+      "id": "migration_authority",
+      "path": "internal/sqlite/migrations/0005_external_actions_and_authority.sql",
+      "symbol": "CREATE TABLE external_actions"
+    },
+    {
+      "id": "migration_blockers",
+      "path": "internal/sqlite/migrations/0006_manual_blockers.sql",
+      "symbol": "CREATE TABLE manual_blockers"
+    },
+    {
+      "id": "migration_profile_versions",
+      "path": "internal/sqlite/migrations/0007_output_profile_state_versions.sql",
+      "symbol": "ALTER TABLE output_profiles"
+    },
+    {
+      "id": "migration_approval_versions",
+      "path": "internal/sqlite/migrations/0008_generic_approval_versions.sql",
+      "symbol": "ALTER TABLE approvals"
+    },
+    {
+      "id": "migration_idempotency",
+      "path": "internal/sqlite/migrations/0009_idempotency_without_actor_foreign_key.sql",
+      "symbol": "CREATE TABLE idempotency_records_new"
+    },
+    {
+      "id": "migration_success_metric_lifecycle",
+      "path": "internal/sqlite/migrations/0010_success_metric_validation_lifecycle.sql",
+      "symbol": "UPDATE context_records"
+    },
+    {
+      "id": "migration_relation_versions",
+      "path": "internal/sqlite/migrations/0011_relation_versions.sql",
+      "symbol": "ALTER TABLE decisions"
+    },
+    {
+      "id": "migration_criterion_supersession",
+      "path": "internal/sqlite/migrations/0012_acceptance_criterion_supersession.sql",
+      "symbol": "CREATE TABLE acceptance_criteria_new"
+    },
+    {
+      "id": "migration_priority_measure_context_kinds",
+      "path": "internal/sqlite/migrations/0013_priority_measure_context_kinds.sql",
+      "symbol": "ALTER TABLE objectives ADD COLUMN priority"
+    },
+    {
+      "id": "migration_activity_objective_binding",
+      "path": "internal/sqlite/migrations/0014_activity_objective_binding.sql",
+      "symbol": "ALTER TABLE activity ADD COLUMN objective_id"
+    },
+    {
+      "id": "migration_question_frontier_and_blocks",
+      "path": "internal/sqlite/migrations/0015_question_frontier_and_blocks.sql",
+      "symbol": "CREATE TABLE question_blocks"
+    },
+    {
+      "id": "migration_work_item_reviews",
+      "path": "internal/sqlite/migrations/0016_work_item_reviews.sql",
+      "symbol": "CREATE TABLE output_validations"
+    },
+    {
+      "id": "migration_objective_phase_transition",
+      "path": "internal/sqlite/migrations/0017_objective_phase_transition.sql",
+      "symbol": "ALTER TABLE objectives ADD COLUMN phase_transition_from"
+    },
+    {
+      "id": "work_review_evidence",
+      "path": "internal/domain/work/review.go",
+      "symbol": "EvaluateReviewEvidence"
+    },
+    {
+      "id": "mutation_effects",
+      "path": "internal/sqlite/effects.go",
+      "symbol": "effectTables"
+    },
+    {
+      "id": "capability_grant_cli",
+      "path": "internal/cli/capability.go",
+      "symbol": "runCapabilityGrant"
+    },
+    {
+      "id": "work_runs",
+      "path": "internal/domain/work/runs.go",
+      "symbol": "type PlanRun struct"
+    },
+    {
+      "id": "run_store",
+      "path": "internal/sqlite/run_store.go",
+      "symbol": "func (r *transactionRepository) CreatePlanRun"
+    },
+    {
+      "id": "reusable_plan_runs_migration",
+      "path": "internal/sqlite/migrations/0018_reusable_plan_runs.sql",
+      "heading": "CREATE TABLE plan_runs"
+    }
   ]
 }

@@ -129,7 +129,7 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 		ActorID:     "agent:planner", IdempotencyKey: "propose-premature-plan",
 		Title:    "Premature profile use",
 		Revision: 1,
-		Items: []app.ProposedWorkItem{{
+		Steps: []app.ProposedPlanStep{{
 			ClientRef: "premature", Key: "TH-PREMATURE", Title: "Use an unreviewed vocabulary", Kind: "research",
 			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 			ExpectedOutputs: []app.ProposedExpectedOutput{{Name: "Evidence map", ProfileName: "evidence_map", ProfileVersion: 1, Required: true, Ordinal: 1}},
@@ -198,7 +198,7 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 	}
 	if _, err := app.UnwrapMutation(service.ProposePlan(ctx, app.ProposePlanCommand{
 		ObjectiveID: objective.ID, ActorID: "agent:planner", Title: "Stale profile plan", Revision: 1,
-		Items: []app.ProposedWorkItem{{
+		Steps: []app.ProposedPlanStep{{
 			ClientRef: "stale", Key: "TH-STALE", Title: "Use the superseded profile", Kind: "research",
 			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 			ExpectedOutputs: []app.ProposedExpectedOutput{{Name: "Evidence map", ProfileName: "evidence_map", ProfileVersion: 1, Required: true, Ordinal: 1}},
@@ -213,21 +213,21 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 		Title:    "Source-auditing skill plan",
 		Summary:  "Research methods, design the skill, and document a separately governed installation step.",
 		Revision: 1,
-		Items: []app.ProposedWorkItem{
+		Steps: []app.ProposedPlanStep{
 			{
-				ClientRef: "skill", ParentRef: "research", Key: "TH-SKILL", Title: "Design the reusable source-auditing skill", Kind: "skill_design",
+				ClientRef: "skill", ParentRef: "research", Key: "TH-SKILL", Title: "Design the reusable source-auditing skill", Kind: "skill_design", Required: true,
 				Priority: work.PriorityHigh, EstimatedScope: work.ScopeMedium, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 				RequiredCapabilities: []string{"skill_design"},
 				ExpectedOutputs:      []app.ProposedExpectedOutput{{Name: "Skill package", ProfileName: "skill_package", ProfileVersion: 1, Required: true, Ordinal: 1}, {Name: "Evidence map", ProfileName: "evidence_map", ProfileVersion: 2, Required: true, Ordinal: 2}},
 			},
 			{
-				ClientRef: "research", Key: "TH-RESEARCH", Title: "Research source-auditing methods", Kind: "research",
+				ClientRef: "research", Key: "TH-RESEARCH", Title: "Research source-auditing methods", Kind: "research", Required: true,
 				Priority: work.PriorityHigh, EstimatedScope: work.ScopeMedium, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 				RequiredCapabilities: []string{"web_research", "document_reading"},
 				ExpectedOutputs:      []app.ProposedExpectedOutput{{Name: "Method dossier", ProfileName: "research_dossier", ProfileVersion: 1, Required: true, Ordinal: 1}},
 			},
 			{
-				ClientRef: "installation", Key: "TH-INSTALL", Title: "Prepare the reviewed installation procedure", Kind: "tool_installation",
+				ClientRef: "installation", Key: "TH-INSTALL", Title: "Prepare the reviewed installation procedure", Kind: "tool_installation", Required: true,
 				Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyApprovalRequired, RequiredActorKind: work.ActorHuman,
 				RequiredCapabilities: []string{"mcp_installation"},
 				ExpectedOutputs:      []app.ProposedExpectedOutput{{Name: "Installation procedure", ProfileName: "tool_installation", ProfileVersion: 1, Required: true, Ordinal: 1}},
@@ -238,13 +238,10 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if planContext.Plan.CommitmentState != work.PlanProposed || len(planContext.Items) != 3 {
+	// A proposal persists a reusable definition and no executable work: the
+	// plan says what a run would do, and only creating a run does it.
+	if planContext.Plan.CommitmentState != work.PlanProposed || len(planContext.Steps) != 3 || len(planContext.Items) != 0 {
 		t.Fatalf("unexpected proposed plan: %#v", planContext)
-	}
-	for _, item := range planContext.Items {
-		if item.WorkItem.CommitmentState != work.ItemProposed {
-			t.Fatalf("item %s was committed before review", item.WorkItem.Key)
-		}
 	}
 	if _, err := app.UnwrapMutation(service.TransitionObjective(ctx, app.TransitionObjectiveCommand{
 		ObjectiveID: objective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:sponsor", IdempotencyKey: "reject-premature-objective-transition", Reason: "Start approved work.", ExpectedVersion: 1,
@@ -289,28 +286,49 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 	if len(recovered.Plans) != 1 || recovered.Plans[0].Plan.CommitmentState != work.PlanApproved {
 		t.Fatalf("approved plan was not recovered: %#v", recovered.Plans)
 	}
-	items := recovered.Plans[0].Items
+	steps := recovered.Plans[0].Steps
+	stepIDs := make(map[string]string, len(steps))
+	stepParents := make(map[string]string, len(steps))
+	for _, step := range steps {
+		stepIDs[step.Key] = step.ID
+		stepParents[step.Key] = step.ParentStepID
+	}
+	if len(steps) != 3 || stepParents["TH-SKILL"] != stepIDs["TH-RESEARCH"] {
+		t.Fatalf("recursive step hierarchy was not recovered: %#v", steps)
+	}
+	for _, step := range steps {
+		if len(step.Definition.RequiredCapabilities) == 0 || len(step.Definition.ExpectedOutputs) == 0 {
+			t.Fatalf("approved plan step is incomplete: %#v", step)
+		}
+	}
+
+	// Only now does anything executable exist, and it exists because a run was
+	// created — one fresh work item per step, carrying the step's own child
+	// data.
+	run, err := app.UnwrapMutation(service.CreatePlanRun(ctx, app.CreatePlanRunCommand{
+		ObjectiveID: objective.ID, PlanID: planContext.Plan.ID, ActorID: "agent:planner", IdempotencyKey: "run-main-plan", RunKey: "main-1",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Run.Status != work.PlanRunActive || run.Run.Sequence != 1 || len(run.WorkItems) != 3 {
+		t.Fatalf("plan run = %#v", run.Run)
+	}
+	items := runItemsByStepKey(run)
 	itemIDs := make(map[string]string, len(items))
-	parentIDs := make(map[string]string, len(items))
-	for _, item := range items {
-		itemIDs[item.WorkItem.Key] = item.WorkItem.ID
-		parentIDs[item.WorkItem.Key] = item.WorkItem.ParentID
+	for key, item := range items {
+		itemIDs[key] = item.ID
+		if item.CommitmentState != work.ItemAccepted || item.Origin != work.OriginPlanStep || item.PlanRunID != run.Run.ID {
+			t.Fatalf("materialized item %s is incomplete: %#v", key, item)
+		}
 	}
 	if installation := itemIDs["TH-INSTALL"]; installation == "" {
 		t.Fatal("installation work item is missing")
 	} else if context, err := service.GetWorkItem(ctx, installation); err != nil || len(context.ExternalActions) != 1 {
-		t.Fatalf("atomic planned external action = %#v, %v", context.ExternalActions, err)
+		t.Fatalf("copied external action = %#v, %v", context.ExternalActions, err)
 	}
-	if len(items) != 3 || parentIDs["TH-SKILL"] != itemIDs["TH-RESEARCH"] {
-		t.Fatalf("recursive item hierarchy was not recovered: %#v", items)
-	}
-	for _, item := range items {
-		if item.WorkItem.CommitmentState != work.ItemAccepted || len(item.RequiredCapabilities) == 0 || len(item.ExpectedOutputs) == 0 {
-			t.Fatalf("approved item is incomplete: %#v", item)
-		}
-		if !item.WorkItem.UpdatedAt.After(item.WorkItem.CreatedAt) {
-			t.Fatalf("approved item timestamp was not updated: %#v", item.WorkItem)
-		}
+	if items["TH-SKILL"].ParentID != itemIDs["TH-RESEARCH"] {
+		t.Fatalf("run did not reproduce the step hierarchy: %#v", items)
 	}
 	profiles, err := service.ListOutputProfiles(ctx)
 	if err != nil {
@@ -334,8 +352,8 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 	}
 	replacement, err := app.UnwrapMutation(service.ProposePlan(ctx, app.ProposePlanCommand{
 		ObjectiveID: objective.ID, ActorID: "agent:planner", IdempotencyKey: "propose-replacement-plan", Title: "Source-auditing skill plan v2", Summary: "Refine the approved plan.", Revision: 2,
-		Items: []app.ProposedWorkItem{{
-			ClientRef: "refine", Key: "TH-REFINE", Title: "Refine the source-auditing skill", Kind: "skill_design",
+		Steps: []app.ProposedPlanStep{{
+			ClientRef: "refine", Key: "TH-REFINE", Title: "Refine the source-auditing skill", Kind: "skill_design", Required: true,
 			Priority: work.PriorityHigh, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 			RequiredCapabilities: []string{"skill_design"},
 			ExpectedOutputs:      []app.ProposedExpectedOutput{{Name: "Refined skill", ProfileName: "skill_package", ProfileVersion: 1, Required: true, Ordinal: 1}},
@@ -354,15 +372,26 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 		t.Fatal(err)
 	}
 	planStates := make(map[int]work.PlanCommitment)
-	itemStatesByRevision := make(map[int]work.ItemCommitment)
+	stepsByRevision := make(map[int]int)
 	for _, candidate := range replacedContext.Plans {
 		planStates[candidate.Plan.Revision] = candidate.Plan.CommitmentState
-		if len(candidate.Items) > 0 {
-			itemStatesByRevision[candidate.Plan.Revision] = candidate.Items[0].WorkItem.CommitmentState
-		}
+		stepsByRevision[candidate.Plan.Revision] = len(candidate.Steps)
 	}
-	if planStates[1] != work.PlanSuperseded || planStates[2] != work.PlanApproved || itemStatesByRevision[1] != work.ItemSuperseded || itemStatesByRevision[2] != work.ItemAccepted {
-		t.Fatalf("plan replacement states = plans %#v, items %#v", planStates, itemStatesByRevision)
+	if planStates[1] != work.PlanSuperseded || planStates[2] != work.PlanApproved {
+		t.Fatalf("plan replacement states = %#v", planStates)
+	}
+	// A later revision replaces what a new run would be created from. It
+	// rewrites neither revision's definition, and it does not touch the work
+	// the first revision's run already materialized.
+	if stepsByRevision[1] != 3 || stepsByRevision[2] != 1 {
+		t.Fatalf("plan definitions were rewritten by the replacement: %#v", stepsByRevision)
+	}
+	firstRun, err := service.GetPlanRun(ctx, run.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstRun.Run.Status != work.PlanRunActive || firstRun.Run.PlanID != planContext.Plan.ID || len(firstRun.WorkItems) != 3 {
+		t.Fatalf("the first run changed when a later revision was approved: %#v", firstRun.Run)
 	}
 	otherObjective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{
 		ActorID: "human:sponsor", IdempotencyKey: "create-other-objective",

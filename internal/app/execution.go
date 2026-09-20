@@ -125,6 +125,10 @@ func transitionRequirements(ctx context.Context, repository ports.Repository, ob
 	if err != nil {
 		return nil, err
 	}
+	runActive, err := repository.PlanRunIsActive(ctx, item.PlanRunID)
+	if err != nil {
+		return nil, err
+	}
 	return work.EvaluateTransitionGate(work.TransitionGateFacts{
 		ObjectivePhase: objective.Phase, PlanApproved: planApproved, ItemCommitment: item.CommitmentState,
 		CurrentStatus: item.ExecutionStatus, TargetStatus: target,
@@ -132,6 +136,8 @@ func transitionRequirements(ctx context.Context, repository ports.Repository, ob
 		ExpectedOutputsSatisfied: expectedOutputsSatisfied, OutputRequirementsSatisfied: outputRequirementsSatisfied,
 		ExternalActionsSatisfied:    externalActionsSatisfied,
 		ReviewRequirementsSatisfied: work.ReviewRequirementsSatisfied(evidence),
+		Origin:                      item.Origin,
+		RunActive:                   runActive,
 	}), nil
 }
 

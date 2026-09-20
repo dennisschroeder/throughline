@@ -177,9 +177,13 @@ Use these names consistently in code, tool contracts, UI, and documentation.
 
 | Concept | Meaning |
 |---|---|
-| **Objective** | A durable goal that groups work items. It is not necessarily a project hierarchy node. |
-| **Plan** | A versioned proposal for achieving an objective. A plan can be draft, proposed, approved, rejected, or superseded; approval commits its accepted work items without executing them. |
-| **WorkItem** | The primary unit of proposed, executable, reviewable, or trackable work. It may describe research, writing, design, installation, configuration, integration, evaluation, approval, human action, or agent action—not only code. A task is a UI synonym only; do not conflate it with an MCP long-running tool task. |
+| **Objective** | A durable goal that groups work items. It is not necessarily a project hierarchy node. Its `mode` — `finite` or `ongoing` — says how it ends, is independent of its phase, carries no cadence meaning, and is fixed at creation; `max_concurrent_runs` caps how many of its plan runs may be active at once, across every revision, and defaults to one. |
+| **Plan** | A versioned, reusable *definition* of how an objective's work is done: the PlanInputs it declares and the PlanSteps it is made of. A plan can be draft, proposed, approved, rejected, or superseded; approving a revision commits the definition and creates no work. Instantiating it as a PlanRun does. Revisions proposed before Plan Runs wrote work items directly and keep them as Legacy execution. |
+| **PlanInput** | A named value a plan revision declares it needs. The plan names it; a run binds it. Throughline computes none of them and derives no date, period, or schedule of its own. |
+| **PlanStep** | One reusable unit of a plan definition, carrying its own acceptance criteria, expected outputs, exact output requirements, required capabilities, and static ExternalAction proposals. A step is never executable; each run materializes one fresh WorkItem from it. `required` marks a step as a success obligation; an optional step may be skipped with an audited rationale. |
+| **PlanRun** | One durable, separately auditable execution of one exact approved plan revision. It is created active with every required binding supplied, ends only when someone explicitly closes it as `succeeded`, `failed`, or `cancelled`, and is never reset or reopened for a repetition. The harness supplies an opaque, objective-unique `run_key`; Throughline reads no time, cadence, or schedule out of it. |
+| **RunInputBinding** | What one run was given for one PlanInput: a literal value, one exact accepted OutputRevision, or an external reference with an immutable source version or a caller-supplied content digest. It is written when the run is created and never changed. |
+| **WorkItem** | The primary unit of proposed, executable, reviewable, or trackable work. It may describe research, writing, design, installation, configuration, integration, evaluation, approval, human action, or agent action—not only code. A task is a UI synonym only; do not conflate it with an MCP long-running tool task. Its `origin` decides whether it may execute: `plan_step` work executes while its run is active, `unplanned` work recorded outside a run never executes, and `legacy` work predates Plan Runs and keeps exactly the behaviour it had. |
 | **ContextRecord** | A typed authoritative context node: requirement, constraint, assumption, finding/evidence, risk, or success metric. Each kind has its own small lifecycle where needed. |
 | **AcceptanceCriterion** | A structured, individually stateful condition used to judge whether a work item is complete. A criterion that turns out to be the wrong condition is superseded by a replacement rather than waived or edited: waiving records the condition as excused, editing destroys what was agreed, and superseding keeps both. |
 | **OutputProfile** | An immutable, versioned, governed definition of an output class. It specifies required structure, semantic meaning, validation expectations, and deterministic acceptance conditions. Built-ins are seeded data, not hardcoded domain branches. |
@@ -203,6 +207,19 @@ Use these names consistently in code, tool contracts, UI, and documentation.
 | **ExternalAction** | A versioned proposal for an observable side effect outside Throughline, such as install, publish, message, purchase, deletion, configuration change, deployment, permission grant, or external API call. It is not a WorkItem kind and Throughline never executes it. |
 | **AuthorizationSubject** | The canonical authorization-relevant subset of one ExternalAction revision: action type, target, arguments, scope, permissions, credential requirements, and declared constraints. Descriptive metadata and progress are excluded. |
 | **AuthorityGrant** | A least-authority record stating that one principal may perform one exact AuthorizationSubject within constraints and an optional expiry. V1 produces it from an explicit approval; a future deterministic policy layer may produce the same record. It is invalid when the subject hash, principal, constraints, or lifetime no longer match. |
+
+The plan terms form a definition/instance split rather than a hierarchy:
+
+```text
+Plan revision (approved)  →  PlanRun  →  one fresh WorkItem per PlanStep
+  ├ PlanInput             →  RunInputBinding (immutable, set at creation)
+  └ PlanStep              →  the WorkItem's own criteria, outputs, requirements, actions
+```
+
+Running the same approved revision again creates another, completely separate run. Nothing about an
+earlier run is reset, reopened, or reinterpreted, and no observation of a run ever edits the
+definition it came from: a durable change to how the work is done is a new revision, reviewed and
+approved on its own.
 
 The output terms intentionally form a pipeline rather than aliases:
 
@@ -508,6 +525,15 @@ The server identifies executable candidates; it does **not** choose the one an a
 27. A valid AuthorityGrant matches the exact action revision/subject hash, executing principal, constraints, and lifetime. Capability without a matching grant is denied; a grant never transfers to another principal implicitly.
 28. Throughline never executes an ExternalAction. An external actor/harness records `executing` and a terminal result plus evidence. `succeeded` without authorization and result evidence is invalid.
 29. Local V1 must not market these checks as an isolation or security boundary because actor identity is trusted. Preserve the model so authenticated network deployments can enforce it later.
+30. Each PlanRun is a permanently separate, auditable instance. Creating a later run of the same approved revision leaves every earlier run, and everything it produced, unchanged.
+31. Creating a PlanRun materializes exactly one fresh WorkItem per PlanStep — with its own criteria, expected outputs, output requirements, capabilities, and copied ExternalActions — or it stores nothing at all. There is no partially materialized run.
+32. Claims, executing WorkItem transitions, and the start of an ExternalAction require an active PlanRun and an objective in execution. Work proposed outside a run is never executable; migrated Legacy execution is the sole historical exception. An execution that already started may still record its terminal result after the run closes.
+33. A `run_key` is unique within its objective and resolved independently of the actor, before the capacity check. The same key with the same revision and bindings returns the existing run; the same key with different content is a conflict, never a silent reinterpretation. Ordinary actor-scoped idempotency remains complementary.
+34. `max_concurrent_runs` counts active runs across every revision of the objective. One is the default.
+35. A RunInputBinding is immutable. A run binds an earlier run's result only as one exact accepted OutputRevision; Throughline never resolves `latest`, `previous`, or `last-successful`, and never fetches or digests an external source itself.
+36. A PlanRun never ends from the state of its work. `succeeded` requires every required step's WorkItem `done`, every remaining WorkItem terminal, and all output and ExternalAction obligations met; `failed` and `cancelled` require a rationale and atomically cancel the run's remaining work and release its open claims. Every terminal result is irreversible, and closing a run never changes its objective. Cancelling is available outside objective execution, because it gives back capacity and leases rather than judging work.
+37. A PlanStep may require only one exact accepted OutputRevision. A profile-and-version constraint is not expressible in a definition, because resolving one when a run is created would implicitly reach into whatever another run happened to accept. A live WorkItem may still declare one through `add_output_requirement`.
+38. An ExternalAction copied from a PlanStep carries its AuthorizationSubject byte for byte. Throughline substitutes nothing into it, so what a run asks to be authorized is exactly what the reviewed definition recorded.
 
 ### State model
 

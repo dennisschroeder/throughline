@@ -478,6 +478,12 @@ WHERE objective.phase = 'execution'
   AND EXISTS (
     SELECT 1 FROM plans plan WHERE plan.id = item.plan_id AND plan.commitment_state = 'approved'
   )
+  AND (
+    item.origin = 'legacy'
+    OR (item.origin = 'plan_step' AND EXISTS (
+      SELECT 1 FROM plan_runs run WHERE run.id = item.plan_run_id AND run.status = 'active'
+    ))
+  )
   AND NOT EXISTS (
     SELECT 1 FROM dependencies dependency
     JOIN work_items prerequisite ON prerequisite.id = dependency.depends_on_item_id

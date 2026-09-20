@@ -592,6 +592,13 @@ func (s *Service) startExternalActionExecutionMutation(ctx context.Context, comm
 			if !decision.Authorized {
 				return ExternalActionExecutionResult{}, AuthorizationError{Decision: decision}
 			}
+			// Starting an external effect is execution, so the same gate that
+			// governs claiming and advancing work governs it: an active plan
+			// run and an objective in execution. An execution that already
+			// started may still record its terminal result afterwards.
+			if err := requireExecutableWork(ctx, repository, action.WorkItemID); err != nil {
+				return ExternalActionExecutionResult{}, err
+			}
 			capabilities, err := repository.RequiredCapabilities(ctx, action.WorkItemID)
 			if err != nil {
 				return ExternalActionExecutionResult{}, err
@@ -727,4 +734,29 @@ func (e AuthorizationError) Error() string {
 		return "external action is not authorized"
 	}
 	return string(e.Decision.Denial.Reason)
+}
+
+// requireExecutableWork denies starting an external effect for work that may
+// not execute: work whose plan run has ended, work proposed outside a run, or
+// work whose objective is not in execution.
+func requireExecutableWork(ctx context.Context, repository ports.Repository, workItemID string) error {
+	item, err := repository.WorkItem(ctx, workItemID)
+	if err != nil {
+		return err
+	}
+	objective, err := repository.Objective(ctx, item.ObjectiveID)
+	if err != nil {
+		return err
+	}
+	if objective.Phase != work.ObjectiveExecution {
+		return AuthorizationError{Decision: authority.AuthorizationDecision{Denial: &authority.AuthorizationDenial{Reason: authority.DenialObjectiveNotInExecution}}}
+	}
+	runActive, err := repository.PlanRunIsActive(ctx, item.PlanRunID)
+	if err != nil {
+		return err
+	}
+	if satisfied, _ := work.RunGateSatisfied(item.Origin, runActive); !satisfied {
+		return AuthorizationError{Decision: authority.AuthorizationDecision{Denial: &authority.AuthorizationDenial{Reason: authority.DenialRunNotActive}}}
+	}
+	return nil
 }

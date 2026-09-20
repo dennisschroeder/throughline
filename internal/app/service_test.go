@@ -255,6 +255,12 @@ type memoryStore struct {
 	activities []work.Activity
 	profiles   map[string]output.Profile
 	expected   []output.ExpectedOutput
+
+	planInputs      map[string][]work.PlanInput
+	planSteps       map[string][]work.PlanStep
+	stepDependencie map[string][]work.PlanStepDependency
+	planRuns        map[string]work.PlanRun
+	runBindings     map[string][]work.RunInputBinding
 }
 
 func newMemoryStore(createdAt time.Time) *memoryStore {
@@ -277,6 +283,12 @@ func newMemoryStore(createdAt time.Time) *memoryStore {
 		questions:  make(map[string]work.Question),
 		decisions:  make(map[string]work.Decision),
 		profiles:   map[string]output.Profile{"skill_package/1": profile},
+
+		planInputs:      make(map[string][]work.PlanInput),
+		planSteps:       make(map[string][]work.PlanStep),
+		stepDependencie: make(map[string][]work.PlanStepDependency),
+		planRuns:        make(map[string]work.PlanRun),
+		runBindings:     make(map[string][]work.RunInputBinding),
 	}
 }
 
@@ -813,6 +825,175 @@ func (s *memoryStore) LatestActivitySequence(context.Context) (int64, error) {
 
 func (s *memoryStore) ListAcceptedOutputs(context.Context, ports.AcceptedOutputFilter) ([]ports.AcceptedOutput, error) {
 	return nil, nil
+}
+
+func (s *memoryStore) CreatePlanInput(_ context.Context, input work.PlanInput) error {
+	s.planInputs[input.PlanID] = append(s.planInputs[input.PlanID], input)
+	return nil
+}
+
+func (s *memoryStore) PlanInputs(_ context.Context, planID string) ([]work.PlanInput, error) {
+	return s.planInputs[planID], nil
+}
+
+func (s *memoryStore) CreatePlanStep(_ context.Context, step work.PlanStep) error {
+	s.planSteps[step.PlanID] = append(s.planSteps[step.PlanID], step)
+	return nil
+}
+
+func (s *memoryStore) PlanSteps(_ context.Context, planID string) ([]work.PlanStep, error) {
+	return s.planSteps[planID], nil
+}
+
+func (s *memoryStore) CreatePlanStepDependency(_ context.Context, dependency work.PlanStepDependency) error {
+	planID := s.planIDForStep(dependency.PlanStepID)
+	s.stepDependencie[planID] = append(s.stepDependencie[planID], dependency)
+	return nil
+}
+
+func (s *memoryStore) PlanStepDependencies(_ context.Context, planID string) ([]work.PlanStepDependency, error) {
+	return s.stepDependencie[planID], nil
+}
+
+func (s *memoryStore) planIDForStep(stepID string) string {
+	for planID, steps := range s.planSteps {
+		for _, step := range steps {
+			if step.ID == stepID {
+				return planID
+			}
+		}
+	}
+	return ""
+}
+
+func (s *memoryStore) PlanStepDependencyCreatesCycle(_ context.Context, stepID, dependsOnStepID string) (bool, error) {
+	if stepID == dependsOnStepID {
+		return true, nil
+	}
+	reachable := map[string]bool{dependsOnStepID: true}
+	for changed := true; changed; {
+		changed = false
+		for _, dependencies := range s.stepDependencie {
+			for _, dependency := range dependencies {
+				if reachable[dependency.PlanStepID] && !reachable[dependency.DependsOnStepID] {
+					reachable[dependency.DependsOnStepID] = true
+					changed = true
+				}
+			}
+		}
+	}
+	return reachable[stepID], nil
+}
+
+func (s *memoryStore) CreatePlanRun(_ context.Context, run work.PlanRun) error {
+	s.planRuns[run.ID] = run
+	return nil
+}
+
+func (s *memoryStore) PlanRun(_ context.Context, id string) (work.PlanRun, error) {
+	run, ok := s.planRuns[id]
+	if !ok {
+		return work.PlanRun{}, ports.ErrNotFound
+	}
+	return run, nil
+}
+
+func (s *memoryStore) PlanRunByKey(_ context.Context, objectiveID, runKey string) (work.PlanRun, error) {
+	for _, run := range s.planRuns {
+		if run.ObjectiveID == objectiveID && run.RunKey == runKey {
+			return run, nil
+		}
+	}
+	return work.PlanRun{}, ports.ErrNotFound
+}
+
+func (s *memoryStore) ActivePlanRunCount(_ context.Context, objectiveID string) (int, error) {
+	count := 0
+	for _, run := range s.planRuns {
+		if run.ObjectiveID == objectiveID && run.Status == work.PlanRunActive {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (s *memoryStore) NextPlanRunSequence(_ context.Context, objectiveID string) (int, error) {
+	highest := 0
+	for _, run := range s.planRuns {
+		if run.ObjectiveID == objectiveID && run.Sequence > highest {
+			highest = run.Sequence
+		}
+	}
+	return highest + 1, nil
+}
+
+func (s *memoryStore) UpdatePlanRun(_ context.Context, run work.PlanRun, expectedVersion int) error {
+	stored, ok := s.planRuns[run.ID]
+	if !ok {
+		return ports.ErrNotFound
+	}
+	if stored.Version != expectedVersion {
+		return ports.ErrVersionConflict
+	}
+	s.planRuns[run.ID] = run
+	return nil
+}
+
+func (s *memoryStore) PlanRunIsActive(_ context.Context, planRunID string) (bool, error) {
+	if strings.TrimSpace(planRunID) == "" {
+		return false, nil
+	}
+	run, ok := s.planRuns[planRunID]
+	return ok && run.Status == work.PlanRunActive, nil
+}
+
+func (s *memoryStore) PlanRunWorkItems(_ context.Context, planRunID string) ([]work.WorkItem, error) {
+	var items []work.WorkItem
+	for _, item := range s.items {
+		if item.PlanRunID == planRunID {
+			items = append(items, item)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Key < items[j].Key })
+	return items, nil
+}
+
+func (s *memoryStore) PlanRunClosureFacts(ctx context.Context, planRunID string) (work.RunClosureFacts, error) {
+	items, err := s.PlanRunWorkItems(ctx, planRunID)
+	if err != nil {
+		return work.RunClosureFacts{}, err
+	}
+	facts := work.RunClosureFacts{RequiredStepItemsDone: true, RemainingItemsTerminal: true, OutputObligationsSatisfied: true, ActionObligationsSatisfied: true}
+	for _, item := range items {
+		required := false
+		for _, steps := range s.planSteps {
+			for _, step := range steps {
+				if step.ID == item.OriginPlanStepID {
+					required = step.Required
+				}
+			}
+		}
+		if required && item.ExecutionStatus != work.StatusDone {
+			facts.RequiredStepItemsDone = false
+		}
+		if item.ExecutionStatus != work.StatusDone && item.ExecutionStatus != work.StatusCancelled {
+			facts.RemainingItemsTerminal = false
+		}
+	}
+	return facts, nil
+}
+
+func (s *memoryStore) OpenClaimsForRun(context.Context, string) ([]work.Claim, error) {
+	return nil, nil
+}
+
+func (s *memoryStore) CreateRunInputBinding(_ context.Context, binding work.RunInputBinding) error {
+	s.runBindings[binding.PlanRunID] = append(s.runBindings[binding.PlanRunID], binding)
+	return nil
+}
+
+func (s *memoryStore) RunInputBindings(_ context.Context, planRunID string) ([]work.RunInputBinding, error) {
+	return s.runBindings[planRunID], nil
 }
 
 var _ ports.Store = (*memoryStore)(nil)

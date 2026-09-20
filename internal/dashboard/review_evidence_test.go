@@ -24,13 +24,20 @@ func TestDashboardExposesReviewEvidence(t *testing.T) {
 	})["result"].(map[string]any)
 	plan := h.call("propose_plan", map[string]any{
 		"objective_id": objective["id"], "actor_id": actorID, "idempotency_key": "plan", "title": "Plan", "revision": 1,
-		"items": []any{map[string]any{
+		"steps": []any{map[string]any{
 			"client_ref": "item-1", "key": "REV-1", "title": "Reviewed item", "kind": "research",
 			"priority": "medium", "estimated_scope": "small", "execution_policy": "autonomous_with_report", "required_actor_kind": "agent",
 			"review_requirements": []any{map[string]any{"criterion_ref": "code-review", "validator_kind": "human_review"}},
 		}},
 	})["result"].(map[string]any)
-	itemID := plan["items"].([]any)[0].(map[string]any)["work_item"].(map[string]any)["id"].(string)
+	planID := plan["plan"].(map[string]any)["id"].(string)
+	objectiveID := objective["id"].(string)
+	h.call("review_plan", map[string]any{"plan_id": planID, "actor_id": "human:reviewer", "idempotency_key": "review-plan", "decision": "approved", "reason": "Approved.", "expected_version": 1})
+	h.call("transition_objective", map[string]any{"objective_id": objectiveID, "actor_id": "human:reviewer", "idempotency_key": "execute", "target_phase": "execution", "reason": "Go.", "expected_version": 1})
+	run := h.call("create_plan_run", map[string]any{
+		"objective_id": objectiveID, "plan_id": planID, "actor_id": actorID, "idempotency_key": "run", "run_key": "reviewed-1",
+	})["result"].(map[string]any)
+	itemID := run["work_items"].([]any)[0].(map[string]any)["id"].(string)
 
 	h.login("human:reviewer")
 	var detail itemDetail

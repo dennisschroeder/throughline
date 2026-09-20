@@ -431,6 +431,14 @@ const (
 	DenialGrantRevoked        AuthorizationDenialReason = "authority_grant_revoked"
 	DenialConstraintMismatch  AuthorizationDenialReason = "authority_constraint_mismatch"
 	DenialCapabilityMismatch  AuthorizationDenialReason = "capability_mismatch"
+	// DenialRunNotActive reports an external action whose work belongs to a
+	// plan run that is no longer active, or to work proposed outside any run.
+	// An execution that already started keeps the right to record its
+	// historical result; this denial only refuses to start a new one.
+	DenialRunNotActive AuthorizationDenialReason = "plan_run_not_active"
+	// DenialObjectiveNotInExecution reports an external action whose
+	// objective is not in a phase that permits execution.
+	DenialObjectiveNotInExecution AuthorizationDenialReason = "objective_not_in_execution"
 )
 
 type AuthorizationDenial struct {

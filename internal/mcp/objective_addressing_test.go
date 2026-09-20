@@ -130,11 +130,12 @@ func TestEveryToolTakingAnObjectiveIdAcceptsAKey(t *testing.T) {
 			t.Fatalf("record_decision landed on %#v", recorded["result"])
 		}
 	})
+	var addressedPlanID string
 	t.Run("propose_plan", func(t *testing.T) {
 		proposed := h.call(t, "propose_plan", map[string]any{
 			"actor_id": "agent:addr", "idempotency_key": "addr-plan", "objective_id": "OBJ-ADDR-A",
-			"title": "Addressed by key", "items": []any{map[string]any{
-				"client_ref": "only", "key": "TH-ADDR-PLAN", "title": "The plan's only item", "kind": "research",
+			"title": "Addressed by key", "steps": []any{map[string]any{
+				"client_ref": "only", "key": "TH-ADDR-PLAN", "title": "The plan's only step", "kind": "research",
 				"priority": "medium", "estimated_scope": "small", "execution_policy": "agent_may_propose",
 				"required_actor_kind": "any",
 			}},
@@ -142,6 +143,29 @@ func TestEveryToolTakingAnObjectiveIdAcceptsAKey(t *testing.T) {
 		plan := proposed["result"].(map[string]any)["plan"].(map[string]any)
 		if plan["objective_id"] != h.objectiveA {
 			t.Fatalf("propose_plan landed on %#v", plan)
+		}
+		addressedPlanID = plan["id"].(string)
+	})
+	t.Run("create_plan_run", func(t *testing.T) {
+		h.call(t, "review_plan", map[string]any{
+			"actor_id": "agent:addr", "idempotency_key": "addr-review-plan", "plan_id": addressedPlanID,
+			"decision": "approved", "reason": "The definition is reachable by key.", "expected_version": 1,
+		})
+		for index, phase := range []string{"planning", "execution"} {
+			h.call(t, "transition_objective", map[string]any{
+				"actor_id": "agent:addr", "idempotency_key": "addr-run-phase-" + phase, "objective_id": "OBJ-ADDR-A",
+				"target_phase": phase, "expected_version": h.version(t, "OBJ-ADDR-A"),
+				"reason": "Move the addressed objective towards execution.",
+			})
+			_ = index
+		}
+		created := h.call(t, "create_plan_run", map[string]any{
+			"actor_id": "agent:addr", "idempotency_key": "addr-run", "objective_id": "OBJ-ADDR-A",
+			"plan_id": addressedPlanID, "run_key": "addr-1",
+		})["result"].(map[string]any)
+		run := created["run"].(map[string]any)
+		if run["objective_id"] != h.objectiveA {
+			t.Fatalf("create_plan_run landed on %#v", run)
 		}
 	})
 	t.Run("patch_objective", func(t *testing.T) {

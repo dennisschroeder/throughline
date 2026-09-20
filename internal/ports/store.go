@@ -39,6 +39,25 @@ type Repository interface {
 	Decision(ctx context.Context, id string) (work.Decision, error)
 	UpdateDecision(context.Context, work.Decision) error
 	CreatePlan(context.Context, work.Plan) error
+	CreatePlanInput(context.Context, work.PlanInput) error
+	PlanInputs(ctx context.Context, planID string) ([]work.PlanInput, error)
+	CreatePlanStep(context.Context, work.PlanStep) error
+	PlanSteps(ctx context.Context, planID string) ([]work.PlanStep, error)
+	CreatePlanStepDependency(context.Context, work.PlanStepDependency) error
+	PlanStepDependencies(ctx context.Context, planID string) ([]work.PlanStepDependency, error)
+	PlanStepDependencyCreatesCycle(ctx context.Context, stepID, dependsOnStepID string) (bool, error)
+	CreatePlanRun(context.Context, work.PlanRun) error
+	PlanRun(ctx context.Context, id string) (work.PlanRun, error)
+	PlanRunByKey(ctx context.Context, objectiveID, runKey string) (work.PlanRun, error)
+	ActivePlanRunCount(ctx context.Context, objectiveID string) (int, error)
+	NextPlanRunSequence(ctx context.Context, objectiveID string) (int, error)
+	UpdatePlanRun(ctx context.Context, run work.PlanRun, expectedVersion int) error
+	PlanRunIsActive(ctx context.Context, planRunID string) (bool, error)
+	PlanRunWorkItems(ctx context.Context, planRunID string) ([]work.WorkItem, error)
+	PlanRunClosureFacts(ctx context.Context, planRunID string) (work.RunClosureFacts, error)
+	OpenClaimsForRun(ctx context.Context, planRunID string) ([]work.Claim, error)
+	CreateRunInputBinding(context.Context, work.RunInputBinding) error
+	RunInputBindings(ctx context.Context, planRunID string) ([]work.RunInputBinding, error)
 	Plan(ctx context.Context, id string) (work.Plan, error)
 	LatestPlanRevision(ctx context.Context, objectiveID string) (int, error)
 	LatestApprovedPlanRevision(ctx context.Context, objectiveID string) (int, error)
@@ -224,9 +243,25 @@ type PlannedWorkItem struct {
 	ExternalActions      []authority.ExternalAction
 }
 
+// PlanContext is a plan revision and its reusable definition. Items carries
+// the executable work items of a legacy plan — plans proposed before Plan
+// Runs, which wrote work items directly — and is empty for every plan
+// proposed since.
 type PlanContext struct {
-	Plan  work.Plan
-	Items []PlannedWorkItem
+	Plan             work.Plan
+	Inputs           []work.PlanInput
+	Steps            []work.PlanStep
+	StepDependencies []work.PlanStepDependency
+	Items            []PlannedWorkItem
+}
+
+// PlanRunContext is one run with what it was created from and what it
+// materialized.
+type PlanRunContext struct {
+	Run       work.PlanRun
+	Plan      work.Plan
+	Bindings  []work.RunInputBinding
+	WorkItems []work.WorkItem
 }
 
 type ObjectiveContext struct {

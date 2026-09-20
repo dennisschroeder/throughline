@@ -473,13 +473,97 @@ func (s *Store) listPlanContexts(ctx context.Context, reader sqlReader, objectiv
 	}
 	var result []ports.PlanContext
 	for _, plan := range plans {
+		// Items is the legacy half: plans proposed before Plan Runs wrote work
+		// items directly, and those items still hang off the plan. A plan
+		// proposed since carries a definition instead and has no items of its
+		// own until a run materializes them.
 		items, err := s.listPlannedItems(ctx, reader, plan.ID)
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, ports.PlanContext{Plan: plan, Items: items})
+		inputs, steps, dependencies, err := s.listPlanDefinition(ctx, reader, plan.ID)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, ports.PlanContext{Plan: plan, Inputs: inputs, Steps: steps, StepDependencies: dependencies, Items: items})
 	}
 	return result, nil
+}
+
+// listPlanDefinition reads the reusable half of a plan revision: what it
+// declares it needs, what it is made of, and how its steps are ordered.
+func (s *Store) listPlanDefinition(ctx context.Context, reader sqlReader, planID string) ([]work.PlanInput, []work.PlanStep, []work.PlanStepDependency, error) {
+	var inputs []work.PlanInput
+	rows, err := reader.QueryContext(ctx, planInputSelect+" WHERE plan_id = ? ORDER BY ordinal", planID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("query plan inputs: %w", err)
+	}
+	for rows.Next() {
+		var input work.PlanInput
+		var required int
+		var createdAt string
+		if err := rows.Scan(&input.ID, &input.PlanID, &input.Name, &input.Description, &required, &input.Ordinal, &createdAt); err != nil {
+			_ = rows.Close()
+			return nil, nil, nil, fmt.Errorf("scan plan input: %w", err)
+		}
+		input.Required = required == 1
+		if input.CreatedAt, err = parseTime(createdAt); err != nil {
+			_ = rows.Close()
+			return nil, nil, nil, err
+		}
+		inputs = append(inputs, input)
+	}
+	if err := closeRows(rows); err != nil {
+		return nil, nil, nil, err
+	}
+
+	var steps []work.PlanStep
+	rows, err = reader.QueryContext(ctx, planStepSelect+" WHERE plan_id = ? ORDER BY ordinal", planID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("query plan steps: %w", err)
+	}
+	for rows.Next() {
+		step, err := scanPlanStep(rows)
+		if err != nil {
+			_ = rows.Close()
+			return nil, nil, nil, err
+		}
+		steps = append(steps, step)
+	}
+	if err := closeRows(rows); err != nil {
+		return nil, nil, nil, err
+	}
+
+	var dependencies []work.PlanStepDependency
+	rows, err = reader.QueryContext(ctx, `
+SELECT dependency.plan_step_id, dependency.depends_on_step_id
+FROM plan_step_dependencies dependency
+JOIN plan_steps step ON step.id = dependency.plan_step_id
+WHERE step.plan_id = ?
+ORDER BY dependency.plan_step_id, dependency.depends_on_step_id`, planID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("query plan step dependencies: %w", err)
+	}
+	for rows.Next() {
+		var dependency work.PlanStepDependency
+		if err := rows.Scan(&dependency.PlanStepID, &dependency.DependsOnStepID); err != nil {
+			_ = rows.Close()
+			return nil, nil, nil, fmt.Errorf("scan plan step dependency: %w", err)
+		}
+		dependencies = append(dependencies, dependency)
+	}
+	if err := closeRows(rows); err != nil {
+		return nil, nil, nil, err
+	}
+	return inputs, steps, dependencies, nil
+}
+
+func closeRows(rows *sql.Rows) error {
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	return rows.Close()
 }
 
 func (s *Store) listPlannedItems(ctx context.Context, reader sqlReader, planID string) ([]ports.PlannedWorkItem, error) {

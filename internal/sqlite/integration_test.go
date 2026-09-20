@@ -251,7 +251,7 @@ func TestCreateWorkItemPersistsInitialExecutionGraphAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := app.UnwrapMutation(service.ProposePlan(ctx, app.ProposePlanCommand{ObjectiveID: objective.ID, ActorID: "human:owner", IdempotencyKey: "propose-compound-plan", Title: "Execution graph plan", Revision: 1, Items: []app.ProposedWorkItem{{ClientRef: "seed", Key: "TH-SEED", Title: "Seed the approved plan", Kind: "research", Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny}}}))
+	plan, err := app.UnwrapMutation(service.ProposePlan(ctx, app.ProposePlanCommand{ObjectiveID: objective.ID, ActorID: "human:owner", IdempotencyKey: "propose-compound-plan", Title: "Execution graph plan", Revision: 1, Steps: []app.ProposedPlanStep{{ClientRef: "seed", Key: "TH-SEED", Title: "Seed the approved plan", Kind: "research", Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny}}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,6 +259,10 @@ func TestCreateWorkItemPersistsInitialExecutionGraphAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := app.UnwrapMutation(service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: objective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:owner", IdempotencyKey: "execute-compound-objective", Reason: "Approved plan is executing.", ExpectedVersion: 1})); err != nil {
+		t.Fatal(err)
+	}
+	run, err := app.UnwrapMutation(service.CreatePlanRun(ctx, app.CreatePlanRunCommand{ObjectiveID: objective.ID, PlanID: plan.Plan.ID, ActorID: "human:owner", IdempotencyKey: "run-compound-plan", RunKey: "compound-1"}))
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -272,7 +276,7 @@ func TestCreateWorkItemPersistsInitialExecutionGraphAtomically(t *testing.T) {
 		ExpectedOutputs:      []app.ProposedExpectedOutput{{Name: "Compound dossier", ProfileName: "research_dossier", ProfileVersion: 1, Required: true, Ordinal: 1}},
 		OutputRequirements:   []app.ProposedOutputRequirement{{RequiredProfileName: "research_dossier", VersionConstraint: "=1", Required: true, Note: "Reuse an accepted dossier."}},
 		ExternalActions:      []app.ProposedExternalAction{{Required: true, Title: "Publish the reviewed dossier", Rationale: "Publication is externally authorized.", AuthorizationSubject: json.RawMessage(`{"action_type":"document.publish","target":{"repository":"research"},"arguments":[],"scope":{},"permissions":["document.write"],"credential_requirements":[],"constraints":{}}`)}},
-		Dependencies:         []app.CreateWorkItemDependency{{DependsOnWorkItemID: plan.Items[0].WorkItem.ID, Kind: work.DependencyHard, Note: "Use the approved plan seed."}},
+		Dependencies:         []app.CreateWorkItemDependency{{DependsOnWorkItemID: run.WorkItems[0].ID, Kind: work.DependencyHard, Note: "Use the approved plan seed."}},
 	}
 	created, err := service.CreateWorkItem(ctx, command)
 	if err != nil {
@@ -463,7 +467,7 @@ func assertInitializationState(t *testing.T, database *Database) {
 		query string
 		want  int
 	}{
-		{"SELECT COUNT(*) FROM schema_migrations", 17},
+		{"SELECT COUNT(*) FROM schema_migrations", 18},
 		{"SELECT COUNT(*) FROM output_profiles", 8},
 		{"SELECT COUNT(*) FROM output_profiles WHERE lifecycle_state = 'active' AND built_in = 1", 8},
 		{"PRAGMA foreign_keys", 1},

@@ -36,6 +36,10 @@ type CreateObjectiveCommand struct {
 	Phase          work.ObjectivePhase
 	Priority       work.Priority
 	Appetite       work.Measure
+	// Mode is fixed for the objective's whole life; MaxConcurrentRuns caps how
+	// many of its plan runs may be active at once. Both default below.
+	Mode              work.ObjectiveMode
+	MaxConcurrentRuns int
 }
 
 func (s *Service) createObjectiveMutation(ctx context.Context, command CreateObjectiveCommand) (work.Objective, error) {
@@ -46,6 +50,12 @@ func (s *Service) createObjectiveMutation(ctx context.Context, command CreateObj
 	// idempotency_key_reused_with_different_request.
 	if command.Priority == "" {
 		command.Priority = work.PriorityMedium
+	}
+	if command.Mode == "" {
+		command.Mode = work.ObjectiveFinite
+	}
+	if command.MaxConcurrentRuns == 0 {
+		command.MaxConcurrentRuns = 1
 	}
 	if replay, found, err := replayIdempotently[work.Objective](ctx, s, command.ActorID, command.IdempotencyKey, "create_objective", command); err != nil {
 		return work.Objective{}, err
@@ -62,7 +72,7 @@ func (s *Service) createObjectiveMutation(ctx context.Context, command CreateObj
 	if err != nil {
 		return work.Objective{}, fmt.Errorf("generate objective id: %w", err)
 	}
-	objective, err := work.NewObjective(id, command.Key, command.Title, command.Description, command.DesiredOutcome, command.Phase, command.Priority, s.clock.Now())
+	objective, err := work.NewObjective(work.Objective{ID: id, Key: command.Key, Title: command.Title, Description: command.Description, DesiredOutcome: command.DesiredOutcome, Phase: command.Phase, Priority: command.Priority, Mode: command.Mode, MaxConcurrentRuns: command.MaxConcurrentRuns}, s.clock.Now())
 	if err != nil {
 		return work.Objective{}, err
 	}
@@ -109,6 +119,9 @@ type PatchObjectiveCommand struct {
 	DesiredOutcome  *string
 	Priority        *work.Priority
 	Appetite        *work.Measure
+	// MaxConcurrentRuns can be raised or lowered later; Mode cannot, so it has
+	// no field here.
+	MaxConcurrentRuns *int
 }
 
 func (s *Service) patchObjectiveMutation(ctx context.Context, command PatchObjectiveCommand) (work.Objective, error) {
@@ -136,6 +149,13 @@ func (s *Service) patchObjectiveMutation(ctx context.Context, command PatchObjec
 			}
 			if command.Appetite != nil {
 				objective.Appetite = *command.Appetite
+			}
+			// Mode is deliberately absent: it is fixed at creation, because
+			// changing it would retroactively change what completing this
+			// objective and every run recorded under it meant. A changed
+			// purpose gets a new objective linked to this one.
+			if command.MaxConcurrentRuns != nil {
+				objective.MaxConcurrentRuns = *command.MaxConcurrentRuns
 			}
 			if err := objective.Validate(); err != nil {
 				return work.Objective{}, err
@@ -795,6 +815,10 @@ func (s *Service) createWorkItemMutation(ctx context.Context, command CreateWork
 		RequiredActorKind:  command.RequiredActorKind,
 		AttentionState:     command.AttentionState,
 		ReviewRequirements: reviewRequirements,
+		// Work created directly is a proposal, not execution. It is recorded
+		// and readable, and it stays outside the plan-run audit path until
+		// someone deliberately takes it into a run.
+		Origin: work.OriginUnplanned,
 	}, s.clock.Now())
 	if err != nil {
 		return work.WorkItem{}, err

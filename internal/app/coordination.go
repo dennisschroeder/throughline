@@ -471,12 +471,17 @@ func claimRequirements(ctx context.Context, repository ports.Repository, item wo
 	if err != nil {
 		return nil, err
 	}
+	runActive, err := repository.PlanRunIsActive(ctx, item.PlanRunID)
+	if err != nil {
+		return nil, err
+	}
 	return work.EvaluateClaimGate(work.ClaimGateFacts{
 		ObjectivePhase: objective.Phase, PlanApproved: planApproved, ItemCommitment: item.CommitmentState,
 		ExecutionStatus: executionStatus, ExecutionPolicy: item.ExecutionPolicy, RequiredActorKind: item.RequiredActorKind,
 		Actor: actor, HardDependenciesSatisfied: dependenciesSatisfied, HasOpenBlocker: hasOpenBlocker,
 		OutputRequirementsSatisfied: outputRequirementsSatisfied, CapabilitiesSatisfied: capabilitiesSatisfied, MissingCapabilities: missingCapabilities,
 		ApprovalSatisfied: approvalSatisfied, ActiveClaim: activeClaim, Now: now,
+		Origin: item.Origin, RunActive: runActive,
 	}), nil
 }
 
