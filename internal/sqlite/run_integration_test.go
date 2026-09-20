@@ -1203,3 +1203,73 @@ func TestAStepDefinitionRejectsDuplicateOrdinals(t *testing.T) {
 		})
 	}
 }
+
+// TestAnExactRunCreationRetryReplays is a regression on the first repair of the
+// run key: normalizing it after the replay lookup hashed the same logical
+// request two different ways, so the retry carrying the very key that had
+// succeeded came back as a reused idempotency key with a different request.
+func TestAnExactRunCreationRetryReplays(t *testing.T) {
+	h := newRunHarness(t, "run-retry.db", nil, 0)
+	command := app.CreatePlanRunCommand{
+		ObjectiveID: h.objective.ID, PlanID: h.plan.ID, ActorID: "agent:one",
+		IdempotencyKey: "create-run", RunKey: "  daily  ",
+	}
+	first, err := app.UnwrapMutation(h.service.CreatePlanRun(h.ctx, command))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := app.UnwrapMutation(h.service.CreatePlanRun(h.ctx, command))
+	if err != nil {
+		t.Fatalf("an exact retry of a successful creation was refused: %v", err)
+	}
+	if replayed.Run.ID != first.Run.ID {
+		t.Fatalf("the retry created a second run: %s and %s", first.Run.ID, replayed.Run.ID)
+	}
+}
+
+// TestTheMaterializedKeyNamespaceIsReserved is a regression on the second
+// repair of key collisions: unique step keys alone left a hand-written
+// "research/1" able to occupy the key a run of step "research" needs, and
+// because a failed creation consumes no sequence, every retry collided again —
+// an approved, immutable definition nobody could ever instantiate.
+func TestTheMaterializedKeyNamespaceIsReserved(t *testing.T) {
+	h := newRunHarness(t, "reserved-namespace.db", nil, 0)
+
+	// Nothing new may take a key out of the reserved namespace.
+	if _, err := h.service.CreateWorkItem(h.ctx, app.CreateWorkItemCommand{
+		ActorID: "agent:one", IdempotencyKey: "create-colliding-item", Key: "RUN-LATER/1",
+		ObjectiveID: h.objective.ID, Title: "Squatting on a run's key", Kind: "research",
+		CommitmentState: work.ItemProposed, ExecutionStatus: work.StatusBacklog,
+		Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
+		ExecutionPolicy: work.PolicyAutonomousWithReport, RequiredActorKind: work.ActorAgent,
+		AttentionState: work.AttentionNone,
+	}); err == nil {
+		t.Fatal("a work item took a key out of the namespace reserved for plan run materialization")
+	}
+
+	// Work that predates the reservation is caught when the plan is written,
+	// not when some later run fails.
+	if _, err := h.database.db.ExecContext(h.ctx, `
+INSERT INTO work_items (id, key, objective_id, title, description, kind, commitment_state, execution_status,
+  priority, estimated_scope, execution_policy, required_actor_kind, attention_state, origin, version, created_at, updated_at)
+VALUES ('legacy-squatter', 'RUN-LEGACY/1', ?, 'Predates the reservation', '', 'research', 'accepted', 'ready',
+  'medium', 'small', 'autonomous_with_report', 'agent', 'none', 'legacy', 1, '2026-08-21T15:00:00.000000000Z', '2026-08-21T15:00:00.000000000Z')`,
+		h.objective.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err := app.UnwrapMutation(h.service.ProposePlan(h.ctx, app.ProposePlanCommand{
+		ObjectiveID: h.objective.ID, ActorID: "agent:one", IdempotencyKey: "propose-squatted",
+		Title: "A definition no run could instantiate", Revision: 2,
+		Steps: []app.ProposedPlanStep{{
+			ClientRef: "only", Key: "RUN-LEGACY", Title: "Its runs would collide", Kind: "research", Required: true,
+			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
+			ExecutionPolicy: work.PolicyAutonomousWithReport, RequiredActorKind: work.ActorAgent,
+		}},
+	}))
+	if err == nil {
+		t.Fatal("a plan step was approved whose runs could never materialize")
+	}
+	if !strings.Contains(err.Error(), "RUN-LEGACY") {
+		t.Fatalf("the refusal does not name the step key: %v", err)
+	}
+}

@@ -46,6 +46,7 @@ type Repository interface {
 	CreatePlanStepDependency(context.Context, work.PlanStepDependency) error
 	PlanStepDependencies(ctx context.Context, planID string) ([]work.PlanStepDependency, error)
 	PlanStepDependencyCreatesCycle(ctx context.Context, stepID, dependsOnStepID string) (bool, error)
+	MaterializedKeyNamespaceTaken(ctx context.Context, stepKey string) (bool, error)
 	CreatePlanRun(context.Context, work.PlanRun) error
 	PlanRun(ctx context.Context, id string) (work.PlanRun, error)
 	PlanRunByKey(ctx context.Context, objectiveID, runKey string) (work.PlanRun, error)

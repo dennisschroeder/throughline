@@ -793,6 +793,13 @@ func (s *Service) createWorkItemMutation(ctx context.Context, command CreateWork
 	if err != nil {
 		return work.WorkItem{}, err
 	}
+	// The run separator is reserved for keys a plan run materializes. A
+	// hand-written "research/1" would otherwise occupy the namespace a future
+	// run of a step called "research" needs, and that run — and every retry of
+	// it — would fail against an approved definition nobody could then use.
+	if strings.Contains(command.Key, work.RunKeySeparator) {
+		return work.WorkItem{}, fmt.Errorf("work item key %q must not contain %q: it is reserved for work a plan run materializes from a plan step", command.Key, work.RunKeySeparator)
+	}
 	id, err := s.ids.New()
 	if err != nil {
 		return work.WorkItem{}, fmt.Errorf("generate work item id: %w", err)

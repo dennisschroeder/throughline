@@ -533,7 +533,11 @@ The server identifies executable candidates; it does **not** choose the one an a
 35. A RunInputBinding is immutable. A run binds an earlier run's result only as one exact accepted OutputRevision; Throughline never resolves `latest`, `previous`, or `last-successful`, and never fetches or digests an external source itself.
 36. A PlanRun never ends from the state of its work. `succeeded` requires every required step's WorkItem `done`, every remaining WorkItem terminal, and all output and ExternalAction obligations met; `failed` and `cancelled` require a rationale and atomically cancel the run's remaining work and release its open claims. Every terminal result is irreversible, and closing a run never changes its objective. Cancelling is available outside objective execution, because it gives back capacity and leases rather than judging work.
 37. A PlanStep may require only one exact accepted OutputRevision. A profile-and-version constraint is not expressible in a definition, because resolving one when a run is created would implicitly reach into whatever another run happened to accept. A live WorkItem may still declare one through `add_output_requirement`.
-38. An ExternalAction copied from a PlanStep carries its AuthorizationSubject byte for byte. Throughline substitutes nothing into it, so what a run asks to be authorized is exactly what the reviewed definition recorded.
+38. A materialized WorkItem key is `<plan step key>/<run sequence>`. `/` is reserved for it: a
+    PlanStep key is unique across the workspace, `create_item` refuses a key containing the
+    separator, and a PlanStep whose materialization namespace is already occupied by older work is
+    refused when the plan is proposed.
+39. An ExternalAction copied from a PlanStep carries its AuthorizationSubject byte for byte. Throughline substitutes nothing into it, so what a run asks to be authorized is exactly what the reviewed definition recorded.
 
 ### State model
 

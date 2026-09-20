@@ -46,11 +46,15 @@ Supporting choices, each following a recorded decision on the objective:
   would make run creation reach implicitly into whatever another run happened to accept — the
   `latest` behaviour the model rules out. An approved definition is immutable and copied into every
   run, so a requirement on a revision that was never accepted would block all of them forever.
-- **A PlanStep key is unique across the workspace**, like a WorkItem key. A run materializes its
+- **`/` is reserved, and a PlanStep key is unique across the workspace.** A run materializes its
   work as `<step key>/<run sequence>`, the sequence is objective-scoped, and `work_items.key` is
-  globally unique — so two objectives that both declared a step called `research` would collide on
-  their first runs. Enforcing it on the definition turns that into a refusal when the plan is
-  written instead of an opaque uniqueness error months later.
+  globally unique. Two objectives that both declared a step called `research` would otherwise
+  collide on their first runs, and a hand-written work item called `research/1` would occupy a key a
+  future run needs — permanently, because a failed creation consumes no sequence and every retry
+  would collide again against a definition that is by then immutable. So: `create_item` refuses a
+  key containing the separator, step keys are globally unique, and proposing a step whose
+  materialization namespace is already occupied by older work is refused when the plan is written
+  rather than when some later run fails.
 
 ## Consequences
 

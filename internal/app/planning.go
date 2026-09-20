@@ -989,6 +989,13 @@ func stepDefinition(command ProposedPlanStep) (work.StepDefinition, error) {
 // later run, so a dangling profile or output revision has to be caught now
 // rather than when some run is created months later.
 func (s *Service) validateStepDefinition(ctx context.Context, repository ports.Repository, step work.PlanStep) error {
+	taken, err := repository.MaterializedKeyNamespaceTaken(ctx, step.Key)
+	if err != nil {
+		return err
+	}
+	if taken {
+		return fmt.Errorf("plan step key %q cannot be used: an existing work item already occupies a key a run of this step would produce (%s...)", step.Key, work.MaterializedKeyNamespace(step.Key))
+	}
 	for _, expected := range step.Definition.ExpectedOutputs {
 		profile, err := repository.OutputProfile(ctx, expected.ProfileName, expected.ProfileVersion)
 		if err != nil {

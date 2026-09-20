@@ -193,8 +193,8 @@ func NewPlanStep(step PlanStep, now time.Time) (PlanStep, error) {
 	if step.Ordinal < 1 {
 		return PlanStep{}, errors.New("plan step ordinal must be positive")
 	}
-	if strings.ContainsAny(step.Key, runKeySeparator) {
-		return PlanStep{}, fmt.Errorf("plan step key %q must not contain %q, which separates it from the run sequence", step.Key, runKeySeparator)
+	if strings.Contains(step.Key, RunKeySeparator) {
+		return PlanStep{}, fmt.Errorf("plan step key %q must not contain %q, which separates it from the run sequence", step.Key, RunKeySeparator)
 	}
 	if !validPriority(step.Priority) {
 		return PlanStep{}, fmt.Errorf("plan step: invalid priority %q", step.Priority)
@@ -318,13 +318,21 @@ type PlanRun struct {
 	UpdatedAt          time.Time
 }
 
-// runKeySeparator joins a Plan Step's key to its Run's sequence so each Run's
-// materialized work items get their own keys.
-const runKeySeparator = "/"
+// RunKeySeparator joins a Plan Step's key to its Run's sequence so each Run's
+// materialized work items get their own keys. It is reserved: a key containing
+// it can only have been produced by materializing a step, so a hand-written key
+// can never occupy the namespace a future run needs.
+const RunKeySeparator = "/"
 
 // MaterializedWorkItemKey is the key a Run's copy of a step carries.
 func MaterializedWorkItemKey(stepKey string, sequence int) string {
-	return fmt.Sprintf("%s%s%d", stepKey, runKeySeparator, sequence)
+	return fmt.Sprintf("%s%s%d", stepKey, RunKeySeparator, sequence)
+}
+
+// MaterializedKeyNamespace is the prefix every key materialized from this step
+// starts with, used to check that nothing already occupies it.
+func MaterializedKeyNamespace(stepKey string) string {
+	return stepKey + RunKeySeparator
 }
 
 func NewPlanRun(run PlanRun, now time.Time) (PlanRun, error) {

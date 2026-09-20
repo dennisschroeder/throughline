@@ -76,6 +76,12 @@ func (s *Service) CreatePlanRun(ctx context.Context, command CreatePlanRunComman
 // complete materialization of every step — happens inside one transaction, so
 // a rejected creation leaves neither a run nor a work item behind.
 func (s *Service) createPlanRunMutation(ctx context.Context, command CreatePlanRunCommand) (ports.PlanRunContext, error) {
+	// The run key is normalized before the request is hashed anywhere, not
+	// after. Normalizing between the replay lookup and the executed write
+	// would hash the same logical request two different ways, so the retry
+	// carrying the very key that succeeded would come back as a reused
+	// idempotency key with a different request.
+	command.RunKey = strings.TrimSpace(command.RunKey)
 	if replay, found, err := replayIdempotently[ports.PlanRunContext](ctx, s, command.ActorID, command.IdempotencyKey, "create_plan_run", command); err != nil {
 		return ports.PlanRunContext{}, err
 	} else if found {
@@ -84,10 +90,6 @@ func (s *Service) createPlanRunMutation(ctx context.Context, command CreatePlanR
 	if strings.TrimSpace(command.ActorID) == "" {
 		return ports.PlanRunContext{}, errors.New("creating a plan run requires an actor")
 	}
-	// The run key is normalized here, before it is used to look anything up.
-	// Trimming it only on the way into storage would make a retry that differs
-	// by whitespace miss the run it already created.
-	command.RunKey = strings.TrimSpace(command.RunKey)
 	if command.RunKey == "" {
 		return ports.PlanRunContext{}, errors.New("creating a plan run requires a run key")
 	}

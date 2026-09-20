@@ -73,6 +73,16 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	return nil
 }
 
+// MaterializedKeyNamespaceTaken reports whether any existing work item already
+// occupies a key this step's runs would produce. New work items cannot take one
+// — the separator is reserved — so this only ever finds work that predates the
+// reservation, and finding it when the plan is written beats failing every run
+// of an approved definition nobody can then change.
+func (r *transactionRepository) MaterializedKeyNamespaceTaken(ctx context.Context, stepKey string) (bool, error) {
+	return queryBoolean(ctx, r.transaction,
+		"SELECT EXISTS(SELECT 1 FROM work_items WHERE key GLOB ?)", work.MaterializedKeyNamespace(stepKey)+"*")
+}
+
 // isUniqueViolation recognizes a SQLite uniqueness failure from its message,
 // which is the only thing the CGo-free driver exposes without a typed error.
 func isUniqueViolation(err error) bool {
