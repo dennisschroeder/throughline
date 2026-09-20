@@ -11,7 +11,7 @@
     {
       "id": "plan",
       "name": "Plan",
-      "definition": "A versioned, reusable definition of how an objective's work is done: the inputs it declares and the steps it is made of. Approving a revision commits the definition; it creates no work. Instantiating it as a PlanRun does."
+      "definition": "A versioned, reusable definition of how an objective's work is done: the inputs it declares and the steps it is made of. Approving a revision commits the definition; it creates no work, and it retires no other revision. Instantiating it as a PlanRun does the work. A revision may record which run's experience produced it, as provenance only."
     },
     {
       "id": "work_item",
@@ -161,7 +161,7 @@
     {
       "id": "work_item_origin",
       "name": "WorkItemOrigin",
-      "definition": "Where a work item came from, which decides whether it may execute: materialized from a plan step inside a run, proposed outside any run and therefore not executable, or legacy execution that predates plan runs."
+      "definition": "Where a work item came from, which decides whether it may execute: materialized from a plan step inside a run, added run-locally inside an active run, proposed outside any run and therefore not executable, or legacy execution that predates plan runs."
     }
   ],
   "relations": [
@@ -373,6 +373,12 @@
       "id": "work_item_uses_work_item_origin",
       "from": "work_item",
       "to": "work_item_origin",
+      "cardinality": "many_to_one"
+    },
+    {
+      "id": "plan_derived_from_plan_run",
+      "from": "plan",
+      "to": "plan_run",
       "cardinality": "many_to_one"
     }
   ],
@@ -963,6 +969,18 @@
     {
       "id": "runs_are_addressable",
       "statement": "Every plan run is findable and selectable by a session that did not create it: runs are listed bounded and filtered, an objective's continuation view carries its runs, and each work item names the run and plan step it came from. Nothing resolves a latest, previous or current run on a caller's behalf."
+    },
+    {
+      "id": "approved_revisions_accumulate",
+      "statement": "Approving a plan revision retires no other revision. Every approved revision stays explicitly instantiable, an in-flight run keeps executing the revision it was created from, and no run is ever rebound to another."
+    },
+    {
+      "id": "run_local_work_lives_in_its_run",
+      "statement": "An agent may add executable work to an active plan run. It has no plan step behind it, runs under the same gates as the run's other work, ends with the run, and changes the plan revision not at all."
+    },
+    {
+      "id": "cancelling_a_step_releases_only_its_own",
+      "statement": "Cancelling an optional step's work item with an audited rationale releases that item's own criteria, expected outputs, output requirements and not-yet-started external actions. It releases nothing of a required step, and an effect that already started still owes its result."
     }
   ],
   "source_mappings": [

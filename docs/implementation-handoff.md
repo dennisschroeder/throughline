@@ -543,7 +543,18 @@ The server identifies executable candidates; it does **not** choose the one an a
     `list_items` scopes to one run, which `plan_id` cannot do because every run of a revision
     answers to the same one. Nothing resolves a latest, previous or current run on a caller's
     behalf.
-40. An ExternalAction copied from a PlanStep carries its AuthorizationSubject byte for byte. Throughline substitutes nothing into it, so what a run asks to be authorized is exactly what the reviewed definition recorded.
+40. Approving a plan revision retires no other revision. Every approved revision stays explicitly
+    instantiable, an in-flight run keeps executing the revision it was created from, and no run is
+    ever rebound. A revision may record the run whose experience produced it; that is provenance
+    only, and no observation of a run ever changes a plan.
+41. An agent may add executable work to an active PlanRun. Run-local work has no PlanStep behind it,
+    carries its run's revision so the ordinary gates read the same answer for it, runs under the
+    same gates as the run's other work, ends with the run, and changes the definition not at all.
+42. Cancelling an optional step's WorkItem with an audited rationale releases that item's own
+    acceptance criteria, ExpectedOutputs, OutputRequirements and not-yet-started ExternalActions. It
+    releases nothing belonging to a required step, and an ExternalAction that already started still
+    owes its terminal result.
+43. An ExternalAction copied from a PlanStep carries its AuthorizationSubject byte for byte. Throughline substitutes nothing into it, so what a run asks to be authorized is exactly what the reviewed definition recorded.
 
 ### State model
 

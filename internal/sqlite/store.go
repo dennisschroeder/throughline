@@ -338,8 +338,8 @@ func (r *transactionRepository) CreatePlan(ctx context.Context, plan work.Plan) 
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO plans
   (id, objective_id, title, summary, revision, commitment_state, proposed_by, proposed_at,
-   resolved_by, resolved_at, resolution_reason, version, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+   resolved_by, resolved_at, resolution_reason, derived_from_plan_run_id, version, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		plan.ID,
 		plan.ObjectiveID,
 		plan.Title,
@@ -351,6 +351,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		nullableString(plan.ResolvedBy),
 		nullableTime(plan.ResolvedAt),
 		plan.ResolutionReason,
+		nullableString(plan.DerivedFromPlanRunID),
 		plan.Version,
 		formatTime(plan.CreatedAt),
 		formatTime(plan.UpdatedAt),
@@ -454,7 +455,7 @@ var objectiveSelect = "SELECT " + strings.Join(objectiveColumns, ", ") + " FROM 
 const planSelect = `
 SELECT id, objective_id, title, summary, revision, commitment_state,
        proposed_by, proposed_at, resolved_by, resolved_at, resolution_reason,
-       version, created_at, updated_at
+       derived_from_plan_run_id, version, created_at, updated_at
 FROM plans`
 
 var workItemSelect = "SELECT " + strings.Join(workItemColumns, ", ") + " FROM work_items"
@@ -518,7 +519,7 @@ func objectiveScanTargets(objective *work.Objective) ([]any, func() error) {
 func scanPlan(row scanner) (work.Plan, error) {
 	var plan work.Plan
 	var createdAt, updatedAt string
-	var proposedBy, proposedAt, resolvedBy, resolvedAt sql.NullString
+	var proposedBy, proposedAt, resolvedBy, resolvedAt, derivedFrom sql.NullString
 	if err := row.Scan(
 		&plan.ID,
 		&plan.ObjectiveID,
@@ -531,6 +532,7 @@ func scanPlan(row scanner) (work.Plan, error) {
 		&resolvedBy,
 		&resolvedAt,
 		&plan.ResolutionReason,
+		&derivedFrom,
 		&plan.Version,
 		&createdAt,
 		&updatedAt,
@@ -539,6 +541,7 @@ func scanPlan(row scanner) (work.Plan, error) {
 	}
 	plan.ProposedBy = proposedBy.String
 	plan.ResolvedBy = resolvedBy.String
+	plan.DerivedFromPlanRunID = derivedFrom.String
 	var err error
 	if proposedAt.Valid {
 		plan.ProposedAt, err = parseTime(proposedAt.String)

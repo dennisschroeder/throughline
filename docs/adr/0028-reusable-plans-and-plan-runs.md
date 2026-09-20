@@ -78,12 +78,20 @@ completing the objective and every run recorded under it meant. `max_concurrent_
 it can be raised or lowered through `patch_objective`, since otherwise an objective created under the
 default could never run two things at once — a limitation no decision asks for.
 
-## Deliberately not in this slice
+## Follow-on: approving a revision retires nothing
 
-Approving a later revision still supersedes earlier approved revisions, which contradicts
-"multiple approved revisions remain instantiable". That is `RPR-REA`'s first acceptance criterion and
-a hard dependency of this slice's successor; repairing it here would pull a later slice's work
-forward rather than expand beside the existing behaviour.
+Deferred from the first slice and delivered in the third. Approving a plan revision used to supersede
+every earlier approved one, which was coherent when a plan was a batch of work and is wrong when it
+is a reusable definition: it made an in-flight run's work fail the plan-approved gate the moment
+someone approved a successor. Approval now says only that this definition may be run. Retiring a
+revision deliberately is its own audited action and remains outside this objective.
+
+The ordering rule went with it. Refusing to approve a revision older than one already approved only
+made sense as a guard for supersession; with every approved revision instantiable, approving an
+older draft after a newer one is a legitimate thing to want, and `UNIQUE(objective_id, revision)`
+still prevents two plans claiming the same number.
+
+## Deliberately not in this slice
 
 Default Plan Revision, permanent revision retirement and additional dashboard grouping are decided
 but outside this objective (`01a0920a-e457-7315-8ae6-626bf20b2148`). They are not replaced by

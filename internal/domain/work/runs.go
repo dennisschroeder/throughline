@@ -61,13 +61,24 @@ const (
 	// OriginPlanStep marks an item materialized from a Plan Step when its Run
 	// was created. It executes only while that Run is active.
 	OriginPlanStep WorkItemOrigin = "plan_step"
+	// OriginRunLocal marks work an agent added inside an active Run because
+	// the situation asked for it. It has no Plan Step behind it and never
+	// changes the Plan: the run is where the adaptation lives, and a durable
+	// change to how the work is done is a new reviewed revision.
+	OriginRunLocal WorkItemOrigin = "run_local"
 	// OriginUnplanned marks work proposed outside any Run. It records an idea
 	// and is never executable; to act on it, take it into a Run.
 	OriginUnplanned WorkItemOrigin = "unplanned"
 )
 
 func ValidWorkItemOrigin(value WorkItemOrigin) bool {
-	return oneOf(value, OriginLegacy, OriginPlanStep, OriginUnplanned)
+	return oneOf(value, OriginLegacy, OriginPlanStep, OriginRunLocal, OriginUnplanned)
+}
+
+// BelongsToRun reports whether this origin means the item is owned by a plan
+// run, and so lives and dies with it.
+func (o WorkItemOrigin) BelongsToRun() bool {
+	return o == OriginPlanStep || o == OriginRunLocal
 }
 
 // PlanInput is a named value a Plan declares it needs. The Plan names it; a
@@ -547,7 +558,7 @@ func RunCreationFingerprint(planID string, bindings []RunInputBinding) string {
 // that predates Runs keeps the behavior it always had.
 func RunGateSatisfied(origin WorkItemOrigin, runActive bool) (bool, string) {
 	switch origin {
-	case OriginPlanStep:
+	case OriginPlanStep, OriginRunLocal:
 		if runActive {
 			return true, ""
 		}

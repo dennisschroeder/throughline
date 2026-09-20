@@ -116,7 +116,7 @@
     {
       "id": "plan",
       "name": "Plan",
-      "definition": "A versioned, reusable definition of how an objective's work is done: the inputs it declares and the steps it is made of. Approving a revision commits the definition; it creates no work. Instantiating it as a PlanRun does."
+      "definition": "A versioned, reusable definition of how an objective's work is done: the inputs it declares and the steps it is made of. Approving a revision commits the definition; it creates no work, and it retires no other revision. Instantiating it as a PlanRun does the work. A revision may record which run's experience produced it, as provenance only."
     },
     {
       "id": "plan_input",
@@ -161,7 +161,7 @@
     {
       "id": "work_item_origin",
       "name": "WorkItemOrigin",
-      "definition": "Where a work item came from, which decides whether it may execute: materialized from a plan step inside a run, proposed outside any run and therefore not executable, or legacy execution that predates plan runs."
+      "definition": "Where a work item came from, which decides whether it may execute: materialized from a plan step inside a run, added run-locally inside an active run, proposed outside any run and therefore not executable, or legacy execution that predates plan runs."
     }
   ],
   "relations": [
@@ -248,6 +248,12 @@
       "from": "plan",
       "to": "plan_input",
       "cardinality": "one_to_many"
+    },
+    {
+      "id": "plan_derived_from_plan_run",
+      "from": "plan",
+      "to": "plan_run",
+      "cardinality": "many_to_one"
     },
     {
       "id": "plan_proposes_work_item",
@@ -877,12 +883,20 @@
       "statement": "Expected outputs are satisfied only by accepted immutable revisions with passed or waived validations."
     },
     {
+      "id": "approved_revisions_accumulate",
+      "statement": "Approving a plan revision retires no other revision. Every approved revision stays explicitly instantiable, an in-flight run keeps executing the revision it was created from, and no run is ever rebound to another."
+    },
+    {
       "id": "attention_is_orthogonal",
       "statement": "Attention requests human intervention without changing the work-item execution status."
     },
     {
       "id": "bindings_are_immutable",
       "statement": "A run input binding is written when its run is created and never changed. A run binds an earlier run's result only as one exact accepted output revision; Throughline never resolves latest, previous or last-successful."
+    },
+    {
+      "id": "cancelling_a_step_releases_only_its_own",
+      "statement": "Cancelling an optional step's work item with an audited rationale releases that item's own criteria, expected outputs, output requirements and not-yet-started external actions. It releases nothing of a required step, and an effect that already started still owes its result."
     },
     {
       "id": "canonical_authorization",
@@ -947,6 +961,10 @@
     {
       "id": "run_key_is_objective_scoped",
       "statement": "A run key is unique within its objective and resolved independently of the actor. The same key with the same revision and bindings returns the existing run; the same key with different content is a conflict."
+    },
+    {
+      "id": "run_local_work_lives_in_its_run",
+      "statement": "An agent may add executable work to an active plan run. It has no plan step behind it, runs under the same gates as the run's other work, ends with the run, and changes the plan revision not at all."
     },
     {
       "id": "run_materializes_every_step",
@@ -1135,8 +1153,8 @@
   "manifest": {
     "schema_version": "1.0",
     "model_version": "1.3.0",
-    "content_digest": "ff4fd3f03ec3da2c6a73d255daada2f8dd37971a16399cb607502cc30e7cdf8b",
-    "source_digest": "4a984d472451a7920ae20e16ea6d75457e079dd388baa4ee36b1eb619c0eed20",
+    "content_digest": "549f6a63a5d0a5ec0a75c910848bc325204d91503d4b9eaa304a44f47ebe6e1b",
+    "source_digest": "888b5d64d0feb6b245e1b87f29367f37e56f98005b375af2c7cbfc40c2a82c21",
     "bootstrap": "Throughline is a local, authoritative coordination state layer for domain-neutral work. It records intent, plans, work, outputs, validation, reuse, and delegated authority; it does not orchestrate agents or perform external effects. Capability does not imply Authority. Call get_semantic_model for details.",
     "available_sections": [
       "manifest",
@@ -1149,12 +1167,12 @@
     ],
     "section_counts": {
       "entities": 32,
-      "invariants": 23,
+      "invariants": 26,
       "lifecycles": 12,
-      "relations": 35,
+      "relations": 36,
       "source_mappings": 33
     }
   },
-  "content_digest": "ff4fd3f03ec3da2c6a73d255daada2f8dd37971a16399cb607502cc30e7cdf8b",
-  "source_digest": "4a984d472451a7920ae20e16ea6d75457e079dd388baa4ee36b1eb619c0eed20"
+  "content_digest": "549f6a63a5d0a5ec0a75c910848bc325204d91503d4b9eaa304a44f47ebe6e1b",
+  "source_digest": "888b5d64d0feb6b245e1b87f29367f37e56f98005b375af2c7cbfc40c2a82c21"
 }

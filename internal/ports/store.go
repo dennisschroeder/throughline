@@ -61,8 +61,6 @@ type Repository interface {
 	RunInputBindings(ctx context.Context, planRunID string) ([]work.RunInputBinding, error)
 	Plan(ctx context.Context, id string) (work.Plan, error)
 	LatestPlanRevision(ctx context.Context, objectiveID string) (int, error)
-	LatestApprovedPlanRevision(ctx context.Context, objectiveID string) (int, error)
-	SupersedeEarlierPlans(ctx context.Context, objectiveID string, revision int, updatedAt time.Time) error
 	UpdatePlan(ctx context.Context, plan work.Plan, expectedVersion int) error
 	SetPlanItemsCommitment(ctx context.Context, planID string, state work.ItemCommitment, updatedAt time.Time) error
 	CreateApproval(context.Context, work.Approval) error
@@ -107,6 +105,7 @@ type Repository interface {
 	CreateProgressEntry(context.Context, work.ProgressEntry) error
 	Artifacts(ctx context.Context, workItemID string) ([]output.Artifact, error)
 	RequiredExternalActionsSatisfied(ctx context.Context, workItemID string) (bool, error)
+	StartedExternalActionsSettled(ctx context.Context, workItemID string) (bool, error)
 	CreateExternalAction(context.Context, authority.ExternalAction) error
 	ExternalAction(ctx context.Context, id string) (authority.ExternalAction, error)
 	UpdateExternalAction(ctx context.Context, action authority.ExternalAction, expectedVersion int) error

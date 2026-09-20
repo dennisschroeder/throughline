@@ -192,17 +192,9 @@ WHERE id = ? AND version = ?`,
 	return requireChanged(result)
 }
 
-func (r *transactionRepository) LatestApprovedPlanRevision(ctx context.Context, objectiveID string) (int, error) {
-	var revision int
-	if err := r.transaction.QueryRowContext(ctx,
-		"SELECT COALESCE(MAX(revision), 0) FROM plans WHERE objective_id = ? AND commitment_state = ?",
-		objectiveID, work.PlanApproved,
-	).Scan(&revision); err != nil {
-		return 0, fmt.Errorf("query latest approved plan revision: %w", err)
-	}
-	return revision, nil
-}
-
+// LatestPlanRevision is used to number the next proposal, not to choose a
+// revision to run: every approved revision stays instantiable, and a run names
+// the one it means.
 func (r *transactionRepository) LatestPlanRevision(ctx context.Context, objectiveID string) (int, error) {
 	var revision int
 	if err := r.transaction.QueryRowContext(ctx,
@@ -211,28 +203,6 @@ func (r *transactionRepository) LatestPlanRevision(ctx context.Context, objectiv
 		return 0, fmt.Errorf("query latest plan revision: %w", err)
 	}
 	return revision, nil
-}
-
-func (r *transactionRepository) SupersedeEarlierPlans(ctx context.Context, objectiveID string, revision int, updatedAt time.Time) error {
-	if _, err := r.transaction.ExecContext(ctx, `
-UPDATE work_items
-SET commitment_state = ?, version = version + 1, updated_at = ?
-WHERE plan_id IN (
-  SELECT id FROM plans WHERE objective_id = ? AND revision < ? AND commitment_state = ?
-) AND commitment_state = ?`,
-		work.ItemSuperseded, formatTime(updatedAt), objectiveID, revision, work.PlanApproved, work.ItemAccepted,
-	); err != nil {
-		return fmt.Errorf("supersede earlier plan work items: %w", err)
-	}
-	if _, err := r.transaction.ExecContext(ctx, `
-UPDATE plans
-SET commitment_state = ?, version = version + 1, updated_at = ?
-WHERE objective_id = ? AND revision < ? AND commitment_state = ?`,
-		work.PlanSuperseded, formatTime(updatedAt), objectiveID, revision, work.PlanApproved,
-	); err != nil {
-		return fmt.Errorf("supersede earlier plans: %w", err)
-	}
-	return nil
 }
 
 func (r *transactionRepository) SetPlanItemsCommitment(ctx context.Context, planID string, state work.ItemCommitment, updatedAt time.Time) error {

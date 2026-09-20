@@ -706,8 +706,13 @@ type ProposePlanCommand struct {
 	Title          string
 	Summary        string
 	Revision       int
-	Inputs         []ProposedPlanInput
-	Steps          []ProposedPlanStep
+	// DerivedFromPlanRunID names the run whose experience produced this
+	// revision, when one did. Recording it changes nothing: the revision is
+	// still a draft until someone reviews and approves it, and the run it came
+	// from keeps executing the definition it was created from.
+	DerivedFromPlanRunID string
+	Inputs               []ProposedPlanInput
+	Steps                []ProposedPlanStep
 }
 
 // generatedPlanStep is one step with its identity assigned but not yet
@@ -755,6 +760,16 @@ func (s *Service) proposePlanMutation(ctx context.Context, command ProposePlanCo
 			plan.ProposedAt = now.UTC()
 			if plan.ProposedBy == "" {
 				return ports.PlanContext{}, errors.New("proposed plan requires an actor")
+			}
+			if derivedFrom := strings.TrimSpace(command.DerivedFromPlanRunID); derivedFrom != "" {
+				source, err := repository.PlanRun(ctx, derivedFrom)
+				if err != nil {
+					return ports.PlanContext{}, fmt.Errorf("load the plan run this revision is derived from: %w", err)
+				}
+				if source.ObjectiveID != plan.ObjectiveID {
+					return ports.PlanContext{}, errors.New("a revision can only cite a plan run of its own objective")
+				}
+				plan.DerivedFromPlanRunID = source.ID
 			}
 			if _, err := repository.Objective(ctx, plan.ObjectiveID); err != nil {
 				return ports.PlanContext{}, fmt.Errorf("load objective: %w", err)
@@ -1234,18 +1249,12 @@ func (s *Service) reviewPlanMutation(ctx context.Context, command ReviewPlanComm
 			if err != nil {
 				return work.Plan{}, err
 			}
-			if reviewed.CommitmentState == work.PlanApproved {
-				latestRevision, err := repository.LatestApprovedPlanRevision(ctx, reviewed.ObjectiveID)
-				if err != nil {
-					return work.Plan{}, err
-				}
-				if latestRevision >= reviewed.Revision {
-					return work.Plan{}, errors.New("a plan with the same or newer revision is already approved")
-				}
-				if err := repository.SupersedeEarlierPlans(ctx, reviewed.ObjectiveID, reviewed.Revision, reviewed.ResolvedAt); err != nil {
-					return work.Plan{}, err
-				}
-			}
+			// Approving a revision says this definition may be run. It says
+			// nothing about the others: every approved revision stays
+			// instantiable, so a run started from an earlier one keeps working
+			// and a caller that means the older definition can still name it.
+			// Retiring a revision deliberately is its own audited action and is
+			// not part of this objective.
 			if err := repository.UpdatePlan(ctx, reviewed, command.ExpectedVersion); err != nil {
 				return work.Plan{}, err
 			}

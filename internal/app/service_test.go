@@ -889,6 +889,10 @@ func (s *memoryStore) PlanStepDependencyCreatesCycle(_ context.Context, stepID, 
 	return reachable[stepID], nil
 }
 
+func (s *memoryStore) StartedExternalActionsSettled(context.Context, string) (bool, error) {
+	return true, nil
+}
+
 func (s *memoryStore) MaterializedKeyNamespaceTaken(_ context.Context, stepKey string) (bool, error) {
 	for _, item := range s.items {
 		if strings.HasPrefix(item.Key, work.MaterializedKeyNamespace(stepKey)) {

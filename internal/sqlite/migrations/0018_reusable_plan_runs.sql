@@ -102,6 +102,11 @@ CREATE TABLE plan_runs (
   CHECK ((status = 'active') = (closed_at IS NULL))
 );
 
+-- A revision proposed from what a run turned up records which run that was.
+-- It is provenance and nothing more: no observation of a run ever changes a
+-- plan, and a revision still only becomes runnable by being approved.
+ALTER TABLE plans ADD COLUMN derived_from_plan_run_id TEXT REFERENCES plan_runs(id) ON DELETE SET NULL;
+
 CREATE INDEX plan_runs_by_objective_status ON plan_runs(objective_id, status, sequence);
 CREATE INDEX plan_runs_by_plan ON plan_runs(plan_id, sequence);
 
@@ -138,7 +143,7 @@ BEGIN
   SELECT RAISE(ABORT, 'run input binding is immutable');
 END;
 
-ALTER TABLE work_items ADD COLUMN origin TEXT NOT NULL DEFAULT 'legacy' CHECK (origin IN ('legacy', 'plan_step', 'unplanned'));
+ALTER TABLE work_items ADD COLUMN origin TEXT NOT NULL DEFAULT 'legacy' CHECK (origin IN ('legacy', 'plan_step', 'run_local', 'unplanned'));
 ALTER TABLE work_items ADD COLUMN plan_run_id TEXT REFERENCES plan_runs(id) ON DELETE RESTRICT;
 ALTER TABLE work_items ADD COLUMN origin_plan_step_id TEXT REFERENCES plan_steps(id) ON DELETE RESTRICT;
 

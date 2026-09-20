@@ -170,20 +170,25 @@ type PhaseTransition struct {
 }
 
 type Plan struct {
-	ID               string
-	ObjectiveID      string
-	Title            string
-	Summary          string
-	Revision         int
-	CommitmentState  PlanCommitment
-	ProposedBy       string
-	ProposedAt       time.Time
-	ResolvedBy       string
-	ResolvedAt       time.Time
-	ResolutionReason string
-	Version          int
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID          string
+	ObjectiveID string
+	Title       string
+	Summary     string
+	Revision    int
+	// DerivedFromPlanRunID names the run whose experience produced this
+	// revision, when one did. It is provenance and nothing else: no
+	// observation of a run ever changes a plan, and a revision still only
+	// becomes runnable by being approved on its own.
+	DerivedFromPlanRunID string
+	CommitmentState      PlanCommitment
+	ProposedBy           string
+	ProposedAt           time.Time
+	ResolvedBy           string
+	ResolvedAt           time.Time
+	ResolutionReason     string
+	Version              int
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 type WorkItem struct {
@@ -354,8 +359,11 @@ func (w WorkItem) Validate() error {
 	if !ValidWorkItemOrigin(w.Origin) {
 		return fmt.Errorf("work item: invalid origin %q", w.Origin)
 	}
-	if (w.Origin == OriginPlanStep) != (w.PlanRunID != "" && w.OriginPlanStepID != "") {
-		return errors.New("work item: a plan step origin requires both a plan run and an origin plan step, and no other origin may carry them")
+	if w.Origin.BelongsToRun() != (w.PlanRunID != "") {
+		return errors.New("work item: work belonging to a plan run requires that run, and work that does not must not name one")
+	}
+	if (w.Origin == OriginPlanStep) != (w.OriginPlanStepID != "") {
+		return errors.New("work item: only work materialized from a plan step names an origin plan step, and it always does")
 	}
 	return nil
 }

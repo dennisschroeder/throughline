@@ -437,9 +437,18 @@ func (r *transactionRepository) PlanRunClosureFacts(ctx context.Context, planRun
 		if item.ExecutionStatus != work.StatusDone && item.ExecutionStatus != work.StatusCancelled {
 			facts.RemainingItemsTerminal = false
 		}
-		// A cancelled item releases its own local obligations; only work that
-		// actually ran still has to show its outputs and actions.
+		// Cancelling an item releases its own local obligations — its
+		// criteria, outputs, output requirements and the actions that never
+		// started. An effect that did start is not released by cancelling the
+		// step that asked for it: it happened, and its result is still owed.
 		if item.ExecutionStatus == work.StatusCancelled {
+			settled, err := r.StartedExternalActionsSettled(ctx, item.ID)
+			if err != nil {
+				return work.RunClosureFacts{}, err
+			}
+			if !settled {
+				facts.ActionObligationsSatisfied = false
+			}
 			continue
 		}
 		expectedSatisfied, err := r.ExpectedOutputsSatisfied(ctx, item.ID)

@@ -727,11 +727,16 @@ func (s *Service) createPlanMutation(ctx context.Context, command CreatePlanComm
 }
 
 type CreateWorkItemCommand struct {
-	ActorID              string
-	IdempotencyKey       string
-	Key                  string
-	ObjectiveID          string
-	PlanID               string
+	ActorID        string
+	IdempotencyKey string
+	Key            string
+	ObjectiveID    string
+	PlanID         string
+	// PlanRunID makes this a run-local work item: work an agent adds inside an
+	// active run because the situation asked for it. It has no plan step
+	// behind it, it executes under the same gates as the run's other work, and
+	// it changes the plan revision not at all.
+	PlanRunID            string
 	ParentID             string
 	Title                string
 	Description          string
@@ -800,6 +805,10 @@ func (s *Service) createWorkItemMutation(ctx context.Context, command CreateWork
 	if strings.Contains(command.Key, work.RunKeySeparator) {
 		return work.WorkItem{}, fmt.Errorf("work item key %q must not contain %q: it is reserved for work a plan run materializes from a plan step", command.Key, work.RunKeySeparator)
 	}
+	origin := work.OriginUnplanned
+	if strings.TrimSpace(command.PlanRunID) != "" {
+		origin = work.OriginRunLocal
+	}
 	id, err := s.ids.New()
 	if err != nil {
 		return work.WorkItem{}, fmt.Errorf("generate work item id: %w", err)
@@ -822,10 +831,12 @@ func (s *Service) createWorkItemMutation(ctx context.Context, command CreateWork
 		RequiredActorKind:  command.RequiredActorKind,
 		AttentionState:     command.AttentionState,
 		ReviewRequirements: reviewRequirements,
-		// Work created directly is a proposal, not execution. It is recorded
-		// and readable, and it stays outside the plan-run audit path until
+		// Work named for a run is run-local: it executes under that run's
+		// gates and ends with it. Work created with no run is a proposal —
+		// recorded and readable, and outside the plan-run audit path until
 		// someone deliberately takes it into a run.
-		Origin: work.OriginUnplanned,
+		Origin:    origin,
+		PlanRunID: command.PlanRunID,
 	}, s.clock.Now())
 	if err != nil {
 		return work.WorkItem{}, err
@@ -850,7 +861,31 @@ func (s *Service) createWorkItemMutation(ctx context.Context, command CreateWork
 					return work.WorkItem{}, errors.New("work item plan belongs to another objective")
 				}
 			}
-			if advanced && (item.PlanID == "" || objective.Phase != work.ObjectiveExecution || plan.CommitmentState != work.PlanApproved) {
+			// Run-local work is added to a run that is already executing, so
+			// it answers to the run rather than to the plan-approved gate that
+			// governs work created outside one.
+			if item.Origin == work.OriginRunLocal {
+				run, err := repository.PlanRun(ctx, item.PlanRunID)
+				if err != nil {
+					return work.WorkItem{}, fmt.Errorf("load plan run: %w", err)
+				}
+				if run.ObjectiveID != item.ObjectiveID {
+					return work.WorkItem{}, errors.New("work item plan run belongs to another objective")
+				}
+				if run.Status != work.PlanRunActive {
+					return work.WorkItem{}, fmt.Errorf("plan run is %s; work can only be added to an active run", run.Status)
+				}
+				if objective.Phase != work.ObjectiveExecution {
+					return work.WorkItem{}, fmt.Errorf("adding work to a run requires an objective in execution phase, not %s", objective.Phase)
+				}
+				if item.PlanID != "" && item.PlanID != run.PlanID {
+					return work.WorkItem{}, errors.New("run-local work cannot name a different plan revision than its run")
+				}
+				// It carries the run's revision so the existing plan-approved
+				// gate reads the same answer for it as for the run's other
+				// work, and so it is listed with the run it belongs to.
+				item.PlanID = run.PlanID
+			} else if advanced && (item.PlanID == "" || objective.Phase != work.ObjectiveExecution || plan.CommitmentState != work.PlanApproved) {
 				return work.WorkItem{}, errors.New("accepted ready work items require an approved plan in an execution objective")
 			}
 			if item.ParentID != "" {

@@ -377,12 +377,14 @@ func TestIntentAndPlanningVerticalSlice(t *testing.T) {
 		planStates[candidate.Plan.Revision] = candidate.Plan.CommitmentState
 		stepsByRevision[candidate.Plan.Revision] = len(candidate.Steps)
 	}
-	if planStates[1] != work.PlanSuperseded || planStates[2] != work.PlanApproved {
+	// Both revisions stay approved. A later revision is an additional
+	// definition someone may run, not a replacement that retires the one runs
+	// are already using.
+	if planStates[1] != work.PlanApproved || planStates[2] != work.PlanApproved {
 		t.Fatalf("plan replacement states = %#v", planStates)
 	}
-	// A later revision replaces what a new run would be created from. It
-	// rewrites neither revision's definition, and it does not touch the work
-	// the first revision's run already materialized.
+	// It rewrites neither revision's definition, and it does not touch the
+	// work the first revision's run already materialized.
 	if stepsByRevision[1] != 3 || stepsByRevision[2] != 1 {
 		t.Fatalf("plan definitions were rewritten by the replacement: %#v", stepsByRevision)
 	}

@@ -116,7 +116,7 @@ func (a *adapter) addTools(server *mcp.Server) {
 	a.add(server, "register_actor", "Register a trusted-local actor.", false, schemaFor[registerActorInput]("actor_id", "kind", "display_name", "idempotency_key"), a.registerActor)
 	a.add(server, "create_objective", "Create durable intent.", false, schemaFor[createObjectiveInput]("actor_id", "idempotency_key", "key", "title", "desired_outcome", "phase"), a.createObjective)
 	a.add(server, "patch_objective", "Update safe objective details with optimistic concurrency. objective_id accepts an objective's key.", false, schemaFor[patchObjectiveInput]("objective_id", "actor_id", "idempotency_key", "expected_version"), a.patchObjective)
-	a.add(server, "create_item", "Create one proposed domain-neutral work item. objective_id accepts an objective's key.", false, schemaFor[createItemInput]("actor_id", "idempotency_key", "key", "objective_id", "title", "kind"), a.createItem)
+	a.add(server, "create_item", "Record one work item. With plan_run_id it is run-local work inside that active run, executable under the run's own gates; without one it is a proposal and is never executable. objective_id accepts an objective's key.", false, schemaFor[createItemInput]("actor_id", "idempotency_key", "key", "objective_id", "title", "kind"), a.createItem)
 	a.add(server, "patch_item", "Update safe work-item details with optimistic concurrency.", false, patchItemSchema(), a.patchItem)
 	a.add(server, "request_attention", "Request an orthogonal human attention state for a governed target.", false, requestAttentionSchema(), a.requestAttention)
 	a.add(server, "request_approval", "Request an approval for a governed target.", false, requestApprovalSchema(), a.requestApproval)
@@ -2097,6 +2097,7 @@ type createItemInput struct {
 	workspaceInput
 	ActorID              string                         `json:"actor_id"`
 	IdempotencyKey       string                         `json:"idempotency_key"`
+	PlanRunID            string                         `json:"plan_run_id,omitempty"`
 	Key                  string                         `json:"key"`
 	ObjectiveID          string                         `json:"objective_id"`
 	PlanID               string                         `json:"plan_id"`
@@ -2151,7 +2152,7 @@ func (a *adapter) createItem(ctx context.Context, service *app.Service, raw json
 		return nil, err
 	}
 	command := app.CreateWorkItemCommand{
-		ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, ObjectiveID: objectiveID, PlanID: in.PlanID, ParentID: in.ParentID,
+		ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, ObjectiveID: objectiveID, PlanID: in.PlanID, PlanRunID: in.PlanRunID, ParentID: in.ParentID,
 		Title: in.Title, Description: in.Description, Kind: in.Kind, CommitmentState: in.CommitmentState, ExecutionStatus: in.ExecutionStatus,
 		Priority: in.Priority, EstimatedScope: in.EstimatedScope, Measure: in.Measure.toMeasure(), ExecutionPolicy: in.ExecutionPolicy, RequiredActorKind: in.RequiredActorKind,
 		AttentionState: work.AttentionNone, RequiredCapabilities: in.RequiredCapabilities, ReviewRequirements: toReviewRequirements(in.ReviewRequirements),
@@ -2555,14 +2556,19 @@ func (a *adapter) transitionObjective(ctx context.Context, service *app.Service,
 
 type planInput struct {
 	workspaceInput
-	ObjectiveID    string           `json:"objective_id"`
-	ActorID        string           `json:"actor_id"`
-	IdempotencyKey string           `json:"idempotency_key"`
-	Title          string           `json:"title"`
-	Summary        string           `json:"summary,omitempty"`
-	Revision       int              `json:"revision"`
-	Inputs         []planInputInput `json:"inputs,omitempty"`
-	Steps          []planStepInput  `json:"steps"`
+	ObjectiveID    string `json:"objective_id"`
+	ActorID        string `json:"actor_id"`
+	IdempotencyKey string `json:"idempotency_key"`
+	Title          string `json:"title"`
+	Summary        string `json:"summary,omitempty"`
+	Revision       int    `json:"revision"`
+	// DerivedFromPlanRunID cites the run whose experience produced this
+	// revision. It records provenance and nothing else: the revision is still
+	// a draft until reviewed, and the run it cites keeps running the
+	// definition it was created from.
+	DerivedFromPlanRunID string           `json:"derived_from_plan_run_id,omitempty"`
+	Inputs               []planInputInput `json:"inputs,omitempty"`
+	Steps                []planStepInput  `json:"steps"`
 }
 
 // planInputInput is one named value the plan declares it needs; a run binds it.
@@ -2700,7 +2706,7 @@ func (a *adapter) proposePlan(ctx context.Context, service *app.Service, raw jso
 	if err != nil {
 		return nil, err
 	}
-	return service.ProposePlan(ctx, app.ProposePlanCommand{ObjectiveID: objectiveID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Title: in.Title, Summary: in.Summary, Revision: in.Revision, Inputs: inputs, Steps: steps})
+	return service.ProposePlan(ctx, app.ProposePlanCommand{ObjectiveID: objectiveID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Title: in.Title, Summary: in.Summary, Revision: in.Revision, DerivedFromPlanRunID: in.DerivedFromPlanRunID, Inputs: inputs, Steps: steps})
 }
 
 type createPlanRunInput struct {
