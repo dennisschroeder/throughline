@@ -184,7 +184,42 @@ because SQLite aborted one on the lock upgrade. The limit was holding by acciden
 was told the database was locked rather than that it was at capacity. `_txlock=immediate` fixed the
 mechanism; the test now names which rule did the refusing.
 
+### N3 — RPR-REA delivered
+
+Commits `b9e7ca2` (implementation and proofs), `ad8d86d` and `f8c2955` (review repairs). All six
+gates green in order at `f8c2955`.
+
+**Gate loop: 1 of 3 attempts spent** — the stale digest again, on the third slice running, after two
+write-ups. The pattern is now unmistakable: it happens when a repair commit feels small enough that
+running six commands seems disproportionate. It never is.
+
+**Review loop: 2 of 5 passes spent, 3 material findings, 0 outstanding.** Both result passes ran on
+`gpt-oss-120b-medium`: the pinned `gpt-5.6-sol` is out of credits until 2026-09-22, and both Gemini
+models timed out on the proxy for this slice. That is the third reviewer substitution in three
+slices.
+
+| Pass | Reader | Findings |
+|---|---|---|
+| 1 | `gpt-oss-120b-medium` (degraded) | 5 — 2 accepted, 3 verified false and rejected |
+| 2 | `gpt-oss-120b-medium` (degraded) | 0 reported; 1 found by checking its reassurance |
+| KISS | `gpt-oss-120b-medium` | 4 proposed — 0 removed, 1 answered by restructuring |
+
+**Three of pass 1's five findings were wrong, and the second pass's reassurance was wrong too.** It
+claimed the cross-run parent fix "covers dependency edges, question blocks, output requirements"
+without having looked. `link_dependency` checked only the objective, so a hard dependency could make
+one run's readiness wait on another run's work — the exact thing separate runs exist to prevent. A
+weaker reviewer is not merely quieter; it is confidently wrong in both directions, and every one of
+its claims, positive and negative, had to be checked against the code.
+
 ### Feedback on the frozen design
+
+**A review is evidence, not a verdict — in both directions.** The frozen graph treats a pass with no
+findings as an edge that opens. Across three slices the readers produced 16 findings, of which 6 were
+factually wrong about the code, and one pass's *clean bill of health* concealed a real defect it had
+asserted was covered. What actually closed the edge each time was checking the claim: every accepted
+finding was reproduced before it was fixed, and every rejection was verified against the source
+before it was written down. The graph should say that explicitly, because "the reviewer found
+nothing" and "there is nothing" are different statements and only one of them is a measurement.
 
 **A test that accepts too many outcomes proves nothing, and looks like coverage.** This is the N2
 lesson and it generalizes past this objective. The concurrency test was named for the invariant, ran
