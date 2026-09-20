@@ -1505,7 +1505,6 @@ type listItemsInput struct {
 	ObjectivePhases        []work.ObjectivePhase  `json:"objective_phase"`
 	PlanID                 string                 `json:"plan_id"`
 	PlanRunID              string                 `json:"plan_run_id"`
-	Origins                []work.WorkItemOrigin  `json:"origin"`
 	CommitmentStates       []work.ItemCommitment  `json:"commitment_state"`
 	ExecutionStatus        []work.ExecutionStatus `json:"execution_status"`
 	Priorities             []work.Priority        `json:"priority"`
@@ -1559,9 +1558,6 @@ func (a *adapter) listItems(ctx context.Context, service *app.Service, raw json.
 		// that job: a materialized item keeps its revision, so every run of a
 		// revision answers to the same plan_id.
 		if in.PlanRunID != "" && item.WorkItem.PlanRunID != in.PlanRunID {
-			continue
-		}
-		if !contains(in.Origins, item.WorkItem.Origin) {
 			continue
 		}
 		if !contains(in.ObjectivePhases, item.Objective.Phase) || !contains(in.CommitmentStates, item.WorkItem.CommitmentState) || !contains(in.ExecutionStatus, item.WorkItem.ExecutionStatus) || !contains(in.Priorities, item.WorkItem.Priority) || !contains(in.Kinds, item.WorkItem.Kind) || !contains(in.AttentionStates, item.WorkItem.AttentionState) || !contains(in.ExecutionPolicy, item.WorkItem.ExecutionPolicy) {
