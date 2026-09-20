@@ -111,4 +111,73 @@ additional dashboard grouping are decided but deliberately outside this objectiv
 Filled in as nodes deliver. The frozen design above is left untouched; divergence is recorded here
 rather than edited away.
 
-_Nothing to report yet — N1 has not delivered._
+### N1 — RPR-FSR delivered
+
+Commits `d11d3b7` (implementation), `747dbad`, `91c216b`, `ab4b189` (repairs), `5cb466b` (a test).
+All six gates green in order at `5cb466b`.
+
+**Gate loop: 0 of 3 attempts spent.** The gate was never red at a commit. It went red repeatedly
+*during* the work — roughly forty test failures as the old plan-writes-work-items contract was
+pulled out of five packages — but that is the edit cycle, not the fix loop the budget is for. The
+budget counts attempts to repair an already-delivered node, and none were needed.
+
+**Review loop: 3 of 5 passes spent, 13 material findings, 0 outstanding.**
+
+| Pass | Reader | Material findings |
+|---|---|---|
+| 1 | `gpt-5.6-sol`, reading the repository | 8 |
+| 2 | `gpt-5.6-sol`, reading the repository | 2 — both *incomplete repairs* of pass 1's findings |
+| KISS | `gemini-3.1-pro-high`, against the full design surface | 0 accepted; 4 removals and 1 gap proposed, all rejected with reasoning |
+| 3 | **degraded** — see below | 0 |
+
+Four further defects were found by the author while reviewing and are fixed with regression tests: a
+lapsed claim made its run impossible to close; `check_action_authorization` did not apply the run
+gate; `PlanContext.Items` was documented as empty for new plans when it in fact lists every run's
+materialized work; and the reserved-namespace prefix check was matched as a pattern rather than
+compared as text.
+
+**Pass 3 is recorded as degraded, not clean.** The pinned reviewer `gpt-5.6-sol` hit its provider
+usage limit mid-read and returned nothing; `gemini-3.1-pro-high` and `gemini-3.8-flash-high` both
+timed out on the proxy. It ran on `gemini-3.8-flash-medium` against a code excerpt rather than the
+repository — a weaker model with less context than the design intended. It returned zero material
+findings and three claims, each verified false against the code rather than taken on its word:
+`create_plan_run` did not exist at the base commit, so no pre-change idempotency record can
+mismatch; migration 0018 carries a global unique index on `plan_steps(key)`, so two plans cannot
+share a step key; and the non-sargable prefix query runs once per step at proposal time against a
+local database, where a sargable range bound would add multi-byte boundary fragility for no measured
+gain. A third full-strength pass on the repository is the measurement that is missing.
+
+### Feedback on the frozen design
+
+**The gate caught nothing the reviewers caught.** All six commands were green at `d11d3b7`, and eight
+material defects were sitting in that commit — including `patch_objective` reporting a capacity
+change it never wrote, and objective `mode` being unreachable through every MCP schema. The gate
+measures that the code does what its tests say; it cannot measure that the tests ask the right
+questions. The frozen graph treats "gate green" as the edge condition and review as what follows;
+that ordering is right, but the graph's own text implies the gate is the load-bearing check and the
+review is confirmation. It was the other way round here.
+
+**Two of pass 1's eight fixes were wrong on the first attempt.** Pass 2 exists in the design as a
+budget line; it earned its place as the thing that caught incomplete repairs. A single-pass review
+would have shipped a run key that refused its own retries and a definition that could be made
+permanently uninstantiable. The budget of five is not generous — it is roughly right.
+
+**"Reachability" deserves to be a gate, not a review finding.** The plan-time rule says to confirm a
+mechanism can be operated from where you stand before planning around it. Objective `mode` was
+modelled, validated, persisted, migrated and documented, and no client could set it. Nothing in the
+six commands can see that, because the MCP schema is derived from a Go struct that simply lacked the
+field. A cheap check — every persisted governed field is reachable through some tool — would have
+caught it deterministically.
+
+**The node boundary held, and the blast radius was larger than "large" suggested.** RPR-FSR's
+estimate was `large`, which was correct in the sense that it was not wrong; it was uninformative in
+that it did not distinguish this from any other large slice. The measurable shape: 2,400 production
+lines, 42 files, and about forty pre-existing tests rewritten because the plan-writes-work-items
+contract was load-bearing in five packages. The test migration was roughly half the work and was not
+visible in the plan at all.
+
+**One thing the plan got exactly right.** Expand-migrate-contract is why this slice could be green at
+all: approving a later revision still supersedes earlier approved ones, which contradicts the model
+and is `RPR-REA`'s first criterion. Leaving it was sanctioned by the successor existing as a hard
+dependency that carries the repair. Had the graph not said this in advance, the honest options would
+have been to pull `RPR-REA`'s work forward or to ship a quiet inconsistency.
