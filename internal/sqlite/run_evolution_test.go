@@ -612,3 +612,68 @@ func TestARunCannotBindAnUnacceptedOrForeignOutput(t *testing.T) {
 		t.Fatal("a run bound an output revision that does not exist")
 	}
 }
+
+// TestWorkCannotHangOffAnotherRunsWork is a regression: runs are separate, so
+// a structural parent link across them would make one run's shape depend on
+// another's. Only the objective was checked before, which let it through.
+func TestWorkCannotHangOffAnotherRunsWork(t *testing.T) {
+	h := newRunHarness(t, "cross-run-parent.db", nil, 2)
+	first, err := h.createRun("run-1", "create-1", "agent:one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.createRun("run-2", "create-2", "agent:one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Run-local work may not be parented onto another run's work.
+	if _, err := h.service.CreateWorkItem(h.ctx, app.CreateWorkItemCommand{
+		ActorID: "agent:one", IdempotencyKey: "create-cross-run-child", Key: "CROSS-RUN-1",
+		ObjectiveID: h.objective.ID, PlanRunID: second.Run.ID, ParentID: first.WorkItems[0].ID,
+		Title: "A child of another run's work", Kind: "research",
+		CommitmentState: work.ItemProposed, ExecutionStatus: work.StatusBacklog,
+		Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
+		ExecutionPolicy: work.PolicyAutonomousWithReport, RequiredActorKind: work.ActorAgent,
+		AttentionState: work.AttentionNone,
+	}); err == nil {
+		t.Fatal("run-local work was parented onto another run's work")
+	}
+	// Nor may work outside any run adopt a run's work as its parent.
+	if _, err := h.service.CreateWorkItem(h.ctx, app.CreateWorkItemCommand{
+		ActorID: "agent:one", IdempotencyKey: "create-unplanned-child", Key: "CROSS-RUN-2",
+		ObjectiveID: h.objective.ID, ParentID: first.WorkItems[0].ID,
+		Title: "An idea hanging off a run", Kind: "research",
+		CommitmentState: work.ItemProposed, ExecutionStatus: work.StatusBacklog,
+		Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
+		ExecutionPolicy: work.PolicyAutonomousWithReport, RequiredActorKind: work.ActorAgent,
+		AttentionState: work.AttentionNone,
+	}); err == nil {
+		t.Fatal("work outside a run was parented onto a run's work")
+	}
+	// Patching a parent afterwards cannot get around it either.
+	sibling, err := h.service.CreateWorkItem(h.ctx, app.CreateWorkItemCommand{
+		ActorID: "agent:one", IdempotencyKey: "create-run-local-sibling", Key: "CROSS-RUN-3",
+		ObjectiveID: h.objective.ID, PlanRunID: second.Run.ID,
+		Title: "Run-local work of the second run", Kind: "research",
+		CommitmentState: work.ItemProposed, ExecutionStatus: work.StatusBacklog,
+		Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
+		ExecutionPolicy: work.PolicyAutonomousWithReport, RequiredActorKind: work.ActorAgent,
+		AttentionState: work.AttentionNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.UnwrapMutation(h.service.PatchWorkItem(h.ctx, app.PatchWorkItemCommand{
+		WorkItemID: sibling.Result.ID, ActorID: "agent:one", IdempotencyKey: "patch-cross-run-parent",
+		ExpectedVersion: sibling.Result.Version, ParentID: stringPointer(first.WorkItems[0].ID),
+	})); err == nil {
+		t.Fatal("a parent belonging to another run was patched in")
+	}
+	// The same run's work is a legitimate parent.
+	if _, err := app.UnwrapMutation(h.service.PatchWorkItem(h.ctx, app.PatchWorkItemCommand{
+		WorkItemID: sibling.Result.ID, ActorID: "agent:one", IdempotencyKey: "patch-same-run-parent",
+		ExpectedVersion: sibling.Result.Version, ParentID: stringPointer(second.WorkItems[0].ID),
+	})); err != nil {
+		t.Fatalf("a parent inside the same run was refused: %v", err)
+	}
+}

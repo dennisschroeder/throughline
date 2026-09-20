@@ -257,6 +257,9 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 					if parent.ObjectiveID != item.ObjectiveID {
 						return work.WorkItem{}, errors.New("work item parent belongs to another objective")
 					}
+					if parent.PlanRunID != item.PlanRunID {
+						return work.WorkItem{}, errors.New("work item parent belongs to another plan run; runs are separate, so a run's work cannot hang off another run's")
+					}
 					if parent.ID == item.ID {
 						return work.WorkItem{}, errors.New("work item cannot be its own parent")
 					}
@@ -896,6 +899,15 @@ func (s *Service) createWorkItemMutation(ctx context.Context, command CreateWork
 				if parent.ObjectiveID != item.ObjectiveID {
 					return work.WorkItem{}, errors.New("work item parent belongs to another objective")
 				}
+				if parent.PlanRunID != item.PlanRunID {
+					return work.WorkItem{}, errors.New("work item parent belongs to another plan run; runs are separate, so a run's work cannot hang off another run's")
+				}
+			}
+			// The run supplied the revision after the item was first
+			// validated, so the item is checked again against its own rules
+			// rather than trusted because it passed them earlier.
+			if err := item.Validate(); err != nil {
+				return work.WorkItem{}, err
 			}
 			if err := repository.CreateWorkItem(ctx, item); err != nil {
 				return work.WorkItem{}, err

@@ -976,7 +976,7 @@
     },
     {
       "id": "runs_are_separate",
-      "statement": "Each plan run is a permanently separate, auditable instance. Creating a later run of the same approved revision leaves every earlier run, and everything it produced, unchanged."
+      "statement": "Each plan run is a permanently separate, auditable instance. Creating a later run of the same approved revision leaves every earlier run, and everything it produced, unchanged, and no structural link — a parent, a dependency — ever crosses from one run's work to another's."
     },
     {
       "id": "runs_end_explicitly",
@@ -1153,8 +1153,8 @@
   "manifest": {
     "schema_version": "1.0",
     "model_version": "1.3.0",
-    "content_digest": "549f6a63a5d0a5ec0a75c910848bc325204d91503d4b9eaa304a44f47ebe6e1b",
-    "source_digest": "888b5d64d0feb6b245e1b87f29367f37e56f98005b375af2c7cbfc40c2a82c21",
+    "content_digest": "532e917c7656e2a8475c1ebc2adba9f73070f1c0bb15c0ba321926e3854fd0b7",
+    "source_digest": "180c2f8f891b52a07f4778b7740683495294196f1b2756d0b99e6ea064afcb28",
     "bootstrap": "Throughline is a local, authoritative coordination state layer for domain-neutral work. It records intent, plans, work, outputs, validation, reuse, and delegated authority; it does not orchestrate agents or perform external effects. Capability does not imply Authority. Call get_semantic_model for details.",
     "available_sections": [
       "manifest",
@@ -1173,6 +1173,6 @@
       "source_mappings": 33
     }
   },
-  "content_digest": "549f6a63a5d0a5ec0a75c910848bc325204d91503d4b9eaa304a44f47ebe6e1b",
-  "source_digest": "888b5d64d0feb6b245e1b87f29367f37e56f98005b375af2c7cbfc40c2a82c21"
+  "content_digest": "532e917c7656e2a8475c1ebc2adba9f73070f1c0bb15c0ba321926e3854fd0b7",
+  "source_digest": "180c2f8f891b52a07f4778b7740683495294196f1b2756d0b99e6ea064afcb28"
 }

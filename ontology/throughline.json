@@ -936,7 +936,7 @@
     },
     {
       "id": "runs_are_separate",
-      "statement": "Each plan run is a permanently separate, auditable instance. Creating a later run of the same approved revision leaves every earlier run, and everything it produced, unchanged."
+      "statement": "Each plan run is a permanently separate, auditable instance. Creating a later run of the same approved revision leaves every earlier run, and everything it produced, unchanged, and no structural link — a parent, a dependency — ever crosses from one run's work to another's."
     },
     {
       "id": "run_materializes_every_step",
