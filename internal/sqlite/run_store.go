@@ -206,10 +206,17 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?)`,
 	return nil
 }
 
-const planRunSelect = `
-SELECT id, objective_id, plan_id, run_key, sequence, status, binding_fingerprint, started_by,
-       started_at, closed_by, closed_at, close_reason, version, created_at, updated_at
-FROM plan_runs`
+// planRunColumns is shared by the plain selects and the summary join, so a
+// column added later cannot be silently missing from one of them.
+var planRunColumns = []string{"id", "objective_id", "plan_id", "run_key", "sequence", "status",
+	"binding_fingerprint", "started_by", "started_at", "closed_by", "closed_at", "close_reason",
+	"version", "created_at", "updated_at"}
+
+var planRunSelect = "SELECT " + strings.Join(planRunColumns, ", ") + " FROM plan_runs"
+
+func prefixedPlanRunColumns(alias string) string {
+	return prefixedColumns(alias, planRunColumns)
+}
 
 func (r *transactionRepository) PlanRun(ctx context.Context, id string) (work.PlanRun, error) {
 	run, err := scanPlanRun(r.transaction.QueryRowContext(ctx, planRunSelect+" WHERE id = ?", id))
@@ -227,29 +234,43 @@ func (r *transactionRepository) PlanRunByKey(ctx context.Context, objectiveID, r
 
 func scanPlanRun(row scanner) (work.PlanRun, error) {
 	var run work.PlanRun
+	targets, finish := planRunScanTargets(&run)
+	if err := row.Scan(targets...); err != nil {
+		return work.PlanRun{}, err
+	}
+	if err := finish(); err != nil {
+		return work.PlanRun{}, err
+	}
+	return run, nil
+}
+
+// planRunScanTargets returns the destinations for planRunColumns, in order,
+// and the conversion to run once they are filled. The summary join appends its
+// aggregates after these, so the two readers cannot drift apart.
+func planRunScanTargets(run *work.PlanRun) ([]any, func() error) {
 	var closedBy, closedAt, closeReason sql.NullString
 	var startedAt, createdAt, updatedAt string
-	if err := row.Scan(&run.ID, &run.ObjectiveID, &run.PlanID, &run.RunKey, &run.Sequence, &run.Status,
+	targets := []any{&run.ID, &run.ObjectiveID, &run.PlanID, &run.RunKey, &run.Sequence, &run.Status,
 		&run.BindingFingerprint, &run.StartedBy, &startedAt, &closedBy, &closedAt, &closeReason,
-		&run.Version, &createdAt, &updatedAt); err != nil {
-		return work.PlanRun{}, err
-	}
-	run.ClosedBy = closedBy.String
-	run.CloseReason = closeReason.String
-	var err error
-	if run.StartedAt, err = parseTime(startedAt); err != nil {
-		return work.PlanRun{}, err
-	}
-	if closedAt.Valid {
-		if run.ClosedAt, err = parseTime(closedAt.String); err != nil {
-			return work.PlanRun{}, err
+		&run.Version, &createdAt, &updatedAt}
+	return targets, func() error {
+		run.ClosedBy = closedBy.String
+		run.CloseReason = closeReason.String
+		var err error
+		if run.StartedAt, err = parseTime(startedAt); err != nil {
+			return err
 		}
+		if closedAt.Valid {
+			if run.ClosedAt, err = parseTime(closedAt.String); err != nil {
+				return err
+			}
+		}
+		if run.CreatedAt, err = parseTime(createdAt); err != nil {
+			return err
+		}
+		run.UpdatedAt, err = parseTime(updatedAt)
+		return err
 	}
-	if run.CreatedAt, err = parseTime(createdAt); err != nil {
-		return work.PlanRun{}, err
-	}
-	run.UpdatedAt, err = parseTime(updatedAt)
-	return run, err
 }
 
 // ActivePlanRunCount counts across every plan revision, because the limit is
@@ -476,11 +497,11 @@ func (s *Store) listPlanRuns(ctx context.Context, reader sqlReader, filter ports
 	conditions := []string{"1 = 1"}
 	arguments := []any{}
 	if strings.TrimSpace(filter.ObjectiveID) != "" {
-		conditions = append(conditions, "objective_id = ?")
+		conditions = append(conditions, "run.objective_id = ?")
 		arguments = append(arguments, filter.ObjectiveID)
 	}
 	if strings.TrimSpace(filter.PlanID) != "" {
-		conditions = append(conditions, "plan_id = ?")
+		conditions = append(conditions, "run.plan_id = ?")
 		arguments = append(arguments, filter.PlanID)
 	}
 	if len(filter.Statuses) != 0 {
@@ -492,14 +513,14 @@ func (s *Store) listPlanRuns(ctx context.Context, reader sqlReader, filter ports
 			placeholders = append(placeholders, "?")
 			arguments = append(arguments, string(status))
 		}
-		conditions = append(conditions, "status IN ("+strings.Join(placeholders, ", ")+")")
+		conditions = append(conditions, "run.status IN ("+strings.Join(placeholders, ", ")+")")
 	}
 	where := " WHERE " + strings.Join(conditions, " AND ")
 
 	// The total is read under the same snapshot as the page, so has_more and
 	// the count cannot describe two different sets of runs.
 	var total int
-	if err := reader.QueryRowContext(ctx, "SELECT COUNT(*) FROM plan_runs"+where, arguments...).Scan(&total); err != nil {
+	if err := reader.QueryRowContext(ctx, "SELECT COUNT(*) FROM plan_runs run"+where, arguments...).Scan(&total); err != nil {
 		return ports.PlanRunPage{}, fmt.Errorf("count plan runs: %w", err)
 	}
 	limit := filter.Limit
@@ -513,49 +534,53 @@ func (s *Store) listPlanRuns(ctx context.Context, reader sqlReader, filter ports
 	if offset > total {
 		return ports.PlanRunPage{}, fmt.Errorf("plan run listing offset %d is past the end of %d runs", offset, total)
 	}
-	rows, err := reader.QueryContext(ctx,
-		planRunSelect+where+" ORDER BY created_at DESC, sequence DESC, id DESC LIMIT ? OFFSET ?",
-		append(append([]any{}, arguments...), limit, offset)...)
+	// The counts and the revision come from the same statement as the runs
+	// rather than from a query per row: a page of a hundred runs is one read,
+	// not two hundred and one. They are aggregates of the run's own work, so
+	// a run with no work reports zeros rather than dropping out of the page.
+	rows, err := reader.QueryContext(ctx, `
+SELECT `+prefixedPlanRunColumns("run")+`, plan.revision,
+       COUNT(item.id),
+       COALESCE(SUM(CASE WHEN item.execution_status = 'done' THEN 1 ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN item.execution_status = 'cancelled' THEN 1 ELSE 0 END), 0)
+FROM plan_runs run
+JOIN plans plan ON plan.id = run.plan_id
+LEFT JOIN work_items item ON item.plan_run_id = run.id
+`+where+`
+GROUP BY run.id
+ORDER BY run.created_at DESC, run.sequence DESC, run.id DESC
+LIMIT ? OFFSET ?`, append(append([]any{}, arguments...), limit, offset)...)
 	if err != nil {
 		return ports.PlanRunPage{}, fmt.Errorf("query plan runs: %w", err)
 	}
 	defer rows.Close()
 	page := ports.PlanRunPage{Total: total}
 	for rows.Next() {
-		run, err := scanPlanRun(rows)
+		summary, err := scanPlanRunSummary(rows)
 		if err != nil {
 			return ports.PlanRunPage{}, err
 		}
-		page.Runs = append(page.Runs, ports.PlanRunSummary{Run: run})
+		page.Runs = append(page.Runs, summary)
 	}
 	if err := rows.Err(); err != nil {
 		return ports.PlanRunPage{}, err
-	}
-	for index := range page.Runs {
-		summary, err := s.summarizePlanRun(ctx, reader, page.Runs[index].Run)
-		if err != nil {
-			return ports.PlanRunPage{}, err
-		}
-		page.Runs[index] = summary
 	}
 	page.HasMore = offset+len(page.Runs) < total
 	return page, nil
 }
 
-// summarizePlanRun counts the run's work rather than deriving a status from it:
-// a run's status is what someone explicitly set, and these numbers only say how
-// much of its work is still open.
-func (s *Store) summarizePlanRun(ctx context.Context, reader sqlReader, run work.PlanRun) (ports.PlanRunSummary, error) {
-	summary := ports.PlanRunSummary{Run: run}
-	if err := reader.QueryRowContext(ctx, `
-SELECT COUNT(*),
-       COALESCE(SUM(CASE WHEN execution_status = 'done' THEN 1 ELSE 0 END), 0),
-       COALESCE(SUM(CASE WHEN execution_status = 'cancelled' THEN 1 ELSE 0 END), 0)
-FROM work_items WHERE plan_run_id = ?`, run.ID).Scan(&summary.WorkItems, &summary.Done, &summary.Cancelled); err != nil {
-		return ports.PlanRunSummary{}, fmt.Errorf("summarize plan run work: %w", err)
+// scanPlanRunSummary reads a run and the aggregates of its own work. The
+// numbers say how much of the run is still open; they never imply a status,
+// because a run's status is only ever what someone explicitly set.
+func scanPlanRunSummary(row scanner) (ports.PlanRunSummary, error) {
+	var summary ports.PlanRunSummary
+	targets, finish := planRunScanTargets(&summary.Run)
+	targets = append(targets, &summary.PlanRevision, &summary.WorkItems, &summary.Done, &summary.Cancelled)
+	if err := row.Scan(targets...); err != nil {
+		return ports.PlanRunSummary{}, fmt.Errorf("scan plan run summary: %w", err)
 	}
-	if err := reader.QueryRowContext(ctx, "SELECT revision FROM plans WHERE id = ?", run.PlanID).Scan(&summary.PlanRevision); err != nil {
-		return ports.PlanRunSummary{}, fmt.Errorf("read plan revision for run: %w", err)
+	if err := finish(); err != nil {
+		return ports.PlanRunSummary{}, err
 	}
 	return summary, nil
 }

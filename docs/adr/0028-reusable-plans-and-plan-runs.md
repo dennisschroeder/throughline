@@ -89,6 +89,21 @@ Default Plan Revision, permanent revision retirement and additional dashboard gr
 but outside this objective (`01a0920a-e457-7315-8ae6-626bf20b2148`). They are not replaced by
 implicit `latest` behaviour: every run names its revision explicitly.
 
+## Follow-on: write transactions take the lock immediately
+
+Found while proving the concurrency criterion of the second slice. Almost every mutation reads state
+and then decides what to write from it — whether a run key exists, how many runs are active, what
+version a row is at. Under a deferred transaction the write lock is only requested at the first
+write, by which point another writer may hold it; SQLite cannot make the second writer wait, because
+both already hold read locks, so it aborts one with `SQLITE_BUSY` however long the busy timeout is.
+
+Two concurrent run creations therefore did stay within the capacity limit, but by accident: both read
+a count of zero and one was killed on the lock upgrade. The caller was told "database is locked"
+rather than that it was at capacity, and the limit would not have held if the abort had landed
+differently. `_txlock=immediate` takes the write lock at `BEGIN`, so the loser waits, reads the
+committed state, and is refused by the rule it actually broke. The driver applies it only to write
+transactions; read-only ones stay deferred.
+
 ## Alternatives considered
 
 **Five tables for a step's owned child data.** A step's criteria, expected outputs, output

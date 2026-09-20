@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dennisschroeder/throughline/internal/app"
+	"github.com/dennisschroeder/throughline/internal/domain/authority"
 	"github.com/dennisschroeder/throughline/internal/domain/work"
 	"github.com/dennisschroeder/throughline/internal/ports"
 )
@@ -135,6 +136,12 @@ func TestCapacityCountsActiveRunsAcrossRevisions(t *testing.T) {
 // handles at the same objective at once, which is how two harnesses on one
 // machine actually meet. Exactly as many runs as the limit permits may exist
 // afterwards, whatever order the two attempts land in.
+//
+// It also guards the transaction mode. Under deferred transactions this passed
+// for the wrong reason: both writers read a count of zero and SQLite aborted
+// one on the lock upgrade, so the limit held by accident and the caller got
+// "database is locked" instead of being told it was at capacity. The
+// assertions below refuse that outcome.
 func TestConcurrentCreationCannotExceedTheLimit(t *testing.T) {
 	h := newRunHarness(t, "capacity-race.db", nil, 0)
 	first := h.reopen(t)
@@ -164,9 +171,15 @@ func TestConcurrentCreationCannotExceedTheLimit(t *testing.T) {
 			succeeded++
 			continue
 		}
+		// The loser must be refused by one of the two mechanisms that actually
+		// enforce the limit: the capacity check, or the uniqueness of the
+		// objective's run sequence, which is what makes two creations unable
+		// to agree on a number. A lock or busy error is neither — it would
+		// mean the limit held by accident, and a test that accepts it passes
+		// against an implementation that does not enforce anything.
 		var capacity app.RunCapacityError
-		if !errors.As(err, &capacity) && !isRaceRejection(err) {
-			t.Fatalf("attempt %d failed for an unexpected reason: %v", index, err)
+		if !errors.As(err, &capacity) && !isSequenceCollision(err) {
+			t.Fatalf("attempt %d was not refused by the capacity check or the run sequence constraint: %v", index, err)
 		}
 	}
 	if succeeded != 1 {
@@ -183,11 +196,12 @@ func TestConcurrentCreationCannotExceedTheLimit(t *testing.T) {
 	}
 }
 
-// isRaceRejection accepts the other shape a losing concurrent write can take:
-// the uniqueness constraint on the run sequence, which is what actually makes
-// the limit atomic rather than advisory.
-func isRaceRejection(err error) bool {
-	return err != nil && (strings.Contains(err.Error(), "UNIQUE constraint failed") || strings.Contains(err.Error(), "database is locked"))
+// isSequenceCollision recognizes the other shape a losing concurrent creation
+// can legitimately take: UNIQUE(objective_id, sequence) rejecting the second
+// writer that read the same highest sequence. That constraint, not the count,
+// is what makes the capacity limit atomic rather than advisory.
+func isSequenceCollision(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed: plan_runs.objective_id, plan_runs.sequence")
 }
 
 // TestASecondRunSharesNoIdentityWithTheFirst is the separateness invariant
@@ -222,13 +236,28 @@ func TestASecondRunSharesNoIdentityWithTheFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Each run carried its action to a recorded terminal result, so there is
+	// execution evidence on both sides to compare rather than only a proposal.
+	for _, side := range []ports.WorkItemContext{beforeContext, secondContext} {
+		if len(side.ExternalActions) != 1 || len(side.ExternalActions[0].Executions) != 1 || len(side.ExternalActions[0].Grants) != 1 {
+			t.Fatalf("a run is missing its authority or execution evidence: %#v", side.ExternalActions)
+		}
+		if side.ExternalActions[0].Executions[0].State != authority.ExecutionSucceeded {
+			t.Fatalf("a run's execution did not reach a terminal result: %#v", side.ExternalActions[0].Executions[0])
+		}
+	}
 	for name, pair := range map[string][2]string{
 		"work item":       {beforeContext.WorkItem.ID, secondContext.WorkItem.ID},
 		"claim":           {beforeContext.Claims[0].ID, secondContext.Claims[0].ID},
 		"expected output": {beforeContext.ExpectedOutputs[0].ExpectedOutput.ID, secondContext.ExpectedOutputs[0].ExpectedOutput.ID},
 		"output revision": {beforeContext.OutputRevisions[0].Revision.ID, secondContext.OutputRevisions[0].Revision.ID},
 		"external action": {beforeContext.ExternalActions[0].Action.ID, secondContext.ExternalActions[0].Action.ID},
-		"artifact":        {beforeContext.Artifacts[0].ID, secondContext.Artifacts[0].ID},
+		"authority grant": {beforeContext.ExternalActions[0].Grants[0].ID, secondContext.ExternalActions[0].Grants[0].ID},
+		"execution evidence": {
+			beforeContext.ExternalActions[0].Executions[0].ID,
+			secondContext.ExternalActions[0].Executions[0].ID,
+		},
+		"artifact": {beforeContext.Artifacts[0].ID, secondContext.Artifacts[0].ID},
 	} {
 		if pair[0] == pair[1] {
 			t.Fatalf("the two runs share a %s: %s", name, pair[0])
@@ -329,10 +358,43 @@ func accumulateRunHistory(t *testing.T, h *runHarness, item work.WorkItem, label
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.UnwrapMutation(h.service.ProposeExternalAction(h.ctx, app.ProposeExternalActionCommand{
+	// The action is carried all the way to a recorded terminal result, so the
+	// run accumulates execution evidence and not only a proposal — which is
+	// one of the identities the separateness claim names.
+	proposed, err := app.UnwrapMutation(h.service.ProposeExternalAction(h.ctx, app.ProposeExternalActionCommand{
 		WorkItemID: item.ID, ActorID: "agent:one", ExpectedVersion: reread.WorkItem.Version, IdempotencyKey: "action-" + label,
 		Required: false, Title: "Publish " + label, Rationale: "Gives the run an action of its own.",
 		Subject: []byte(`{"action_type":"knowledge.publish","target":{"collection":"runs"},"arguments":[],"scope":{},"permissions":["knowledge.write"],"credential_requirements":[],"constraints":{}}`),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requested, err := app.UnwrapMutation(h.service.RequestExternalActionApproval(h.ctx, app.RequestExternalActionApprovalCommand{
+		ActionID: proposed.Action.ID, ActorID: "agent:one", ExpectedActionVersion: proposed.Action.Version,
+		ExpectedSubjectHash: proposed.Revision.AuthorizationSubjectHash, IdempotencyKey: "request-" + label,
+		ApprovedForActorID: "agent:one", Constraints: []byte(`{}`), Request: "Authorize this publication.",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := app.UnwrapMutation(h.service.ResolveExternalActionApproval(h.ctx, app.ResolveExternalActionApprovalCommand{
+		ApprovalID: requested.ID, ActorID: "human:owner", ExpectedActionVersion: proposed.Action.Version,
+		IdempotencyKey: "resolve-" + label, Decision: authority.ApprovalApproved, Rationale: "The scope is appropriate.",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := app.UnwrapMutation(h.service.StartExternalActionExecution(h.ctx, app.StartExternalActionExecutionCommand{
+		ActionID: resolved.Action.ID, ActorID: "agent:one", ExpectedActionVersion: resolved.Action.Version,
+		IdempotencyKey: "start-" + label, SubjectHash: proposed.Revision.AuthorizationSubjectHash, AuthorityGrantID: resolved.Grant.ID,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.UnwrapMutation(h.service.CompleteExternalActionExecution(h.ctx, app.CompleteExternalActionExecutionCommand{
+		ExecutionID: started.Execution.ID, ActorID: "agent:one", ExpectedActionVersion: started.Action.Version,
+		IdempotencyKey: "complete-" + label, State: authority.ExecutionSucceeded,
+		Result: []byte(`{"status":"published"}`), EvidenceArtifactID: artifact.Artifact.ID,
 	})); err != nil {
 		t.Fatal(err)
 	}

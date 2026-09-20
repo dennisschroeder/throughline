@@ -40,6 +40,16 @@ func Open(ctx context.Context, path string) (*Database, error) {
 	query.Add("_pragma", "foreign_keys(1)")
 	query.Add("_pragma", "journal_mode(WAL)")
 	query.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeoutMilliseconds))
+	// Every transaction takes the write lock up front. Almost all of them read
+	// state and then decide what to write from it — whether a run key already
+	// exists, how many runs are active, what version a row is at — and a
+	// deferred transaction only asks for the write lock at the first write,
+	// by which time another writer may hold it. SQLite cannot make that second
+	// writer wait, because both already hold read locks, so it aborts one with
+	// SQLITE_BUSY however long the busy timeout is. Taking the lock at BEGIN
+	// turns that into an ordinary wait, and the loser then reads the committed
+	// state and is refused by the rule it broke rather than by a lock.
+	query.Add("_txlock", "immediate")
 	dsn := (&url.URL{Scheme: "file", Path: filepath.Clean(absolutePath), RawQuery: query.Encode()}).String()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
