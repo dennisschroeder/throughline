@@ -537,7 +537,13 @@ The server identifies executable candidates; it does **not** choose the one an a
     PlanStep key is unique across the workspace, `create_item` refuses a key containing the
     separator, and a PlanStep whose materialization namespace is already occupied by older work is
     refused when the plan is proposed.
-39. An ExternalAction copied from a PlanStep carries its AuthorizationSubject byte for byte. Throughline substitutes nothing into it, so what a run asks to be authorized is exactly what the reviewed definition recorded.
+39. Every PlanRun is findable and selectable by a session that did not create it. `list_plan_runs`
+    is bounded and filterable by objective, revision and status; an objective's continuation view
+    carries its run summaries; each WorkItem names its `plan_run_id` and `origin_plan_step_id`; and
+    `list_items` scopes to one run, which `plan_id` cannot do because every run of a revision
+    answers to the same one. Nothing resolves a latest, previous or current run on a caller's
+    behalf.
+40. An ExternalAction copied from a PlanStep carries its AuthorizationSubject byte for byte. Throughline substitutes nothing into it, so what a run asks to be authorized is exactly what the reviewed definition recorded.
 
 ### State model
 

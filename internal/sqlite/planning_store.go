@@ -415,6 +415,11 @@ func (s *Store) getObjectiveContext(ctx context.Context, reader sqlReader, id st
 	if result.Decisions, err = s.listDecisions(ctx, reader, id); err != nil {
 		return ports.ObjectiveContext{}, err
 	}
+	runs, err := s.listPlanRuns(ctx, reader, ports.PlanRunFilter{ObjectiveID: id})
+	if err != nil {
+		return ports.ObjectiveContext{}, err
+	}
+	result.PlanRuns = runs.Runs
 	if result.Approvals, err = s.listApprovals(ctx, reader, id); err != nil {
 		return ports.ObjectiveContext{}, err
 	}

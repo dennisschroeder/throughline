@@ -456,3 +456,106 @@ func (r *transactionRepository) planStepRequired(ctx context.Context, stepID str
 	}
 	return required == 1, nil
 }
+
+// ListPlanRuns answers "which executions exist here" in one bounded page,
+// newest first. It resolves no latest run of its own: the caller filters and
+// chooses, which is the whole point of the run being addressable.
+func (s *Store) ListPlanRuns(ctx context.Context, filter ports.PlanRunFilter) (ports.PlanRunPage, error) {
+	var page ports.PlanRunPage
+	err := s.withinReadTransaction(ctx, func(reader sqlReader) error {
+		var err error
+		page, err = s.listPlanRuns(ctx, reader, filter)
+		return err
+	})
+	return page, err
+}
+
+const maxPlanRunPage = 100
+
+func (s *Store) listPlanRuns(ctx context.Context, reader sqlReader, filter ports.PlanRunFilter) (ports.PlanRunPage, error) {
+	conditions := []string{"1 = 1"}
+	arguments := []any{}
+	if strings.TrimSpace(filter.ObjectiveID) != "" {
+		conditions = append(conditions, "objective_id = ?")
+		arguments = append(arguments, filter.ObjectiveID)
+	}
+	if strings.TrimSpace(filter.PlanID) != "" {
+		conditions = append(conditions, "plan_id = ?")
+		arguments = append(arguments, filter.PlanID)
+	}
+	if len(filter.Statuses) != 0 {
+		placeholders := make([]string, 0, len(filter.Statuses))
+		for _, status := range filter.Statuses {
+			if !work.ValidPlanRunStatus(status) {
+				return ports.PlanRunPage{}, fmt.Errorf("invalid plan run status %q", status)
+			}
+			placeholders = append(placeholders, "?")
+			arguments = append(arguments, string(status))
+		}
+		conditions = append(conditions, "status IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	where := " WHERE " + strings.Join(conditions, " AND ")
+
+	// The total is read under the same snapshot as the page, so has_more and
+	// the count cannot describe two different sets of runs.
+	var total int
+	if err := reader.QueryRowContext(ctx, "SELECT COUNT(*) FROM plan_runs"+where, arguments...).Scan(&total); err != nil {
+		return ports.PlanRunPage{}, fmt.Errorf("count plan runs: %w", err)
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > maxPlanRunPage {
+		limit = maxPlanRunPage
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		return ports.PlanRunPage{}, fmt.Errorf("plan run listing offset %d is past the end of %d runs", offset, total)
+	}
+	rows, err := reader.QueryContext(ctx,
+		planRunSelect+where+" ORDER BY created_at DESC, sequence DESC, id DESC LIMIT ? OFFSET ?",
+		append(append([]any{}, arguments...), limit, offset)...)
+	if err != nil {
+		return ports.PlanRunPage{}, fmt.Errorf("query plan runs: %w", err)
+	}
+	defer rows.Close()
+	page := ports.PlanRunPage{Total: total}
+	for rows.Next() {
+		run, err := scanPlanRun(rows)
+		if err != nil {
+			return ports.PlanRunPage{}, err
+		}
+		page.Runs = append(page.Runs, ports.PlanRunSummary{Run: run})
+	}
+	if err := rows.Err(); err != nil {
+		return ports.PlanRunPage{}, err
+	}
+	for index := range page.Runs {
+		summary, err := s.summarizePlanRun(ctx, reader, page.Runs[index].Run)
+		if err != nil {
+			return ports.PlanRunPage{}, err
+		}
+		page.Runs[index] = summary
+	}
+	page.HasMore = offset+len(page.Runs) < total
+	return page, nil
+}
+
+// summarizePlanRun counts the run's work rather than deriving a status from it:
+// a run's status is what someone explicitly set, and these numbers only say how
+// much of its work is still open.
+func (s *Store) summarizePlanRun(ctx context.Context, reader sqlReader, run work.PlanRun) (ports.PlanRunSummary, error) {
+	summary := ports.PlanRunSummary{Run: run}
+	if err := reader.QueryRowContext(ctx, `
+SELECT COUNT(*),
+       COALESCE(SUM(CASE WHEN execution_status = 'done' THEN 1 ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN execution_status = 'cancelled' THEN 1 ELSE 0 END), 0)
+FROM work_items WHERE plan_run_id = ?`, run.ID).Scan(&summary.WorkItems, &summary.Done, &summary.Cancelled); err != nil {
+		return ports.PlanRunSummary{}, fmt.Errorf("summarize plan run work: %w", err)
+	}
+	if err := reader.QueryRowContext(ctx, "SELECT revision FROM plans WHERE id = ?", run.PlanID).Scan(&summary.PlanRevision); err != nil {
+		return ports.PlanRunSummary{}, fmt.Errorf("read plan revision for run: %w", err)
+	}
+	return summary, nil
+}

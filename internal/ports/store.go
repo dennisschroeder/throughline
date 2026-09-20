@@ -158,6 +158,7 @@ type Store interface {
 	SelectObjectiveContext(ctx context.Context, query ObjectiveContextSelectionQuery) (ObjectiveContextSelection, error)
 	ListOutputProfiles(ctx context.Context) ([]output.Profile, error)
 	ListQuestionsNeedingAttention(ctx context.Context) ([]work.Question, error)
+	ListPlanRuns(ctx context.Context, filter PlanRunFilter) (PlanRunPage, error)
 	ListReadyWork(ctx context.Context) ([]ReadyWorkItem, error)
 	ListReadyWorkForActor(ctx context.Context, actorID string) ([]ReadyWorkItem, error)
 	ListActivity(ctx context.Context, filter ActivityFilter) ([]work.Activity, error)
@@ -258,6 +259,37 @@ type PlanContext struct {
 	Items            []PlannedWorkItem
 }
 
+// PlanRunSummary is a run and enough of its shape to tell it apart from the
+// objective's other runs: which revision it instantiates, and how much of its
+// work is still open. It is what a session picking up an objective reads to
+// choose which run to continue, so it never resolves a latest run itself.
+type PlanRunSummary struct {
+	Run          work.PlanRun `json:"run"`
+	PlanRevision int          `json:"plan_revision"`
+	WorkItems    int          `json:"work_items"`
+	Done         int          `json:"done"`
+	Cancelled    int          `json:"cancelled"`
+}
+
+// PlanRunFilter bounds a run listing. An empty filter lists the workspace's
+// runs newest first; Limit is capped by the store.
+type PlanRunFilter struct {
+	ObjectiveID string
+	PlanID      string
+	Statuses    []work.PlanRunStatus
+	Offset      int
+	Limit       int
+}
+
+// PlanRunPage is one bounded page of run summaries. HasMore says whether the
+// filter matched beyond this page, so a caller never has to infer it from a
+// full-looking page.
+type PlanRunPage struct {
+	Runs    []PlanRunSummary `json:"runs"`
+	Total   int              `json:"total"`
+	HasMore bool             `json:"has_more"`
+}
+
 // PlanRunContext is one run with what it was created from and what it
 // materialized.
 type PlanRunContext struct {
@@ -274,6 +306,10 @@ type ObjectiveContext struct {
 	Questions      []work.Question
 	Decisions      []work.Decision
 	Approvals      []work.Approval
+	// PlanRuns are this objective's runs, newest first, so a session resuming
+	// the objective can see which executions exist without asking a second
+	// question and without anything resolving a latest run for it.
+	PlanRuns []PlanRunSummary
 }
 
 // ObjectiveContextSelectionQuery identifies the bounded actor-aware continuation view.

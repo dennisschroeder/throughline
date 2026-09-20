@@ -1520,7 +1520,11 @@ type ObjectiveContextSnapshot struct {
 	AcceptedOutputs      []ports.OutputRevisionDetail `json:"accepted_outputs"`
 	AuthorityAndEvidence []ports.ExternalActionDetail `json:"authority_and_evidence"`
 	Artifacts            []output.Artifact            `json:"artifacts"`
-	RecentChanges        []work.Activity              `json:"recent_changes"`
+	// PlanRuns are the objective's executions, newest first, so a session
+	// resuming it can choose which run to continue from the same read that
+	// orients it. Nothing here resolves a latest run.
+	PlanRuns      []ports.PlanRunSummary `json:"plan_runs"`
+	RecentChanges []work.Activity        `json:"recent_changes"`
 }
 
 // SelectObjectiveContext applies the documented actor-aware continuation
@@ -1539,7 +1543,7 @@ func (s *Service) SelectObjectiveContext(ctx context.Context, query ObjectiveCon
 		return ObjectiveContextSnapshot{}, err
 	}
 	context := selection.Context
-	snapshot := ObjectiveContextSnapshot{Objective: context.Objective, SelectedContext: limitSlice(context.ContextRecords, limit), Plans: limitSlice(approvedPlans(context.Plans), limit), Questions: limitSlice(unresolvedQuestions(context.Questions), limit), Decisions: limitSlice(context.Decisions, limit), Approvals: limitSlice(context.Approvals, limit), RecentChanges: selection.RecentChanges}
+	snapshot := ObjectiveContextSnapshot{Objective: context.Objective, SelectedContext: limitSlice(context.ContextRecords, limit), Plans: limitSlice(approvedPlans(context.Plans), limit), Questions: limitSlice(unresolvedQuestions(context.Questions), limit), Decisions: limitSlice(context.Decisions, limit), Approvals: limitSlice(context.Approvals, limit), PlanRuns: limitSlice(context.PlanRuns, limit), RecentChanges: selection.RecentChanges}
 	for _, item := range selection.WorkItems {
 		snapshot.ActorRelevantWork = append(snapshot.ActorRelevantWork, item)
 		for _, revision := range item.OutputRevisions {
@@ -1581,6 +1585,9 @@ func (s *Service) SelectObjectiveContext(ctx context.Context, query ObjectiveCon
 		}
 		if !include["artifacts"] {
 			snapshot.Artifacts = nil
+		}
+		if !include["plan_runs"] {
+			snapshot.PlanRuns = nil
 		}
 		if !include["recent_changes"] {
 			snapshot.RecentChanges = nil

@@ -815,6 +815,10 @@ func (s *memoryStore) ListQuestionsNeedingAttention(context.Context) ([]work.Que
 	return nil, nil
 }
 
+func (s *memoryStore) ListPlanRuns(context.Context, ports.PlanRunFilter) (ports.PlanRunPage, error) {
+	return ports.PlanRunPage{}, nil
+}
+
 func (s *memoryStore) ListActivity(context.Context, ports.ActivityFilter) ([]work.Activity, error) {
 	return nil, nil
 }

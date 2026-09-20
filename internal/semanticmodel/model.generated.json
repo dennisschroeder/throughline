@@ -953,6 +953,10 @@
       "statement": "Creating a plan run materializes exactly one fresh work item per plan step, with its own criteria, outputs, requirements, capabilities and copied external actions, or it stores nothing at all."
     },
     {
+      "id": "runs_are_addressable",
+      "statement": "Every plan run is findable and selectable by a session that did not create it: runs are listed bounded and filtered, an objective's continuation view carries its runs, and each work item names the run and plan step it came from. Nothing resolves a latest, previous or current run on a caller's behalf."
+    },
+    {
       "id": "runs_are_separate",
       "statement": "Each plan run is a permanently separate, auditable instance. Creating a later run of the same approved revision leaves every earlier run, and everything it produced, unchanged."
     },
@@ -1131,8 +1135,8 @@
   "manifest": {
     "schema_version": "1.0",
     "model_version": "1.3.0",
-    "content_digest": "ab6bd8400e3db8bb9c2cb81896a3a2e2f965341d7252a28dba2afc539e358b57",
-    "source_digest": "0b14ca18be066a535571d709a2ffb1d8addd8c2fa2a827979510f5f8c0008692",
+    "content_digest": "ff4fd3f03ec3da2c6a73d255daada2f8dd37971a16399cb607502cc30e7cdf8b",
+    "source_digest": "59ae041562b6eb9fdf54233911dfbb048340b12846da422d7417771554ba7476",
     "bootstrap": "Throughline is a local, authoritative coordination state layer for domain-neutral work. It records intent, plans, work, outputs, validation, reuse, and delegated authority; it does not orchestrate agents or perform external effects. Capability does not imply Authority. Call get_semantic_model for details.",
     "available_sections": [
       "manifest",
@@ -1145,12 +1149,12 @@
     ],
     "section_counts": {
       "entities": 32,
-      "invariants": 22,
+      "invariants": 23,
       "lifecycles": 12,
       "relations": 35,
       "source_mappings": 33
     }
   },
-  "content_digest": "ab6bd8400e3db8bb9c2cb81896a3a2e2f965341d7252a28dba2afc539e358b57",
-  "source_digest": "0b14ca18be066a535571d709a2ffb1d8addd8c2fa2a827979510f5f8c0008692"
+  "content_digest": "ff4fd3f03ec3da2c6a73d255daada2f8dd37971a16399cb607502cc30e7cdf8b",
+  "source_digest": "59ae041562b6eb9fdf54233911dfbb048340b12846da422d7417771554ba7476"
 }

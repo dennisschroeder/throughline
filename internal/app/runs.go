@@ -654,6 +654,13 @@ func (s *Service) settleRunWork(ctx context.Context, repository ports.Repository
 	return nil
 }
 
+// ListPlanRuns is the read a session uses to find out which executions of an
+// objective exist. Throughline never picks one: the caller filters, reads the
+// page, and names the run it means.
+func (s *Service) ListPlanRuns(ctx context.Context, filter ports.PlanRunFilter) (ports.PlanRunPage, error) {
+	return s.store.ListPlanRuns(ctx, filter)
+}
+
 func (s *Service) GetPlanRun(ctx context.Context, id string) (ports.PlanRunContext, error) {
 	var result ports.PlanRunContext
 	err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {

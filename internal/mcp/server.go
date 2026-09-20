@@ -130,6 +130,7 @@ func (a *adapter) addTools(server *mcp.Server) {
 	a.add(server, "create_plan_run", "Instantiate one exact approved plan revision as a new plan run with immutable input bindings and fresh work items. objective_id accepts an objective's key.", false, schemaFor[createPlanRunInput]("objective_id", "plan_id", "actor_id", "idempotency_key", "run_key"), a.createPlanRun)
 	a.add(server, "close_plan_run", "End an active plan run explicitly as succeeded, failed, or cancelled.", false, schemaFor[closePlanRunInput]("plan_run_id", "actor_id", "idempotency_key", "expected_version", "target_status"), a.closePlanRun)
 	a.add(server, "get_plan_run", "Read one plan run with its bindings and materialized work items.", true, schemaFor[getPlanRunInput]("plan_run_id"), a.getPlanRun)
+	a.add(server, "list_plan_runs", "List plan runs newest first, with their revision and how much of their work is still open. objective_id accepts an objective's key.", true, schemaFor[listPlanRunsInput](), a.listPlanRuns)
 	a.add(server, "record_context", "Record typed objective or work-item context. objective_id accepts an objective's key.", false, schemaFor[recordContextInput]("objective_id", "actor_id", "idempotency_key", "kind", "title", "status"), a.recordContext)
 	a.add(server, "transition_context", "Transition a context record through its governed kind-specific lifecycle.", false, schemaFor[transitionContextInput]("context_record_id", "actor_id", "target_status", "expected_version", "idempotency_key"), a.transitionContext)
 	a.add(server, "record_decision", "Record a durable accepted decision. objective_id accepts an objective's key.", false, schemaFor[recordDecisionInput]("objective_id", "actor_id", "idempotency_key", "title", "decision"), a.recordDecision)
@@ -689,6 +690,8 @@ func resultSchema(name string) map[string]any {
 		return schemaForResult[ports.PlanContext]()
 	case "create_plan_run", "close_plan_run", "get_plan_run":
 		return schemaForResult[ports.PlanRunContext]()
+	case "list_plan_runs":
+		return schemaForResult[listPlanRunsResult]()
 	case "review_plan":
 		return schemaForResult[work.Plan]()
 	case "record_context", "transition_context":
@@ -1501,6 +1504,8 @@ type listItemsInput struct {
 	ObjectiveID            string                 `json:"objective_id"`
 	ObjectivePhases        []work.ObjectivePhase  `json:"objective_phase"`
 	PlanID                 string                 `json:"plan_id"`
+	PlanRunID              string                 `json:"plan_run_id"`
+	Origins                []work.WorkItemOrigin  `json:"origin"`
 	CommitmentStates       []work.ItemCommitment  `json:"commitment_state"`
 	ExecutionStatus        []work.ExecutionStatus `json:"execution_status"`
 	Priorities             []work.Priority        `json:"priority"`
@@ -1548,6 +1553,15 @@ func (a *adapter) listItems(ctx context.Context, service *app.Service, raw json.
 			continue
 		}
 		if in.PlanID != "" && (item.Plan == nil || item.Plan.ID != in.PlanID) {
+			continue
+		}
+		// plan_run_id scopes the listing to one execution. plan_id cannot do
+		// that job: a materialized item keeps its revision, so every run of a
+		// revision answers to the same plan_id.
+		if in.PlanRunID != "" && item.WorkItem.PlanRunID != in.PlanRunID {
+			continue
+		}
+		if !contains(in.Origins, item.WorkItem.Origin) {
 			continue
 		}
 		if !contains(in.ObjectivePhases, item.Objective.Phase) || !contains(in.CommitmentStates, item.WorkItem.CommitmentState) || !contains(in.ExecutionStatus, item.WorkItem.ExecutionStatus) || !contains(in.Priorities, item.WorkItem.Priority) || !contains(in.Kinds, item.WorkItem.Kind) || !contains(in.AttentionStates, item.WorkItem.AttentionState) || !contains(in.ExecutionPolicy, item.WorkItem.ExecutionPolicy) {
@@ -2752,6 +2766,48 @@ func (a *adapter) closePlanRun(ctx context.Context, service *app.Service, raw js
 type getPlanRunInput struct {
 	workspaceInput
 	PlanRunID string `json:"plan_run_id"`
+}
+
+type listPlanRunsInput struct {
+	workspaceInput
+	ObjectiveID string               `json:"objective_id,omitempty"`
+	PlanID      string               `json:"plan_id,omitempty"`
+	Statuses    []work.PlanRunStatus `json:"status,omitempty"`
+	Cursor      string               `json:"cursor,omitempty"`
+	Limit       int                  `json:"limit,omitempty"`
+}
+
+func (a *adapter) listPlanRuns(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
+	var in listPlanRunsInput
+	if err := decode(raw, &in); err != nil {
+		return nil, err
+	}
+	objectiveID, err := resolveObjectiveReference(ctx, service, in.ObjectiveID)
+	if err != nil {
+		return nil, err
+	}
+	offset, err := decodePageCursor(in.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	page, err := service.ListPlanRuns(ctx, ports.PlanRunFilter{
+		ObjectiveID: objectiveID, PlanID: in.PlanID, Statuses: in.Statuses, Offset: offset, Limit: in.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	next := ""
+	if page.HasMore {
+		next = encodePageCursor(offset + len(page.Runs))
+	}
+	return listPlanRunsResult{Runs: page.Runs, Total: page.Total, NextCursor: next, HasMore: page.HasMore}, nil
+}
+
+type listPlanRunsResult struct {
+	Runs       []ports.PlanRunSummary `json:"runs"`
+	Total      int                    `json:"total"`
+	NextCursor string                 `json:"next_cursor"`
+	HasMore    bool                   `json:"has_more"`
 }
 
 func (a *adapter) getPlanRun(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {

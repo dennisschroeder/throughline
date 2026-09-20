@@ -959,6 +959,10 @@
     {
       "id": "plan_definitions_are_not_rewritten",
       "statement": "An approved plan revision is never edited and never superseded by observation. A durable change to how the work is done is a new revision, reviewed and approved on its own."
+    },
+    {
+      "id": "runs_are_addressable",
+      "statement": "Every plan run is findable and selectable by a session that did not create it: runs are listed bounded and filtered, an objective's continuation view carries its runs, and each work item names the run and plan step it came from. Nothing resolves a latest, previous or current run on a caller's behalf."
     }
   ],
   "source_mappings": [
