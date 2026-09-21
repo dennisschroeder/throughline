@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	protocol "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -154,5 +155,75 @@ func TestListPlanRunsRejectsAnUnknownStatus(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Fatal("an unknown plan run status was accepted as a filter")
+	}
+}
+
+// TestTheToolSurfaceOffersNoSchedulingOrImplicitSelection asserts the
+// objective's non-goals against the contract itself. An absence is what a
+// later change removes without noticing, so the surface is inspected rather
+// than trusted: no tool may take a cadence, and none may offer to pick a run.
+func TestTheToolSurfaceOffersNoSchedulingOrImplicitSelection(t *testing.T) {
+	ctx, session := newSession(t)
+	tools, err := session.ListTools(ctx, &protocol.ListToolsParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools.Tools) == 0 {
+		t.Fatal("the server advertises no tools")
+	}
+	// Words that would mean Throughline had taken on triggering or cadence.
+	// These match anywhere in a field name, because no legitimate field here
+	// contains them.
+	cadence := []string{"schedule", "cron", "cadence", "interval", "recurrence", "frequency"}
+	// Whole field names that would mean it chose which run a caller meant.
+	// These are matched exactly: "max_concurrent_runs" is a capacity cap, not
+	// a selection, and contains one of them as a substring.
+	selection := map[string]bool{
+		"latest_run": true, "current_run": true, "previous_run": true, "last_successful_run": true,
+		"latest_revision": true, "current_revision": true, "use_default": true, "use_latest": true,
+		"next_run_at": true, "due_at": true,
+	}
+	for _, tool := range tools.Tools {
+		encoded, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(encoded, &schema); err != nil {
+			t.Fatal(err)
+		}
+		properties, _ := schema["properties"].(map[string]any)
+		for name := range properties {
+			lowered := strings.ToLower(name)
+			for _, banned := range cadence {
+				if strings.Contains(lowered, banned) {
+					t.Errorf("tool %s takes %q, which would make Throughline own triggering or cadence", tool.Name, name)
+				}
+			}
+			if selection[lowered] {
+				t.Errorf("tool %s takes %q, which would make Throughline choose a run or revision for the caller", tool.Name, name)
+			}
+		}
+	}
+
+	// create_plan_run requires the revision explicitly: there is no way to ask
+	// for "the current one".
+	schema := map[string]any{}
+	for _, tool := range tools.Tools {
+		if tool.Name != "create_plan_run" {
+			continue
+		}
+		encoded, _ := json.Marshal(tool.InputSchema)
+		if err := json.Unmarshal(encoded, &schema); err != nil {
+			t.Fatal(err)
+		}
+	}
+	required, _ := schema["required"].([]any)
+	names := map[string]bool{}
+	for _, value := range required {
+		names[value.(string)] = true
+	}
+	if !names["plan_id"] || !names["run_key"] || !names["objective_id"] {
+		t.Fatalf("create_plan_run does not require the caller to name what it means: %#v", required)
 	}
 }

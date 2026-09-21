@@ -1,7 +1,10 @@
 package sqlite
 
 import (
+	"context"
 	"encoding/json"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -709,5 +712,286 @@ func TestDependenciesCannotCrossRuns(t *testing.T) {
 		ActorID: "agent:one", ExpectedVersion: child.Version, IdempotencyKey: "link-same-run",
 	})); err != nil {
 		t.Fatalf("a dependency inside one run was refused: %v", err)
+	}
+}
+
+// TestALegacyPlanCannotBeRunWithoutANewRevision is the contraction promise:
+// work that predates plan runs keeps working, and the plan it hung off is not
+// quietly turned into a definition. Reusing it means writing a revision
+// somebody reviews.
+func TestALegacyPlanCannotBeRunWithoutANewRevision(t *testing.T) {
+	ctx := context.Background()
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := -1
+	for index, migration := range migrations {
+		if migration.version == 18 {
+			before = index
+		}
+	}
+	if before < 0 {
+		t.Fatal("the reusable plan runs migration is missing")
+	}
+	database, err := Open(ctx, filepath.Join(t.TempDir(), "legacy-reuse.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.ensureMigrationTable(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, migration := range migrations[:before] {
+		if err := database.applyMigration(ctx, migration); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const fixture = "2026-08-21T15:00:00.000000000Z"
+	for _, statement := range []string{
+		`INSERT INTO objectives (id, key, title, description, desired_outcome, phase, updated_by, version, created_at, updated_at)
+		 VALUES ('objective-legacy', 'OBJ-LEGACY-REUSE', 'Legacy objective', '', 'Work from before runs.', 'execution', 'human:owner', 2, '` + fixture + `', '` + fixture + `')`,
+		`INSERT INTO plans (id, objective_id, title, summary, revision, commitment_state, version, created_at, updated_at)
+		 VALUES ('plan-legacy', 'objective-legacy', 'Legacy plan', '', 1, 'approved', 2, '` + fixture + `', '` + fixture + `')`,
+		`INSERT INTO work_items (id, key, objective_id, plan_id, title, description, kind, commitment_state, execution_status,
+		   priority, estimated_scope, execution_policy, required_actor_kind, attention_state, version, created_at, updated_at)
+		 VALUES ('item-legacy', 'TH-LEGACY-REUSE', 'objective-legacy', 'plan-legacy', 'Legacy work', '', 'research', 'accepted', 'done',
+		   'medium', 'small', 'autonomous_with_report', 'agent', 'none', 4, '` + fixture + `', '` + fixture + `')`,
+		`INSERT INTO actors (id, kind, display_name, version, created_at) VALUES ('agent:one', 'agent', 'Agent', 1, '` + fixture + `')`,
+		`INSERT INTO actors (id, kind, display_name, version, created_at) VALUES ('human:owner', 'human', 'Owner', 1, '` + fixture + `')`,
+	} {
+		if _, err := database.db.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	service := app.NewService(database.Store(), &planningIDs{}, &planningClock{})
+
+	// The legacy plan is approved, and still cannot be run: it holds work, not
+	// a definition, and Throughline will not invent one from it.
+	_, err = app.UnwrapMutation(service.CreatePlanRun(ctx, app.CreatePlanRunCommand{
+		ObjectiveID: "objective-legacy", PlanID: "plan-legacy", ActorID: "agent:one",
+		IdempotencyKey: "run-legacy", RunKey: "legacy-1",
+	}))
+	if err == nil {
+		t.Fatal("a legacy plan was instantiated as though it were a definition")
+	}
+	if !strings.Contains(err.Error(), "no plan steps") {
+		t.Fatalf("the refusal does not say the plan has no definition: %v", err)
+	}
+
+	// Reuse goes through a new revision that someone reviews.
+	proposed, err := app.UnwrapMutation(service.ProposePlan(ctx, app.ProposePlanCommand{
+		ObjectiveID: "objective-legacy", ActorID: "agent:one", IdempotencyKey: "propose-from-legacy",
+		Title: "The legacy plan, written as a definition", Revision: 2,
+		Steps: []app.ProposedPlanStep{{
+			ClientRef: "only", Key: "TH-LEGACY-REWRITTEN", Title: "Legacy work, reviewed afresh", Kind: "research", Required: true,
+			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall,
+			ExecutionPolicy: work.PolicyAutonomousWithReport, RequiredActorKind: work.ActorAgent,
+		}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.UnwrapMutation(service.ReviewPlan(ctx, app.ReviewPlanCommand{
+		PlanID: proposed.Plan.ID, ReviewerActorID: "human:owner", IdempotencyKey: "approve-from-legacy",
+		Decision: work.PlanApproved, Reason: "Rewritten from what the legacy plan demonstrably contained.", ExpectedVersion: 1,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	run, err := app.UnwrapMutation(service.CreatePlanRun(ctx, app.CreatePlanRunCommand{
+		ObjectiveID: "objective-legacy", PlanID: proposed.Plan.ID, ActorID: "agent:one",
+		IdempotencyKey: "run-rewritten", RunKey: "rewritten-1",
+	}))
+	if err != nil {
+		t.Fatalf("the reviewed revision could not be run: %v", err)
+	}
+	if len(run.WorkItems) != 1 {
+		t.Fatalf("the reviewed revision materialized %d items, want 1", len(run.WorkItems))
+	}
+	// And the legacy work is untouched by any of it.
+	legacy, err := service.GetWorkItem(ctx, "item-legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.WorkItem.Origin != work.OriginLegacy || legacy.WorkItem.PlanRunID != "" ||
+		legacy.WorkItem.ExecutionStatus != work.StatusDone || legacy.WorkItem.Version != 4 {
+		t.Fatalf("legacy work changed while its plan was being rewritten: %#v", legacy.WorkItem)
+	}
+}
+
+// TestTheObjectiveDoesNoneOfItsNonGoals asserts the negatives directly rather
+// than leaving them to the absence of a feature, because an absence is exactly
+// what a later change removes without noticing.
+func TestTheObjectiveDoesNoneOfItsNonGoals(t *testing.T) {
+	h := newRunHarness(t, "non-goals.db", nil, 2)
+	objectiveBefore, err := h.service.ResolveObjective(h.ctx, h.objective.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Creating a run schedules nothing and moves no phase.
+	run, err := h.createRun("run-1", "create-1", "agent:one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterCreate, err := h.service.ResolveObjective(h.ctx, h.objective.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterCreate.Phase != objectiveBefore.Phase || afterCreate.Version != objectiveBefore.Version {
+		t.Fatalf("creating a run moved its objective: %#v", afterCreate)
+	}
+
+	// No step is chosen for anyone: every step is materialized, and all of the
+	// run's work sits in backlog until somebody moves it.
+	for _, item := range run.WorkItems {
+		if item.ExecutionStatus != work.StatusBacklog {
+			t.Fatalf("a materialized item was advanced for the caller: %#v", item)
+		}
+	}
+
+	// Nothing resolves a run for the caller: creating one requires naming the
+	// revision, and there is no way to ask for the latest.
+	if _, err := app.UnwrapMutation(h.service.CreatePlanRun(h.ctx, app.CreatePlanRunCommand{
+		ObjectiveID: h.objective.ID, ActorID: "agent:one", IdempotencyKey: "run-without-revision", RunKey: "no-revision",
+	})); err == nil {
+		t.Fatal("a run was created without naming a plan revision")
+	}
+
+	// Finishing every piece of a run's work does not finish the run: only an
+	// explicit close does, and it still does not move the objective.
+	for _, item := range run.WorkItems {
+		current, err := h.service.GetWorkItem(h.ctx, item.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		carryWorkItemToDone(t, h, current.WorkItem, "non-goal-"+item.Key)
+	}
+	stillActive, err := h.service.GetPlanRun(h.ctx, run.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stillActive.Run.Status != work.PlanRunActive {
+		t.Fatalf("a run ended itself once its work was done: %#v", stillActive.Run)
+	}
+	if _, err := app.UnwrapMutation(h.service.ClosePlanRun(h.ctx, app.ClosePlanRunCommand{
+		PlanRunID: run.Run.ID, ActorID: "agent:one", IdempotencyKey: "close",
+		ExpectedVersion: stillActive.Run.Version, TargetStatus: work.PlanRunSucceeded,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	afterClose, err := h.service.ResolveObjective(h.ctx, h.objective.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterClose.Phase != objectiveBefore.Phase || afterClose.Version != objectiveBefore.Version {
+		t.Fatalf("closing a run moved its objective: %#v", afterClose)
+	}
+}
+
+// TestAMigratedWorkspaceIsStableAcrossRepeatedReopens closes the migration
+// story: a populated pre-run database is upgraded once, and every later
+// process that opens it sees the same thing and changes nothing by looking.
+func TestAMigratedWorkspaceIsStableAcrossRepeatedReopens(t *testing.T) {
+	ctx := context.Background()
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := -1
+	for index, migration := range migrations {
+		if migration.version == 18 {
+			before = index
+		}
+	}
+	if before < 0 {
+		t.Fatal("the reusable plan runs migration is missing")
+	}
+	path := filepath.Join(t.TempDir(), "repeated-reopen.db")
+	database, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.ensureMigrationTable(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, migration := range migrations[:before] {
+		if err := database.applyMigration(ctx, migration); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const fixture = "2026-08-21T15:00:00.000000000Z"
+	for _, statement := range []string{
+		`INSERT INTO objectives (id, key, title, description, desired_outcome, phase, updated_by, version, created_at, updated_at)
+		 VALUES ('objective-reopen', 'OBJ-REOPEN', 'Populated before runs', '', 'Stable across reopens.', 'execution', 'human:owner', 2, '` + fixture + `', '` + fixture + `')`,
+		`INSERT INTO plans (id, objective_id, title, summary, revision, commitment_state, version, created_at, updated_at)
+		 VALUES ('plan-reopen', 'objective-reopen', 'Legacy plan', '', 1, 'approved', 2, '` + fixture + `', '` + fixture + `')`,
+		`INSERT INTO work_items (id, key, objective_id, plan_id, title, description, kind, commitment_state, execution_status,
+		   priority, estimated_scope, execution_policy, required_actor_kind, attention_state, version, created_at, updated_at)
+		 VALUES ('item-reopen', 'TH-REOPEN', 'objective-reopen', 'plan-reopen', 'Legacy work', '', 'research', 'accepted', 'ready',
+		   'medium', 'small', 'autonomous_with_report', 'agent', 'none', 3, '` + fixture + `', '` + fixture + `')`,
+	} {
+		if _, err := database.db.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Every later open sees exactly the same state, and migrating again is a
+	// no-op rather than a second upgrade.
+	var previous []string
+	for attempt := 1; attempt <= 3; attempt++ {
+		reopened, err := Open(ctx, path)
+		if err != nil {
+			t.Fatalf("reopen %d: %v", attempt, err)
+		}
+		if err := reopened.Migrate(ctx); err != nil {
+			t.Fatalf("reopen %d migrate: %v", attempt, err)
+		}
+		var applied int
+		if err := reopened.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations").Scan(&applied); err != nil {
+			t.Fatal(err)
+		}
+		if applied != len(migrations) {
+			t.Fatalf("reopen %d applied %d migrations, want %d", attempt, applied, len(migrations))
+		}
+		snapshot := []string{}
+		for _, query := range []string{
+			"SELECT origin || '/' || COALESCE(plan_run_id, '-') || '/' || execution_status || '/' || version FROM work_items WHERE id = 'item-reopen'",
+			"SELECT mode || '/' || max_concurrent_runs || '/' || phase || '/' || version FROM objectives WHERE id = 'objective-reopen'",
+			"SELECT CAST(COUNT(*) AS TEXT) FROM plan_runs",
+			"SELECT CAST(COUNT(*) AS TEXT) FROM plan_steps",
+			"SELECT commitment_state || '/' || version FROM plans WHERE id = 'plan-reopen'",
+		} {
+			var value string
+			if err := reopened.db.QueryRowContext(ctx, query).Scan(&value); err != nil {
+				t.Fatal(err)
+			}
+			snapshot = append(snapshot, value)
+		}
+		if err := reopened.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if previous != nil && !reflect.DeepEqual(snapshot, previous) {
+			t.Fatalf("reopen %d saw different state:\n before %#v\n now    %#v", attempt, previous, snapshot)
+		}
+		previous = snapshot
+	}
+	if previous[0] != "legacy/-/ready/3" {
+		t.Fatalf("the legacy work item changed across reopens: %q", previous[0])
+	}
+	if previous[1] != "finite/1/execution/2" {
+		t.Fatalf("the migrated objective changed across reopens: %q", previous[1])
+	}
+	if previous[2] != "0" || previous[3] != "0" {
+		t.Fatalf("reopening invented runs or steps: %q runs, %q steps", previous[2], previous[3])
 	}
 }
