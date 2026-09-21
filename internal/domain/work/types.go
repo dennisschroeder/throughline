@@ -144,6 +144,13 @@ type Objective struct {
 	PriorPhase     ObjectivePhase
 	Priority       Priority
 	Appetite       Measure
+	// Mode says how the objective ends and is fixed at creation; see
+	// ObjectiveMode. It is independent of Phase.
+	Mode ObjectiveMode
+	// MaxConcurrentRuns caps how many of this objective's plan runs may be
+	// active at once, across every plan revision. One — serial execution — is
+	// the safe default a caller has to raise deliberately.
+	MaxConcurrentRuns int
 	// LastPhaseTransition is why the objective is in its phase: the most recent
 	// transition's edge, reason, actor and time. Nil for an objective never
 	// transitioned since reasons began to be stored.
@@ -163,20 +170,25 @@ type PhaseTransition struct {
 }
 
 type Plan struct {
-	ID               string
-	ObjectiveID      string
-	Title            string
-	Summary          string
-	Revision         int
-	CommitmentState  PlanCommitment
-	ProposedBy       string
-	ProposedAt       time.Time
-	ResolvedBy       string
-	ResolvedAt       time.Time
-	ResolutionReason string
-	Version          int
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID          string
+	ObjectiveID string
+	Title       string
+	Summary     string
+	Revision    int
+	// DerivedFromPlanRunID names the run whose experience produced this
+	// revision, when one did. It is provenance and nothing else: no
+	// observation of a run ever changes a plan, and a revision still only
+	// becomes runnable by being approved on its own.
+	DerivedFromPlanRunID string
+	CommitmentState      PlanCommitment
+	ProposedBy           string
+	ProposedAt           time.Time
+	ResolvedBy           string
+	ResolvedAt           time.Time
+	ResolutionReason     string
+	Version              int
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 type WorkItem struct {
@@ -199,24 +211,35 @@ type WorkItem struct {
 	// ReviewRequirements are the reviews done waits for; none means the gate
 	// has nothing to check.
 	ReviewRequirements []ReviewRequirement
-	Version            int
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// Origin says where the item came from and therefore whether it may
+	// execute at all; PlanRunID and OriginPlanStepID carry its provenance when
+	// a run materialized it.
+	Origin           WorkItemOrigin
+	PlanRunID        string
+	OriginPlanStepID string
+	Version          int
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
-func NewObjective(id, key, title, description, desiredOutcome string, phase ObjectivePhase, priority Priority, now time.Time) (Objective, error) {
-	objective := Objective{
-		ID:             strings.TrimSpace(id),
-		Key:            strings.TrimSpace(key),
-		Title:          strings.TrimSpace(title),
-		Description:    strings.TrimSpace(description),
-		DesiredOutcome: strings.TrimSpace(desiredOutcome),
-		Phase:          phase,
-		Priority:       priority,
-		Version:        1,
-		CreatedAt:      now.UTC(),
-		UpdatedAt:      now.UTC(),
+// NewObjective normalizes and validates a new objective. Mode and
+// MaxConcurrentRuns default to the safe values — a finite objective running one
+// plan run at a time — when the caller leaves them unset.
+func NewObjective(objective Objective, now time.Time) (Objective, error) {
+	objective.ID = strings.TrimSpace(objective.ID)
+	objective.Key = strings.TrimSpace(objective.Key)
+	objective.Title = strings.TrimSpace(objective.Title)
+	objective.Description = strings.TrimSpace(objective.Description)
+	objective.DesiredOutcome = strings.TrimSpace(objective.DesiredOutcome)
+	if objective.Mode == "" {
+		objective.Mode = ObjectiveFinite
 	}
+	if objective.MaxConcurrentRuns == 0 {
+		objective.MaxConcurrentRuns = 1
+	}
+	objective.Version = 1
+	objective.CreatedAt = now.UTC()
+	objective.UpdatedAt = now.UTC()
 	if err := objective.Validate(); err != nil {
 		return Objective{}, err
 	}
@@ -235,6 +258,12 @@ func (o Objective) Validate() error {
 	}
 	if !validMeasure(o.Appetite) {
 		return fmt.Errorf("objective: invalid appetite %+v", o.Appetite)
+	}
+	if !ValidObjectiveMode(o.Mode) {
+		return fmt.Errorf("objective: invalid mode %q", o.Mode)
+	}
+	if o.MaxConcurrentRuns < 1 {
+		return fmt.Errorf("objective: max concurrent runs must be positive, not %d", o.MaxConcurrentRuns)
 	}
 	return nil
 }
@@ -279,6 +308,11 @@ func NewWorkItem(item WorkItem, now time.Time) (WorkItem, error) {
 	item.Title = strings.TrimSpace(item.Title)
 	item.Description = strings.TrimSpace(item.Description)
 	item.Kind = strings.TrimSpace(item.Kind)
+	item.PlanRunID = strings.TrimSpace(item.PlanRunID)
+	item.OriginPlanStepID = strings.TrimSpace(item.OriginPlanStepID)
+	if item.Origin == "" {
+		item.Origin = OriginUnplanned
+	}
 	item.Version = 1
 	item.CreatedAt = now.UTC()
 	item.UpdatedAt = now.UTC()
@@ -321,6 +355,15 @@ func (w WorkItem) Validate() error {
 	}
 	if !ValidAttentionState(w.AttentionState) {
 		return fmt.Errorf("work item: invalid attention state %q", w.AttentionState)
+	}
+	if !ValidWorkItemOrigin(w.Origin) {
+		return fmt.Errorf("work item: invalid origin %q", w.Origin)
+	}
+	if w.Origin.BelongsToRun() != (w.PlanRunID != "") {
+		return errors.New("work item: work belonging to a plan run requires that run, and work that does not must not name one")
+	}
+	if (w.Origin == OriginPlanStep) != (w.OriginPlanStepID != "") {
+		return errors.New("work item: only work materialized from a plan step names an origin plan step, and it always does")
 	}
 	return nil
 }

@@ -236,7 +236,7 @@ func TestProposePlanUsesStrictSnakeCaseNestedInput(t *testing.T) {
 		t.Fatalf("register actor = %#v", payload)
 	}
 	objective := call("create_objective", map[string]any{"actor_id": "agent:planner", "idempotency_key": "objective", "key": "OBJ-1", "title": "Objective", "desired_outcome": "Outcome", "phase": "planning"})["result"].(map[string]any)
-	payload := call("propose_plan", map[string]any{"objective_id": objective["id"], "actor_id": "agent:planner", "idempotency_key": "plan", "title": "Plan", "revision": 1, "items": []any{map[string]any{"client_ref": "one", "key": "TH-1", "title": "One", "kind": "research", "priority": "medium", "estimated_scope": "small", "execution_policy": "autonomous_with_report", "required_actor_kind": "agent", "unexpected": true}}})
+	payload := call("propose_plan", map[string]any{"objective_id": objective["id"], "actor_id": "agent:planner", "idempotency_key": "plan", "title": "Plan", "revision": 1, "steps": []any{map[string]any{"client_ref": "one", "key": "TH-1", "title": "One", "kind": "research", "priority": "medium", "estimated_scope": "small", "execution_policy": "autonomous_with_report", "required_actor_kind": "agent", "unexpected": true}}})
 	if payload["error"] == nil {
 		t.Fatalf("nested unknown field accepted: %#v", payload)
 	}
@@ -420,7 +420,7 @@ func TestParallelGraphNodesClaimConflictRereadAndReplayIndependently(t *testing.
 	})["result"].(map[string]any)
 	plan := call("propose_plan", map[string]any{
 		"objective_id": objective["id"], "actor_id": nodeA, "idempotency_key": "plan-" + runID, "title": "Parallel plan", "revision": 1,
-		"items": []any{map[string]any{
+		"steps": []any{map[string]any{
 			"client_ref": "shared", "key": "TH-PARALLEL-" + runID[:8], "title": "Shared work", "kind": "research",
 			"priority": "medium", "estimated_scope": "small", "execution_policy": "autonomous_with_report", "required_actor_kind": "agent",
 		}},
@@ -429,6 +429,7 @@ func TestParallelGraphNodesClaimConflictRereadAndReplayIndependently(t *testing.
 	call("review_plan", map[string]any{"plan_id": planID, "actor_id": "human:reviewer", "idempotency_key": "review-" + runID, "decision": "approved", "reason": "Approved.", "expected_version": 1})
 	call("transition_objective", map[string]any{"objective_id": objective["id"], "actor_id": "human:reviewer", "idempotency_key": "planning-" + runID, "target_phase": "planning", "reason": "Plan.", "expected_version": 1})
 	call("transition_objective", map[string]any{"objective_id": objective["id"], "actor_id": "human:reviewer", "idempotency_key": "execution-" + runID, "target_phase": "execution", "reason": "Execute.", "expected_version": 2})
+	call("create_plan_run", map[string]any{"objective_id": objective["id"], "plan_id": planID, "actor_id": nodeA, "idempotency_key": "run-" + runID, "run_key": "parallel-" + runID})
 
 	version := func(id any) any {
 		t.Helper()
@@ -634,7 +635,7 @@ func TestRuntimeValidationRejectsUnknownAuthorizationSubjectField(t *testing.T) 
 func TestRuntimeValidationRejectsUnknownFlattenedActionArgumentField(t *testing.T) {
 	ctx, session := newSession(t)
 	result, err := session.CallTool(ctx, &protocol.CallToolParams{Name: "propose_plan", Arguments: map[string]any{
-		"workspace_id": testWorkspaceID, "objective_id": "missing", "actor_id": "agent:writer", "idempotency_key": "plan", "title": "Plan", "items": []any{map[string]any{
+		"workspace_id": testWorkspaceID, "objective_id": "missing", "actor_id": "agent:writer", "idempotency_key": "plan", "title": "Plan", "steps": []any{map[string]any{
 			"client_ref": "one", "key": "TH-1", "title": "One", "kind": "research", "external_actions": []any{map[string]any{
 				"title": "External work", "action_type": "tool.install", "target": map[string]any{}, "arguments": []any{map[string]any{"unexpected": true}}, "scope": map[string]any{}, "permissions": []any{}, "credential_requirements": []any{}, "constraints": map[string]any{},
 			}},
@@ -785,13 +786,14 @@ func TestOmittedMutationsReplayAndRejectChangedRequests(t *testing.T) {
 	call("register_actor", map[string]any{"actor_id": "agent:writer", "kind": "agent", "display_name": "Writer", "idempotency_key": "matrix-writer"})
 	call("register_actor", map[string]any{"actor_id": "human:reviewer", "kind": "human", "display_name": "Reviewer", "idempotency_key": "matrix-reviewer"})
 	objective := call("create_objective", map[string]any{"actor_id": "agent:writer", "idempotency_key": "matrix-objective", "key": "MATRIX-1", "title": "Replay matrix", "desired_outcome": "Exercise mutation retries", "phase": "discovery"})["result"].(map[string]any)
-	plan := call("propose_plan", map[string]any{"objective_id": objective["id"], "actor_id": "agent:writer", "idempotency_key": "matrix-plan", "title": "Matrix plan", "revision": 1, "items": []any{
+	plan := call("propose_plan", map[string]any{"objective_id": objective["id"], "actor_id": "agent:writer", "idempotency_key": "matrix-plan", "title": "Matrix plan", "revision": 1, "steps": []any{
 		map[string]any{"client_ref": "lease", "key": "MATRIX-LEASE", "title": "Lease item", "kind": "research", "priority": "medium", "estimated_scope": "small", "execution_policy": "autonomous_with_report", "required_actor_kind": "agent"},
 		map[string]any{"client_ref": "dependent", "key": "MATRIX-DEPENDENT", "title": "Dependent item", "kind": "research", "priority": "medium", "estimated_scope": "small", "execution_policy": "autonomous_with_report", "required_actor_kind": "agent"},
 	}})["result"].(map[string]any)["plan"].(map[string]any)
 	call("review_plan", map[string]any{"plan_id": plan["id"], "actor_id": "human:reviewer", "idempotency_key": "matrix-review", "decision": "approved", "reason": "Approved", "expected_version": 1})
 	call("transition_objective", map[string]any{"objective_id": objective["id"], "actor_id": "agent:writer", "idempotency_key": "matrix-planning", "target_phase": "planning", "reason": "Planned", "expected_version": 1})
 	call("transition_objective", map[string]any{"objective_id": objective["id"], "actor_id": "agent:writer", "idempotency_key": "matrix-execution", "target_phase": "execution", "reason": "Executing", "expected_version": 2})
+	call("create_plan_run", map[string]any{"objective_id": objective["id"], "plan_id": plan["id"], "actor_id": "agent:writer", "idempotency_key": "matrix-run", "run_key": "matrix-1"})
 	items := call("list_items", map[string]any{"objective_id": objective["id"]})["result"].(map[string]any)["items"].([]any)
 	lease := items[0].(map[string]any)["work_item"].(map[string]any)
 	dependent := items[1].(map[string]any)["work_item"].(map[string]any)
@@ -907,7 +909,12 @@ func TestHTTPTwoClientNonCodeWorkflowSmoke(t *testing.T) {
 		t.Fatal("create objective failed")
 	}
 	objective := created["result"].(map[string]any)
-	plan, failed := call(clientA, "propose_plan", map[string]any{"objective_id": objective["id"], "actor_id": "agent:researcher", "idempotency_key": "plan", "title": "Research local archives", "revision": 1, "items": []any{map[string]any{"client_ref": "dossier", "key": "RES-1", "title": "Produce archive dossier", "kind": "research", "priority": "high", "estimated_scope": "small", "execution_policy": "autonomous_with_report", "required_actor_kind": "agent", "expected_outputs": []any{map[string]any{"name": "Dossier", "profile": "structured_document", "profile_version": 1, "required": true, "ordinal": 1}}}, map[string]any{"client_ref": "consumer", "key": "RES-2", "title": "Use accepted archive dossier", "kind": "workflow_design", "priority": "medium", "estimated_scope": "small", "execution_policy": "autonomous_with_report", "required_actor_kind": "agent", "output_requirements": []any{map[string]any{"required_profile_name": "structured_document", "version_constraint": "=1", "required": true, "note": "Use an accepted dossier."}}}}})
+	// The consumer's reuse requirement is added to its work item once the run
+	// has materialized it, not written into the definition: a plan step may
+	// only require one exact accepted revision, because resolving a profile
+	// constraint when a run is created would silently reach into whatever
+	// another run happened to accept.
+	plan, failed := call(clientA, "propose_plan", map[string]any{"objective_id": objective["id"], "actor_id": "agent:researcher", "idempotency_key": "plan", "title": "Research local archives", "revision": 1, "steps": []any{map[string]any{"client_ref": "dossier", "key": "RES-1", "title": "Produce archive dossier", "kind": "research", "priority": "high", "estimated_scope": "small", "execution_policy": "autonomous_with_report", "required_actor_kind": "agent", "expected_outputs": []any{map[string]any{"name": "Dossier", "profile": "structured_document", "profile_version": 1, "required": true, "ordinal": 1}}}, map[string]any{"client_ref": "consumer", "key": "RES-2", "title": "Use accepted archive dossier", "kind": "workflow_design", "priority": "medium", "estimated_scope": "small", "execution_policy": "autonomous_with_report", "required_actor_kind": "agent"}}})
 	if failed {
 		t.Fatalf("propose plan failed: %#v", plan)
 	}
@@ -922,6 +929,9 @@ func TestHTTPTwoClientNonCodeWorkflowSmoke(t *testing.T) {
 	if transitioned, failed := call(clientA, "transition_objective", map[string]any{"objective_id": objective["id"], "actor_id": "agent:researcher", "target_phase": "execution", "reason": "Plan approved", "expected_version": 2, "idempotency_key": "execute"}); failed {
 		t.Fatalf("objective transition failed: %#v", transitioned)
 	}
+	if created, failed := call(clientA, "create_plan_run", map[string]any{"objective_id": objective["id"], "plan_id": planDetail["id"], "actor_id": "agent:researcher", "idempotency_key": "run", "run_key": "archive-1"}); failed {
+		t.Fatalf("create plan run failed: %#v", created)
+	}
 	contextPayload, failed := call(clientA, "list_items", map[string]any{"objective_id": objective["id"]})
 	if failed {
 		t.Fatalf("list items failed: %#v", contextPayload)
@@ -931,9 +941,15 @@ func TestHTTPTwoClientNonCodeWorkflowSmoke(t *testing.T) {
 	item := itemContext["work_item"].(map[string]any)
 	expectedID := itemContext["expected_outputs"].([]any)[0].(map[string]any)["expected_output"].(map[string]any)["id"]
 	consumer := items[1].(map[string]any)["work_item"].(map[string]any)
-	if requirements := items[1].(map[string]any)["output_requirements"].([]any); len(requirements) != 1 {
-		t.Fatalf("consumer output requirements = %#v", requirements)
+	requirement, failed := call(clientA, "add_output_requirement", map[string]any{"work_item_id": consumer["id"], "actor_id": "agent:researcher", "idempotency_key": "consumer-requirement", "expected_version": consumer["version"], "required_profile_name": "structured_document", "version_constraint": "=1", "required": true, "note": "Use an accepted dossier."})
+	if failed {
+		t.Fatalf("add output requirement failed: %#v", requirement)
 	}
+	reread, failed := call(clientA, "get_item", map[string]any{"id": consumer["id"]})
+	if failed {
+		t.Fatalf("re-read consumer failed: %#v", reread)
+	}
+	consumer = reread["result"].(map[string]any)["work_item"].(map[string]any)
 	consumerReady, failed := call(clientA, "transition_item", map[string]any{"id": consumer["id"], "actor_id": "agent:researcher", "target_status": "ready", "expected_version": consumer["version"], "idempotency_key": "consumer-ready"})
 	if failed {
 		t.Fatalf("consumer ready failed: %#v", consumerReady)

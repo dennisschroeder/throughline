@@ -78,10 +78,7 @@ func TestQuestionGatePreservesTheStoredAttentionState(t *testing.T) {
 func TestDashboardShowsAnUnsharpQuestionHoldingAnItem(t *testing.T) {
 	h := newTestHarness(t)
 	objectiveID, planID := h.setupObjectiveWithOpenPlan()
-	h.call("review_plan", map[string]any{"plan_id": planID, "actor_id": "human:reviewer", "idempotency_key": "review", "decision": "approved", "reason": "Approved.", "expected_version": 1})
-	h.call("transition_objective", map[string]any{"objective_id": objectiveID, "actor_id": "human:reviewer", "idempotency_key": "planning-to-execution", "target_phase": "execution", "reason": "Go.", "expected_version": 1})
-	items := h.call("list_items", map[string]any{"objective_id": objectiveID})["result"].(map[string]any)["items"].([]any)
-	itemID := items[0].(map[string]any)["work_item"].(map[string]any)["id"].(string)
+	itemID := h.approveAndRun(objectiveID, planID)
 	question := h.call("ask_question", map[string]any{
 		"objective_id": objectiveID, "actor_id": "agent:dashboard-worker", "idempotency_key": "fog",
 		"question": "How retention interacts with export", "status": "unsharp",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dennisschroeder/throughline/internal/app"
@@ -44,9 +45,9 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	}
 	plan, err := app.UnwrapMutation(service.ProposePlan(ctx, app.ProposePlanCommand{
 		ObjectiveID: producerObjective.ID, ActorID: "agent:planner", IdempotencyKey: "propose-producer-plan", Title: "Research and synthesize", Revision: 1,
-		Items: []app.ProposedWorkItem{
+		Steps: []app.ProposedPlanStep{
 			{
-				ClientRef: "research", Key: "TH-DOSSIER", Title: "Research source-auditing methods", Kind: "research",
+				ClientRef: "research", Key: "TH-DOSSIER", Title: "Research source-auditing methods", Kind: "research", Required: true,
 				Priority: work.PriorityHigh, EstimatedScope: work.ScopeMedium, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 				AcceptanceCriteria: []app.ProposedAcceptanceCriterion{{Text: "The dossier distinguishes evidence from uncertainty.", Required: true, Ordinal: 1}},
 				ExpectedOutputs: []app.ProposedExpectedOutput{{
@@ -55,7 +56,7 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 				}},
 			},
 			{
-				ClientRef: "skill", Key: "TH-SKILL", Title: "Design a skill from the accepted dossier", Kind: "skill_design",
+				ClientRef: "skill", Key: "TH-SKILL", Title: "Design a skill from the accepted dossier", Kind: "skill_design", Required: true,
 				Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 			},
 		},
@@ -70,14 +71,20 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	items := itemsByKey(plan.Items)
-	research := items["TH-DOSSIER"]
-	skill := items["TH-SKILL"]
-	research, err = app.UnwrapMutation(service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: research.ID, TargetStatus: work.StatusReady, ActorID: "human:sponsor", Reason: "Approved for execution.", ExpectedVersion: 2, IdempotencyKey: "ready-research"}))
+	producerRun, err := app.UnwrapMutation(service.CreatePlanRun(ctx, app.CreatePlanRunCommand{
+		ObjectiveID: producerObjective.ID, PlanID: plan.Plan.ID, ActorID: "agent:planner", IdempotencyKey: "run-producer-plan", RunKey: "producer-1",
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	skill, err = app.UnwrapMutation(service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: skill.ID, TargetStatus: work.StatusReady, ActorID: "human:sponsor", Reason: "Queue after research.", ExpectedVersion: 2, IdempotencyKey: "ready-skill"}))
+	items := runItemsByStepKey(producerRun)
+	research := items["TH-DOSSIER"]
+	skill := items["TH-SKILL"]
+	research, err = app.UnwrapMutation(service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: research.ID, TargetStatus: work.StatusReady, ActorID: "human:sponsor", Reason: "Approved for execution.", ExpectedVersion: research.Version, IdempotencyKey: "ready-research"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill, err = app.UnwrapMutation(service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: skill.ID, TargetStatus: work.StatusReady, ActorID: "human:sponsor", Reason: "Queue after research.", ExpectedVersion: skill.Version, IdempotencyKey: "ready-skill"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +98,7 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertReadyKeys(t, ready, "TH-DOSSIER")
+	assertReadyKeys(t, ready, "TH-DOSSIER/1")
 
 	producerContext, err := service.GetWorkItem(ctx, research.ID)
 	if err != nil {
@@ -115,8 +122,8 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	}
 	consumerPlan, err := app.UnwrapMutation(service.ProposePlan(ctx, app.ProposePlanCommand{
 		ObjectiveID: consumerObjective.ID, ActorID: "agent:planner", IdempotencyKey: "propose-consumer-plan", Title: "Apply the dossier", Revision: 1,
-		Items: []app.ProposedWorkItem{{
-			ClientRef: "apply", Key: "TH-APPLY", Title: "Apply the reviewed source-auditing method", Kind: "workflow_design",
+		Steps: []app.ProposedPlanStep{{
+			ClientRef: "apply", Key: "TH-APPLY", Title: "Apply the reviewed source-auditing method", Kind: "workflow_design", Required: true,
 			Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent,
 		}},
 	}))
@@ -129,8 +136,14 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	if _, err := app.UnwrapMutation(service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: consumerObjective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:sponsor", IdempotencyKey: "transition-consumer-objective", Reason: "Begin reuse.", ExpectedVersion: 1})); err != nil {
 		t.Fatal(err)
 	}
-	consumer := consumerPlan.Items[0].WorkItem
-	consumer, err = app.UnwrapMutation(service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: consumer.ID, TargetStatus: work.StatusReady, ActorID: "human:sponsor", Reason: "Queue when the dossier is accepted.", ExpectedVersion: 2, IdempotencyKey: "ready-consumer"}))
+	consumerRun, err := app.UnwrapMutation(service.CreatePlanRun(ctx, app.CreatePlanRunCommand{
+		ObjectiveID: consumerObjective.ID, PlanID: consumerPlan.Plan.ID, ActorID: "agent:planner", IdempotencyKey: "run-consumer-plan", RunKey: "consumer-1",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer := consumerRun.WorkItems[0]
+	consumer, err = app.UnwrapMutation(service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: consumer.ID, TargetStatus: work.StatusReady, ActorID: "human:sponsor", Reason: "Queue when the dossier is accepted.", ExpectedVersion: consumer.Version, IdempotencyKey: "ready-consumer"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +165,7 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertReadyKeys(t, ready, "TH-DOSSIER")
+	assertReadyKeys(t, ready, "TH-DOSSIER/1")
 
 	validations := []app.RecordValidationCommand{
 		{OutputRevisionID: revision.ID, CriterionRef: "structure", ValidatorKind: output.ValidatorStructure, Verdict: output.VerdictPassed, VerifierActorID: "agent:validator", Details: json.RawMessage(`{"summary":"Required dossier sections are present."}`)},
@@ -209,7 +222,7 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertReadyKeys(t, ready, "TH-APPLY", "TH-SKILL")
+	assertReadyKeys(t, ready, "TH-APPLY/1", "TH-SKILL/1")
 	accepted, err := service.ListAcceptedOutputs(ctx, app.AcceptedOutputFilter{
 		ProfileName: "research_dossier", VersionConstraint: "=1", ObjectiveID: producerObjective.ID,
 		ProducedBy: "agent:researcher", AcceptedSince: revision.ProducedAt, Limit: 10,
@@ -300,7 +313,7 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	for _, activity := range allActivities {
 		events[activity.EventType] = true
 	}
-	for _, event := range []string{"objective.created", "plan.proposed", "work_item.proposed", "plan.reviewed", "objective.phase_changed", "output_revision.accepted"} {
+	for _, event := range []string{"objective.created", "plan.proposed", "plan.reviewed", "objective.phase_changed", "plan_run.created", "work_item.materialized", "output_revision.accepted"} {
 		if !events[event] {
 			t.Fatalf("activity timeline is missing %s: %#v", event, events)
 		}
@@ -319,10 +332,14 @@ func TestDurableExecutionGraphVerticalSlice(t *testing.T) {
 	}
 }
 
-func itemsByKey(items []ports.PlannedWorkItem) map[string]work.WorkItem {
-	result := make(map[string]work.WorkItem, len(items))
-	for _, item := range items {
-		result[item.WorkItem.Key] = item.WorkItem
+// runItemsByStepKey indexes a run's materialized work items by the plan step
+// key they came from, so a test can name the step rather than reconstruct the
+// per-run key the run gave its copy.
+func runItemsByStepKey(run ports.PlanRunContext) map[string]work.WorkItem {
+	result := make(map[string]work.WorkItem, len(run.WorkItems))
+	for _, item := range run.WorkItems {
+		key, _, _ := strings.Cut(item.Key, "/")
+		result[key] = item
 	}
 	return result
 }

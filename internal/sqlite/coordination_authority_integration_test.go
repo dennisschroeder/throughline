@@ -242,9 +242,9 @@ func createReadyResearchItem(t *testing.T, ctx context.Context, service *app.Ser
 	}
 	plan, err := app.UnwrapMutation(service.ProposePlan(ctx, app.ProposePlanCommand{
 		ObjectiveID: objective.ID, ActorID: "agent:planner", IdempotencyKey: "propose-plan-coordination", Title: "Research and publish", Revision: 1,
-		Items: []app.ProposedWorkItem{{
+		Steps: []app.ProposedPlanStep{{
 			ClientRef: "dossier", Key: "TH-COORDINATION", Title: "Research the dossier", Kind: "research", Priority: work.PriorityHigh,
-			EstimatedScope: work.ScopeMedium, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent, RequiredCapabilities: []string{"research"},
+			Required: true, EstimatedScope: work.ScopeMedium, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAgent, RequiredCapabilities: []string{"research"},
 		}},
 	}))
 	if err != nil {
@@ -256,8 +256,14 @@ func createReadyResearchItem(t *testing.T, ctx context.Context, service *app.Ser
 	if _, err := app.UnwrapMutation(service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: objective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:owner", IdempotencyKey: "transition-objective-coordination", Reason: "Start the approved plan.", ExpectedVersion: 1})); err != nil {
 		t.Fatal(err)
 	}
-	item := plan.Items[0].WorkItem
-	item, err = app.UnwrapMutation(service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: item.ID, TargetStatus: work.StatusReady, ActorID: "human:owner", Reason: "Ready for a research agent.", ExpectedVersion: item.Version + 1, IdempotencyKey: "ready-coordination"}))
+	run, err := app.UnwrapMutation(service.CreatePlanRun(ctx, app.CreatePlanRunCommand{
+		ObjectiveID: objective.ID, PlanID: plan.Plan.ID, ActorID: "agent:planner", IdempotencyKey: "run-plan-coordination", RunKey: "coordination-1",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := run.WorkItems[0]
+	item, err = app.UnwrapMutation(service.TransitionWorkItem(ctx, app.TransitionWorkItemCommand{WorkItemID: item.ID, TargetStatus: work.StatusReady, ActorID: "human:owner", Reason: "Ready for a research agent.", ExpectedVersion: item.Version, IdempotencyKey: "ready-coordination"}))
 	if err != nil {
 		t.Fatal(err)
 	}

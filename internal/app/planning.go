@@ -613,13 +613,26 @@ type ProposedExpectedOutput struct {
 	Ordinal         int
 }
 
-type ProposedWorkItem struct {
+// ProposedPlanInput is one named value the plan declares it needs. Throughline
+// never computes one; a run binds it.
+type ProposedPlanInput struct {
+	Name        string
+	Description string
+	Required    bool
+	Ordinal     int
+}
+
+// ProposedPlanStep is one reusable unit of the plan definition. It is not a
+// work item and never becomes one: each plan run materializes a fresh work
+// item from it.
+type ProposedPlanStep struct {
 	ClientRef            string
 	ParentRef            string
 	Key                  string
 	Title                string
 	Description          string
 	Kind                 string
+	Required             bool
 	Priority             work.Priority
 	EstimatedScope       work.EstimatedScope
 	ExecutionPolicy      work.ExecutionPolicy
@@ -629,16 +642,48 @@ type ProposedWorkItem struct {
 	DependsOn            []string
 	AcceptanceCriteria   []ProposedAcceptanceCriterion
 	ExpectedOutputs      []ProposedExpectedOutput
-	OutputRequirements   []ProposedOutputRequirement
+	OutputRequirements   []ProposedStepOutputRequirement
 	ExternalActions      []ProposedExternalAction
 }
 
+// ProposedOutputRequirement is what a live work item may require: one exact
+// accepted output revision, or an active profile and version constraint.
 type ProposedOutputRequirement struct {
 	RequiredOutputRevisionID string
 	RequiredProfileName      string
 	VersionConstraint        string
 	Required                 bool
 	Note                     string
+}
+
+// ProposedStepOutputRequirement is the narrower form a plan definition may
+// declare: one exact accepted output revision and nothing else. A
+// profile-and-constraint requirement is deliberately not expressible here,
+// because resolving one when a run is created would silently pick up whatever
+// another run happened to accept.
+type ProposedStepOutputRequirement struct {
+	RequiredOutputRevisionID string
+	Required                 bool
+	Note                     string
+}
+
+// generatedExpectedOutput, generatedOutputRequirement and
+// generatedExternalAction carry an assigned identity alongside the request it
+// came from, so a work item's owned child data can be written after the item
+// itself exists.
+type generatedExpectedOutput struct {
+	id      string
+	command ProposedExpectedOutput
+}
+
+type generatedOutputRequirement struct {
+	id      string
+	command ProposedOutputRequirement
+}
+
+type generatedExternalAction struct {
+	id      string
+	command ProposedExternalAction
 }
 
 type ProposedExternalAction struct {
@@ -661,33 +706,22 @@ type ProposePlanCommand struct {
 	Title          string
 	Summary        string
 	Revision       int
-	Items          []ProposedWorkItem
+	// DerivedFromPlanRunID names the run whose experience produced this
+	// revision, when one did. Recording it changes nothing: the revision is
+	// still a draft until someone reviews and approves it, and the run it came
+	// from keeps executing the definition it was created from.
+	DerivedFromPlanRunID string
+	Inputs               []ProposedPlanInput
+	Steps                []ProposedPlanStep
 }
 
-type generatedPlanItem struct {
-	clientRef      string
-	workItem       work.WorkItem
-	capabilities   []string
-	dependsOn      []string
-	criteria       []work.AcceptanceCriterion
-	expectedInputs []generatedExpectedOutput
-	requirements   []generatedOutputRequirement
-	actions        []generatedExternalAction
-}
-
-type generatedExpectedOutput struct {
-	id      string
-	command ProposedExpectedOutput
-}
-
-type generatedOutputRequirement struct {
-	id      string
-	command ProposedOutputRequirement
-}
-
-type generatedExternalAction struct {
-	id      string
-	command ProposedExternalAction
+// generatedPlanStep is one step with its identity assigned but not yet
+// written, so parent and dependency references can be resolved across the
+// whole proposal before anything is stored.
+type generatedPlanStep struct {
+	clientRef string
+	step      work.PlanStep
+	dependsOn []string
 }
 
 func (s *Service) proposePlanMutation(ctx context.Context, command ProposePlanCommand) (ports.PlanContext, error) {
@@ -696,12 +730,10 @@ func (s *Service) proposePlanMutation(ctx context.Context, command ProposePlanCo
 	} else if found {
 		return replay, nil
 	}
-	if len(command.Items) == 0 {
-		return ports.PlanContext{}, errors.New("proposed plan requires at least one work item")
+	if len(command.Steps) == 0 {
+		return ports.PlanContext{}, errors.New("proposed plan requires at least one plan step")
 	}
 	now := s.clock.Now()
-	var plan work.Plan
-	var items []generatedPlanItem
 	var result ports.PlanContext
 	if err := s.store.WithinTransaction(ctx, func(repository ports.Repository) error {
 		proposed, err := executeIdempotently(ctx, s, repository, command.ActorID, command.IdempotencyKey, "propose_plan", command, func() (ports.PlanContext, error) {
@@ -720,7 +752,7 @@ func (s *Service) proposePlanMutation(ctx context.Context, command ProposePlanCo
 			if err != nil {
 				return ports.PlanContext{}, fmt.Errorf("generate plan id: %w", err)
 			}
-			plan, err = work.NewPlan(planID, command.ObjectiveID, command.Title, command.Summary, revision, work.PlanProposed, now)
+			plan, err := work.NewPlan(planID, command.ObjectiveID, command.Title, command.Summary, revision, work.PlanProposed, now)
 			if err != nil {
 				return ports.PlanContext{}, err
 			}
@@ -729,143 +761,89 @@ func (s *Service) proposePlanMutation(ctx context.Context, command ProposePlanCo
 			if plan.ProposedBy == "" {
 				return ports.PlanContext{}, errors.New("proposed plan requires an actor")
 			}
-			items, err = s.generatePlanItems(command.Items, plan, now)
+			if derivedFrom := strings.TrimSpace(command.DerivedFromPlanRunID); derivedFrom != "" {
+				source, err := repository.PlanRun(ctx, derivedFrom)
+				if err != nil {
+					return ports.PlanContext{}, fmt.Errorf("load the plan run this revision is derived from: %w", err)
+				}
+				if source.ObjectiveID != plan.ObjectiveID {
+					return ports.PlanContext{}, errors.New("a revision can only cite a plan run of its own objective")
+				}
+				plan.DerivedFromPlanRunID = source.ID
+			}
+			if _, err := repository.Objective(ctx, plan.ObjectiveID); err != nil {
+				return ports.PlanContext{}, fmt.Errorf("load objective: %w", err)
+			}
+			inputs, err := s.generatePlanInputs(command.Inputs, plan, now)
 			if err != nil {
 				return ports.PlanContext{}, err
 			}
-			result = ports.PlanContext{Plan: plan}
-			if _, err := repository.Objective(ctx, plan.ObjectiveID); err != nil {
-				return ports.PlanContext{}, fmt.Errorf("load objective: %w", err)
+			steps, err := s.generatePlanSteps(command.Steps, plan, now)
+			if err != nil {
+				return ports.PlanContext{}, err
 			}
 			if err := repository.CreatePlan(ctx, plan); err != nil {
 				return ports.PlanContext{}, err
 			}
-			pending := append([]generatedPlanItem(nil), items...)
-			inserted := make(map[string]bool, len(items))
+			result = ports.PlanContext{Plan: plan, Inputs: inputs}
+			for _, input := range inputs {
+				if err := repository.CreatePlanInput(ctx, input); err != nil {
+					return ports.PlanContext{}, err
+				}
+			}
+			// A step is written only once its parent exists, so the
+			// parent_step_id foreign key holds at every point of the insert.
+			pending := append([]generatedPlanStep(nil), steps...)
+			inserted := make(map[string]bool, len(steps))
 			for len(pending) > 0 {
-				remaining := make([]generatedPlanItem, 0, len(pending))
-				for _, item := range pending {
-					if item.workItem.ParentID != "" && !inserted[item.workItem.ParentID] {
-						remaining = append(remaining, item)
+				remaining := make([]generatedPlanStep, 0, len(pending))
+				for _, candidate := range pending {
+					if candidate.step.ParentStepID != "" && !inserted[candidate.step.ParentStepID] {
+						remaining = append(remaining, candidate)
 						continue
 					}
-					if err := repository.CreateWorkItem(ctx, item.workItem); err != nil {
+					if err := s.validateStepDefinition(ctx, repository, candidate.step); err != nil {
 						return ports.PlanContext{}, err
 					}
-					inserted[item.workItem.ID] = true
+					if err := repository.CreatePlanStep(ctx, candidate.step); err != nil {
+						return ports.PlanContext{}, err
+					}
+					inserted[candidate.step.ID] = true
 				}
 				if len(remaining) == len(pending) {
-					return ports.PlanContext{}, errors.New("could not order recursive work items")
+					return ports.PlanContext{}, errors.New("could not order recursive plan steps")
 				}
 				pending = remaining
 			}
-			for _, item := range items {
-				planned := ports.PlannedWorkItem{WorkItem: item.workItem, RequiredCapabilities: append([]string(nil), item.capabilities...)}
-				for _, capability := range item.capabilities {
-					if err := repository.AddWorkItemCapability(ctx, item.workItem.ID, capability); err != nil {
-						return ports.PlanContext{}, err
-					}
-				}
-				for _, criterion := range item.criteria {
-					if err := repository.CreateAcceptanceCriterion(ctx, criterion); err != nil {
-						return ports.PlanContext{}, err
-					}
-				}
-				for _, candidate := range item.expectedInputs {
-					profile, err := repository.OutputProfile(ctx, candidate.command.ProfileName, candidate.command.ProfileVersion)
-					if err != nil {
-						return ports.PlanContext{}, fmt.Errorf("load output profile: %w", err)
-					}
-					expected, err := output.NewExpectedOutput(candidate.id, item.workItem.ID, candidate.command.Name, profile, candidate.command.Contract, candidate.command.DestinationHint, candidate.command.Required, candidate.command.Ordinal)
-					if err != nil {
-						return ports.PlanContext{}, err
-					}
-					if err := repository.CreateExpectedOutput(ctx, expected); err != nil {
-						return ports.PlanContext{}, err
-					}
-					planned.ExpectedOutputs = append(planned.ExpectedOutputs, output.ExpectedOutputDetail{ExpectedOutput: expected, Profile: profile})
-				}
-				for _, candidate := range item.requirements {
-					hasRevision := strings.TrimSpace(candidate.command.RequiredOutputRevisionID) != ""
-					hasProfile := strings.TrimSpace(candidate.command.RequiredProfileName) != "" || strings.TrimSpace(candidate.command.VersionConstraint) != ""
-					if hasRevision == hasProfile {
-						return ports.PlanContext{}, errors.New("planned output requirement must select exactly one revision or profile constraint")
-					}
-					var requirement output.OutputRequirement
-					if hasRevision {
-						revision, err := repository.OutputRevision(ctx, candidate.command.RequiredOutputRevisionID)
-						if err != nil {
-							return ports.PlanContext{}, fmt.Errorf("load required output revision: %w", err)
-						}
-						requirement, err = output.NewExactOutputRequirement(candidate.id, item.workItem.ID, revision, candidate.command.Required, candidate.command.Note)
-						if err != nil {
-							return ports.PlanContext{}, err
-						}
-					} else {
-						var err error
-						requirement, err = output.NewProfileOutputRequirement(candidate.id, item.workItem.ID, candidate.command.RequiredProfileName, candidate.command.VersionConstraint, candidate.command.Required, candidate.command.Note)
-						if err != nil {
-							return ports.PlanContext{}, err
-						}
-					}
-					if err := repository.CreateOutputRequirement(ctx, requirement); err != nil {
-						return ports.PlanContext{}, err
-					}
-					planned.OutputRequirements = append(planned.OutputRequirements, requirement)
-				}
-				for _, candidate := range item.actions {
-					action, revision, err := authority.NewExternalAction(authority.ExternalAction{ID: candidate.id, WorkItemID: item.workItem.ID, Required: candidate.command.Required, Title: candidate.command.Title, Rationale: candidate.command.Rationale}, candidate.command.AuthorizationSubject, command.ActorID, now)
-					if err != nil {
-						return ports.PlanContext{}, err
-					}
-					if err := repository.CreateExternalAction(ctx, action); err != nil {
-						return ports.PlanContext{}, err
-					}
-					if err := repository.CreateExternalActionRevision(ctx, revision); err != nil {
-						return ports.PlanContext{}, err
-					}
-					planned.ExternalActions = append(planned.ExternalActions, action)
-				}
-				if err := s.recordActivity(ctx, repository, work.Activity{
-					EntityKind: "work_item", EntityID: item.workItem.ID, WorkItemID: item.workItem.ID, ActorID: command.ActorID,
-					EventType: "work_item.proposed", Summary: fmt.Sprintf("Work item %s proposed with plan revision %d", item.workItem.Key, plan.Revision),
-				}); err != nil {
-					return ports.PlanContext{}, err
-				}
-				result.Items = append(result.Items, planned)
+			for _, candidate := range steps {
+				result.Steps = append(result.Steps, candidate.step)
 			}
-			for _, item := range items {
-				for _, dependencyRef := range item.dependsOn {
-					dependsOnID, exists := idsByClientRef(items, dependencyRef)
+			for _, candidate := range steps {
+				for _, dependencyRef := range candidate.dependsOn {
+					dependsOnID, exists := stepIDByClientRef(steps, dependencyRef)
 					if !exists {
-						return ports.PlanContext{}, fmt.Errorf("unknown dependency work item reference %q", dependencyRef)
+						return ports.PlanContext{}, fmt.Errorf("unknown dependency plan step reference %q", dependencyRef)
 					}
-					if dependsOnID == item.workItem.ID {
-						return ports.PlanContext{}, errors.New("work item cannot depend on itself")
+					if dependsOnID == candidate.step.ID {
+						return ports.PlanContext{}, errors.New("plan step cannot depend on itself")
 					}
-					cycle, err := repository.DependencyCreatesCycle(ctx, item.workItem.ID, dependsOnID)
+					cycle, err := repository.PlanStepDependencyCreatesCycle(ctx, candidate.step.ID, dependsOnID)
 					if err != nil {
 						return ports.PlanContext{}, err
 					}
 					if cycle {
-						return ports.PlanContext{}, errors.New("dependency cycle")
+						return ports.PlanContext{}, errors.New("plan step dependency cycle")
 					}
-					dependencyID, err := s.ids.New()
-					if err != nil {
-						return ports.PlanContext{}, fmt.Errorf("generate dependency id: %w", err)
-					}
-					dependency, err := work.NewDependency(work.Dependency{ID: dependencyID, WorkItemID: item.workItem.ID, DependsOnItemID: dependsOnID, Kind: work.DependencyHard, CreatedBy: command.ActorID}, now)
-					if err != nil {
+					dependency := work.PlanStepDependency{PlanStepID: candidate.step.ID, DependsOnStepID: dependsOnID}
+					if err := repository.CreatePlanStepDependency(ctx, dependency); err != nil {
 						return ports.PlanContext{}, err
 					}
-					if err := repository.CreateDependency(ctx, dependency); err != nil {
-						return ports.PlanContext{}, err
-					}
+					result.StepDependencies = append(result.StepDependencies, dependency)
 				}
 			}
 			if err := s.recordActivity(ctx, repository, work.Activity{
 				EntityKind: "plan", EntityID: plan.ID, ObjectiveID: plan.ObjectiveID, ActorID: command.ActorID,
-				EventType: "plan.proposed", Summary: fmt.Sprintf("Plan revision %d proposed with %d work items", plan.Revision, len(items)),
+				EventType: "plan.proposed", Summary: fmt.Sprintf("Plan revision %d proposed with %d plan steps", plan.Revision, len(steps)),
 			}); err != nil {
 				return ports.PlanContext{}, err
 			}
@@ -879,20 +857,49 @@ func (s *Service) proposePlanMutation(ctx context.Context, command ProposePlanCo
 	return result, nil
 }
 
-func (s *Service) generatePlanItems(commands []ProposedWorkItem, plan work.Plan, now time.Time) ([]generatedPlanItem, error) {
+func (s *Service) generatePlanInputs(commands []ProposedPlanInput, plan work.Plan, now time.Time) ([]work.PlanInput, error) {
+	inputs := make([]work.PlanInput, 0, len(commands))
+	seen := make(map[string]bool, len(commands))
+	for index, command := range commands {
+		name := strings.TrimSpace(command.Name)
+		if seen[name] {
+			return nil, fmt.Errorf("duplicate plan input %q", name)
+		}
+		seen[name] = true
+		id, err := s.ids.New()
+		if err != nil {
+			return nil, fmt.Errorf("generate plan input id: %w", err)
+		}
+		ordinal := command.Ordinal
+		if ordinal == 0 {
+			ordinal = index + 1
+		}
+		input, err := work.NewPlanInput(work.PlanInput{
+			ID: id, PlanID: plan.ID, Name: command.Name, Description: command.Description,
+			Required: command.Required, Ordinal: ordinal,
+		}, now)
+		if err != nil {
+			return nil, err
+		}
+		inputs = append(inputs, input)
+	}
+	return inputs, nil
+}
+
+func (s *Service) generatePlanSteps(commands []ProposedPlanStep, plan work.Plan, now time.Time) ([]generatedPlanStep, error) {
 	idsByRef := make(map[string]string, len(commands))
-	commandsByRef := make(map[string]ProposedWorkItem, len(commands))
+	commandsByRef := make(map[string]ProposedPlanStep, len(commands))
 	for _, command := range commands {
 		ref := strings.TrimSpace(command.ClientRef)
 		if ref == "" {
-			return nil, errors.New("proposed work item requires a client reference")
+			return nil, errors.New("proposed plan step requires a client reference")
 		}
 		if _, exists := idsByRef[ref]; exists {
-			return nil, fmt.Errorf("duplicate work item client reference %q", ref)
+			return nil, fmt.Errorf("duplicate plan step client reference %q", ref)
 		}
 		id, err := s.ids.New()
 		if err != nil {
-			return nil, fmt.Errorf("generate work item id: %w", err)
+			return nil, fmt.Errorf("generate plan step id: %w", err)
 		}
 		idsByRef[ref] = id
 		commandsByRef[ref] = command
@@ -901,34 +908,34 @@ func (s *Service) generatePlanItems(commands []ProposedWorkItem, plan work.Plan,
 		return nil, err
 	}
 
-	items := make([]generatedPlanItem, 0, len(commands))
-	for _, command := range commands {
-		reviewRequirements, err := normalizeReviewRequirements(command.ReviewRequirements)
+	steps := make([]generatedPlanStep, 0, len(commands))
+	for index, command := range commands {
+		definition, err := stepDefinition(command)
 		if err != nil {
 			return nil, err
 		}
-		item, err := work.NewWorkItem(work.WorkItem{
+		step, err := work.NewPlanStep(work.PlanStep{
 			ID:                 idsByRef[strings.TrimSpace(command.ClientRef)],
-			Key:                command.Key,
-			ObjectiveID:        plan.ObjectiveID,
 			PlanID:             plan.ID,
-			ParentID:           idsByRef[strings.TrimSpace(command.ParentRef)],
+			ClientRef:          command.ClientRef,
+			ParentStepID:       idsByRef[strings.TrimSpace(command.ParentRef)],
+			Key:                command.Key,
 			Title:              command.Title,
 			Description:        command.Description,
 			Kind:               command.Kind,
-			CommitmentState:    work.ItemProposed,
-			ExecutionStatus:    work.StatusBacklog,
+			Required:           command.Required,
 			Priority:           command.Priority,
 			EstimatedScope:     command.EstimatedScope,
 			ExecutionPolicy:    command.ExecutionPolicy,
 			RequiredActorKind:  command.RequiredActorKind,
-			AttentionState:     work.AttentionNone,
-			ReviewRequirements: reviewRequirements,
+			ReviewRequirements: command.ReviewRequirements,
+			Ordinal:            index + 1,
+			Definition:         definition,
 		}, now)
 		if err != nil {
 			return nil, err
 		}
-		generated := generatedPlanItem{clientRef: strings.TrimSpace(command.ClientRef), workItem: item}
+		generated := generatedPlanStep{clientRef: strings.TrimSpace(command.ClientRef), step: step}
 		seenDependencies := make(map[string]bool)
 		for _, dependencyRef := range command.DependsOn {
 			dependencyRef = strings.TrimSpace(dependencyRef)
@@ -940,76 +947,117 @@ func (s *Service) generatePlanItems(commands []ProposedWorkItem, plan work.Plan,
 				generated.dependsOn = append(generated.dependsOn, dependencyRef)
 			}
 		}
-		seenCapabilities := make(map[string]bool)
-		for _, capability := range command.RequiredCapabilities {
-			capability = strings.TrimSpace(capability)
-			if capability == "" {
-				return nil, errors.New("required capability cannot be empty")
-			}
-			if !seenCapabilities[capability] {
-				seenCapabilities[capability] = true
-				generated.capabilities = append(generated.capabilities, capability)
-			}
-		}
-		for _, expected := range command.ExpectedOutputs {
-			id, err := s.ids.New()
-			if err != nil {
-				return nil, fmt.Errorf("generate expected output id: %w", err)
-			}
-			generated.expectedInputs = append(generated.expectedInputs, generatedExpectedOutput{id: id, command: expected})
-		}
-		for _, requirement := range command.OutputRequirements {
-			id, err := s.ids.New()
-			if err != nil {
-				return nil, fmt.Errorf("generate output requirement id: %w", err)
-			}
-			generated.requirements = append(generated.requirements, generatedOutputRequirement{id: id, command: requirement})
-		}
-		for _, action := range command.ExternalActions {
-			id, err := s.ids.New()
-			if err != nil {
-				return nil, fmt.Errorf("generate external action id: %w", err)
-			}
-			generated.actions = append(generated.actions, generatedExternalAction{id: id, command: action})
-		}
-		for _, proposed := range command.AcceptanceCriteria {
-			id, err := s.ids.New()
-			if err != nil {
-				return nil, fmt.Errorf("generate acceptance criterion id: %w", err)
-			}
-			criterion, err := work.NewAcceptanceCriterion(work.AcceptanceCriterion{
-				ID: id, WorkItemID: item.ID, Text: proposed.Text, Required: proposed.Required, Ordinal: proposed.Ordinal,
-			})
-			if err != nil {
-				return nil, err
-			}
-			generated.criteria = append(generated.criteria, criterion)
-		}
-		items = append(items, generated)
+		steps = append(steps, generated)
 	}
-	return items, nil
+	return steps, nil
 }
 
-func idsByClientRef(items []generatedPlanItem, clientRef string) (string, bool) {
-	for _, item := range items {
-		if item.clientRef == clientRef {
-			return item.workItem.ID, true
+// stepDefinition turns the proposal's child data into the frozen snapshot each
+// run copies. Every authorization subject is canonicalized here so a plan
+// cannot be approved carrying a subject that would fail when a run copies it.
+func stepDefinition(command ProposedPlanStep) (work.StepDefinition, error) {
+	definition := work.StepDefinition{}
+	seenCapabilities := make(map[string]bool)
+	for _, capability := range command.RequiredCapabilities {
+		capability = strings.TrimSpace(capability)
+		if capability == "" {
+			return work.StepDefinition{}, errors.New("required capability cannot be empty")
+		}
+		if !seenCapabilities[capability] {
+			seenCapabilities[capability] = true
+			definition.RequiredCapabilities = append(definition.RequiredCapabilities, capability)
+		}
+	}
+	for _, criterion := range command.AcceptanceCriteria {
+		definition.AcceptanceCriteria = append(definition.AcceptanceCriteria, work.StepCriterion{
+			Text: strings.TrimSpace(criterion.Text), Required: criterion.Required, Ordinal: criterion.Ordinal,
+		})
+	}
+	for _, expected := range command.ExpectedOutputs {
+		definition.ExpectedOutputs = append(definition.ExpectedOutputs, work.StepExpectedOutput{
+			Name: strings.TrimSpace(expected.Name), ProfileName: strings.TrimSpace(expected.ProfileName),
+			ProfileVersion: expected.ProfileVersion, Contract: string(expected.Contract),
+			DestinationHint: expected.DestinationHint, Required: expected.Required, Ordinal: expected.Ordinal,
+		})
+	}
+	for _, requirement := range command.OutputRequirements {
+		definition.OutputRequirements = append(definition.OutputRequirements, work.StepOutputRequirement{
+			RequiredOutputRevisionID: strings.TrimSpace(requirement.RequiredOutputRevisionID),
+			Required:                 requirement.Required, Note: requirement.Note,
+		})
+	}
+	for _, action := range command.ExternalActions {
+		canonical, err := authority.CanonicalizeSubject(action.AuthorizationSubject)
+		if err != nil {
+			return work.StepDefinition{}, fmt.Errorf("plan step external action %q: %w", action.Title, err)
+		}
+		definition.ExternalActions = append(definition.ExternalActions, work.StepExternalAction{
+			Required: action.Required, Title: strings.TrimSpace(action.Title), Rationale: action.Rationale,
+			AuthorizationSubject: string(canonical),
+		})
+	}
+	return definition, nil
+}
+
+// validateStepDefinition resolves everything the definition refers to at
+// proposal time. An approved definition is immutable and copied into every
+// later run, so a dangling profile or output revision has to be caught now
+// rather than when some run is created months later.
+func (s *Service) validateStepDefinition(ctx context.Context, repository ports.Repository, step work.PlanStep) error {
+	taken, err := repository.MaterializedKeyNamespaceTaken(ctx, step.Key)
+	if err != nil {
+		return err
+	}
+	if taken {
+		return fmt.Errorf("plan step key %q cannot be used: an existing work item already occupies a key a run of this step would produce (%s...)", step.Key, work.MaterializedKeyNamespace(step.Key))
+	}
+	for _, expected := range step.Definition.ExpectedOutputs {
+		profile, err := repository.OutputProfile(ctx, expected.ProfileName, expected.ProfileVersion)
+		if err != nil {
+			return fmt.Errorf("plan step %q expected output %q: %w", step.Key, expected.Name, err)
+		}
+		// The profile is checked here as well as when a run copies the step,
+		// so a plan cannot be approved against a vocabulary that was never
+		// activated or has since been superseded.
+		if _, err := output.NewExpectedOutput("00000000-0000-7000-8000-000000000000", step.ID, expected.Name, profile, json.RawMessage(expected.Contract), expected.DestinationHint, expected.Required, expected.Ordinal); err != nil {
+			return fmt.Errorf("plan step %q expected output %q: %w", step.Key, expected.Name, err)
+		}
+	}
+	for _, requirement := range step.Definition.OutputRequirements {
+		revision, err := repository.OutputRevision(ctx, requirement.RequiredOutputRevisionID)
+		if err != nil {
+			return fmt.Errorf("plan step %q output requirement: %w", step.Key, err)
+		}
+		// Acceptance is checked now rather than when a run copies it. The
+		// definition is immutable once approved, so a revision that was never
+		// accepted would block every run materialized from this step forever.
+		if revision.AcceptanceState != output.RevisionAccepted {
+			return fmt.Errorf("plan step %q requires output revision %s, which is %s; a plan definition may only require an accepted revision", step.Key, revision.ID, revision.AcceptanceState)
+		}
+	}
+	return nil
+}
+
+func stepIDByClientRef(steps []generatedPlanStep, clientRef string) (string, bool) {
+	for _, candidate := range steps {
+		if candidate.clientRef == clientRef {
+			return candidate.step.ID, true
 		}
 	}
 	return "", false
 }
 
-func validateParentReferences(commands map[string]ProposedWorkItem) error {
+func validateParentReferences(commands map[string]ProposedPlanStep) error {
 	for ref, command := range commands {
 		seen := map[string]bool{ref: true}
 		parent := strings.TrimSpace(command.ParentRef)
 		for parent != "" {
 			candidate, exists := commands[parent]
 			if !exists {
-				return fmt.Errorf("unknown parent work item reference %q", parent)
+				return fmt.Errorf("unknown parent plan step reference %q", parent)
 			}
 			if seen[parent] {
-				return fmt.Errorf("recursive work item parent cycle at %q", parent)
+				return fmt.Errorf("recursive plan step parent cycle at %q", parent)
 			}
 			seen[parent] = true
 			parent = strings.TrimSpace(candidate.ParentRef)
@@ -1201,18 +1249,12 @@ func (s *Service) reviewPlanMutation(ctx context.Context, command ReviewPlanComm
 			if err != nil {
 				return work.Plan{}, err
 			}
-			if reviewed.CommitmentState == work.PlanApproved {
-				latestRevision, err := repository.LatestApprovedPlanRevision(ctx, reviewed.ObjectiveID)
-				if err != nil {
-					return work.Plan{}, err
-				}
-				if latestRevision >= reviewed.Revision {
-					return work.Plan{}, errors.New("a plan with the same or newer revision is already approved")
-				}
-				if err := repository.SupersedeEarlierPlans(ctx, reviewed.ObjectiveID, reviewed.Revision, reviewed.ResolvedAt); err != nil {
-					return work.Plan{}, err
-				}
-			}
+			// Approving a revision says this definition may be run. It says
+			// nothing about the others: every approved revision stays
+			// instantiable, so a run started from an earlier one keeps working
+			// and a caller that means the older definition can still name it.
+			// Retiring a revision deliberately is its own audited action and is
+			// not part of this objective.
 			if err := repository.UpdatePlan(ctx, reviewed, command.ExpectedVersion); err != nil {
 				return work.Plan{}, err
 			}
@@ -1487,7 +1529,11 @@ type ObjectiveContextSnapshot struct {
 	AcceptedOutputs      []ports.OutputRevisionDetail `json:"accepted_outputs"`
 	AuthorityAndEvidence []ports.ExternalActionDetail `json:"authority_and_evidence"`
 	Artifacts            []output.Artifact            `json:"artifacts"`
-	RecentChanges        []work.Activity              `json:"recent_changes"`
+	// PlanRuns are the objective's executions, newest first, so a session
+	// resuming it can choose which run to continue from the same read that
+	// orients it. Nothing here resolves a latest run.
+	PlanRuns      []ports.PlanRunSummary `json:"plan_runs"`
+	RecentChanges []work.Activity        `json:"recent_changes"`
 }
 
 // SelectObjectiveContext applies the documented actor-aware continuation
@@ -1506,7 +1552,7 @@ func (s *Service) SelectObjectiveContext(ctx context.Context, query ObjectiveCon
 		return ObjectiveContextSnapshot{}, err
 	}
 	context := selection.Context
-	snapshot := ObjectiveContextSnapshot{Objective: context.Objective, SelectedContext: limitSlice(context.ContextRecords, limit), Plans: limitSlice(approvedPlans(context.Plans), limit), Questions: limitSlice(unresolvedQuestions(context.Questions), limit), Decisions: limitSlice(context.Decisions, limit), Approvals: limitSlice(context.Approvals, limit), RecentChanges: selection.RecentChanges}
+	snapshot := ObjectiveContextSnapshot{Objective: context.Objective, SelectedContext: limitSlice(context.ContextRecords, limit), Plans: limitSlice(approvedPlans(context.Plans), limit), Questions: limitSlice(unresolvedQuestions(context.Questions), limit), Decisions: limitSlice(context.Decisions, limit), Approvals: limitSlice(context.Approvals, limit), PlanRuns: limitSlice(context.PlanRuns, limit), RecentChanges: selection.RecentChanges}
 	for _, item := range selection.WorkItems {
 		snapshot.ActorRelevantWork = append(snapshot.ActorRelevantWork, item)
 		for _, revision := range item.OutputRevisions {
@@ -1548,6 +1594,9 @@ func (s *Service) SelectObjectiveContext(ctx context.Context, query ObjectiveCon
 		}
 		if !include["artifacts"] {
 			snapshot.Artifacts = nil
+		}
+		if !include["plan_runs"] {
+			snapshot.PlanRuns = nil
 		}
 		if !include["recent_changes"] {
 			snapshot.RecentChanges = nil

@@ -39,10 +39,28 @@ type Repository interface {
 	Decision(ctx context.Context, id string) (work.Decision, error)
 	UpdateDecision(context.Context, work.Decision) error
 	CreatePlan(context.Context, work.Plan) error
+	CreatePlanInput(context.Context, work.PlanInput) error
+	PlanInputs(ctx context.Context, planID string) ([]work.PlanInput, error)
+	CreatePlanStep(context.Context, work.PlanStep) error
+	PlanSteps(ctx context.Context, planID string) ([]work.PlanStep, error)
+	CreatePlanStepDependency(context.Context, work.PlanStepDependency) error
+	PlanStepDependencies(ctx context.Context, planID string) ([]work.PlanStepDependency, error)
+	PlanStepDependencyCreatesCycle(ctx context.Context, stepID, dependsOnStepID string) (bool, error)
+	MaterializedKeyNamespaceTaken(ctx context.Context, stepKey string) (bool, error)
+	CreatePlanRun(context.Context, work.PlanRun) error
+	PlanRun(ctx context.Context, id string) (work.PlanRun, error)
+	PlanRunByKey(ctx context.Context, objectiveID, runKey string) (work.PlanRun, error)
+	ActivePlanRunCount(ctx context.Context, objectiveID string) (int, error)
+	NextPlanRunSequence(ctx context.Context, objectiveID string) (int, error)
+	UpdatePlanRun(ctx context.Context, run work.PlanRun, expectedVersion int) error
+	PlanRunIsActive(ctx context.Context, planRunID string) (bool, error)
+	PlanRunWorkItems(ctx context.Context, planRunID string) ([]work.WorkItem, error)
+	PlanRunClosureFacts(ctx context.Context, planRunID string) (work.RunClosureFacts, error)
+	OpenClaimsForRun(ctx context.Context, planRunID string) ([]work.Claim, error)
+	CreateRunInputBinding(context.Context, work.RunInputBinding) error
+	RunInputBindings(ctx context.Context, planRunID string) ([]work.RunInputBinding, error)
 	Plan(ctx context.Context, id string) (work.Plan, error)
 	LatestPlanRevision(ctx context.Context, objectiveID string) (int, error)
-	LatestApprovedPlanRevision(ctx context.Context, objectiveID string) (int, error)
-	SupersedeEarlierPlans(ctx context.Context, objectiveID string, revision int, updatedAt time.Time) error
 	UpdatePlan(ctx context.Context, plan work.Plan, expectedVersion int) error
 	SetPlanItemsCommitment(ctx context.Context, planID string, state work.ItemCommitment, updatedAt time.Time) error
 	CreateApproval(context.Context, work.Approval) error
@@ -87,6 +105,7 @@ type Repository interface {
 	CreateProgressEntry(context.Context, work.ProgressEntry) error
 	Artifacts(ctx context.Context, workItemID string) ([]output.Artifact, error)
 	RequiredExternalActionsSatisfied(ctx context.Context, workItemID string) (bool, error)
+	StartedExternalActionsSettled(ctx context.Context, workItemID string) (bool, error)
 	CreateExternalAction(context.Context, authority.ExternalAction) error
 	ExternalAction(ctx context.Context, id string) (authority.ExternalAction, error)
 	UpdateExternalAction(ctx context.Context, action authority.ExternalAction, expectedVersion int) error
@@ -138,6 +157,7 @@ type Store interface {
 	SelectObjectiveContext(ctx context.Context, query ObjectiveContextSelectionQuery) (ObjectiveContextSelection, error)
 	ListOutputProfiles(ctx context.Context) ([]output.Profile, error)
 	ListQuestionsNeedingAttention(ctx context.Context) ([]work.Question, error)
+	ListPlanRuns(ctx context.Context, filter PlanRunFilter) (PlanRunPage, error)
 	ListReadyWork(ctx context.Context) ([]ReadyWorkItem, error)
 	ListReadyWorkForActor(ctx context.Context, actorID string) ([]ReadyWorkItem, error)
 	ListActivity(ctx context.Context, filter ActivityFilter) ([]work.Activity, error)
@@ -224,9 +244,58 @@ type PlannedWorkItem struct {
 	ExternalActions      []authority.ExternalAction
 }
 
+// PlanContext is a plan revision, its reusable definition, and every work item
+// currently linked to it: the items a legacy plan created directly, plus the
+// items every run of this revision materialized. Inputs and Steps are the
+// definition and are the same whatever has been run from it; Items grows with
+// each run and says nothing about which run an item belongs to — PlanRunContext
+// answers that.
 type PlanContext struct {
-	Plan  work.Plan
-	Items []PlannedWorkItem
+	Plan             work.Plan
+	Inputs           []work.PlanInput
+	Steps            []work.PlanStep
+	StepDependencies []work.PlanStepDependency
+	Items            []PlannedWorkItem
+}
+
+// PlanRunSummary is a run and enough of its shape to tell it apart from the
+// objective's other runs: which revision it instantiates, and how much of its
+// work is still open. It is what a session picking up an objective reads to
+// choose which run to continue, so it never resolves a latest run itself.
+type PlanRunSummary struct {
+	Run          work.PlanRun `json:"run"`
+	PlanRevision int          `json:"plan_revision"`
+	WorkItems    int          `json:"work_items"`
+	Done         int          `json:"done"`
+	Cancelled    int          `json:"cancelled"`
+}
+
+// PlanRunFilter bounds a run listing. An empty filter lists the workspace's
+// runs newest first; Limit is capped by the store.
+type PlanRunFilter struct {
+	ObjectiveID string
+	PlanID      string
+	Statuses    []work.PlanRunStatus
+	Offset      int
+	Limit       int
+}
+
+// PlanRunPage is one bounded page of run summaries. HasMore says whether the
+// filter matched beyond this page, so a caller never has to infer it from a
+// full-looking page.
+type PlanRunPage struct {
+	Runs    []PlanRunSummary `json:"runs"`
+	Total   int              `json:"total"`
+	HasMore bool             `json:"has_more"`
+}
+
+// PlanRunContext is one run with what it was created from and what it
+// materialized.
+type PlanRunContext struct {
+	Run       work.PlanRun
+	Plan      work.Plan
+	Bindings  []work.RunInputBinding
+	WorkItems []work.WorkItem
 }
 
 type ObjectiveContext struct {
@@ -236,6 +305,10 @@ type ObjectiveContext struct {
 	Questions      []work.Question
 	Decisions      []work.Decision
 	Approvals      []work.Approval
+	// PlanRuns are this objective's runs, newest first, so a session resuming
+	// the objective can see which executions exist without asking a second
+	// question and without anything resolving a latest run for it.
+	PlanRuns []PlanRunSummary
 }
 
 // ObjectiveContextSelectionQuery identifies the bounded actor-aware continuation view.

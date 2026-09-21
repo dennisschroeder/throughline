@@ -61,13 +61,13 @@ func TestMeasureRequiresUnitAndBasisOnceAnyFieldIsSet(t *testing.T) {
 // not a parallel one that could silently drift from it.
 func TestObjectiveRequiresAValidPriority(t *testing.T) {
 	now := time.Now()
-	if _, err := NewObjective("id", "OBJ-1", "Title", "", "Outcome", ObjectiveIdea, "", now); err == nil {
+	if _, err := NewObjective(Objective{ID: "id", Key: "OBJ-1", Title: "Title", DesiredOutcome: "Outcome", Phase: ObjectiveIdea}, now); err == nil {
 		t.Fatal("an objective with no priority was accepted")
 	}
-	if _, err := NewObjective("id", "OBJ-1", "Title", "", "Outcome", ObjectiveIdea, "urgent-ish", now); err == nil {
+	if _, err := NewObjective(Objective{ID: "id", Key: "OBJ-1", Title: "Title", DesiredOutcome: "Outcome", Phase: ObjectiveIdea, Priority: "urgent-ish"}, now); err == nil {
 		t.Fatal("an objective with an unrecognized priority was accepted")
 	}
-	objective, err := NewObjective("id", "OBJ-1", "Title", "", "Outcome", ObjectiveIdea, PriorityUrgent, now)
+	objective, err := NewObjective(Objective{ID: "id", Key: "OBJ-1", Title: "Title", DesiredOutcome: "Outcome", Phase: ObjectiveIdea, Priority: PriorityUrgent}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestObjectiveRequiresAValidPriority(t *testing.T) {
 // TestObjectiveRejectsAnInvalidAppetite ensures Appetite is validated the same
 // way any other Measure is, not exempted because it lives on Objective.
 func TestObjectiveRejectsAnInvalidAppetite(t *testing.T) {
-	objective := Objective{ID: "id", Key: "OBJ-1", Title: "Title", DesiredOutcome: "Outcome", Phase: ObjectiveIdea, Priority: PriorityMedium}
+	objective := Objective{ID: "id", Key: "OBJ-1", Title: "Title", DesiredOutcome: "Outcome", Phase: ObjectiveIdea, Priority: PriorityMedium, Mode: ObjectiveFinite, MaxConcurrentRuns: 1}
 	objective.Appetite = Measure{Value: 100, Unit: "days"}
 	if err := objective.Validate(); err == nil {
 		t.Fatal("an objective with an incomplete appetite was accepted")
@@ -99,7 +99,7 @@ func TestWorkItemRejectsAnInvalidMeasure(t *testing.T) {
 		ID: "id", Key: "TH-1", ObjectiveID: "objective", Title: "Title", Kind: "research",
 		CommitmentState: ItemProposed, ExecutionStatus: StatusBacklog, Priority: PriorityMedium,
 		EstimatedScope: ScopeSmall, ExecutionPolicy: PolicyAgentMayPropose, RequiredActorKind: ActorAny,
-		AttentionState: AttentionNone,
+		AttentionState: AttentionNone, Origin: OriginUnplanned,
 	}
 	item.Measure = Measure{Value: 200, Unit: "tokens"}
 	if err := item.Validate(); err == nil {

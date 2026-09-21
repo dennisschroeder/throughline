@@ -36,6 +36,10 @@ type CreateObjectiveCommand struct {
 	Phase          work.ObjectivePhase
 	Priority       work.Priority
 	Appetite       work.Measure
+	// Mode is fixed for the objective's whole life; MaxConcurrentRuns caps how
+	// many of its plan runs may be active at once. Both default below.
+	Mode              work.ObjectiveMode
+	MaxConcurrentRuns int
 }
 
 func (s *Service) createObjectiveMutation(ctx context.Context, command CreateObjectiveCommand) (work.Objective, error) {
@@ -46,6 +50,12 @@ func (s *Service) createObjectiveMutation(ctx context.Context, command CreateObj
 	// idempotency_key_reused_with_different_request.
 	if command.Priority == "" {
 		command.Priority = work.PriorityMedium
+	}
+	if command.Mode == "" {
+		command.Mode = work.ObjectiveFinite
+	}
+	if command.MaxConcurrentRuns == 0 {
+		command.MaxConcurrentRuns = 1
 	}
 	if replay, found, err := replayIdempotently[work.Objective](ctx, s, command.ActorID, command.IdempotencyKey, "create_objective", command); err != nil {
 		return work.Objective{}, err
@@ -62,7 +72,7 @@ func (s *Service) createObjectiveMutation(ctx context.Context, command CreateObj
 	if err != nil {
 		return work.Objective{}, fmt.Errorf("generate objective id: %w", err)
 	}
-	objective, err := work.NewObjective(id, command.Key, command.Title, command.Description, command.DesiredOutcome, command.Phase, command.Priority, s.clock.Now())
+	objective, err := work.NewObjective(work.Objective{ID: id, Key: command.Key, Title: command.Title, Description: command.Description, DesiredOutcome: command.DesiredOutcome, Phase: command.Phase, Priority: command.Priority, Mode: command.Mode, MaxConcurrentRuns: command.MaxConcurrentRuns}, s.clock.Now())
 	if err != nil {
 		return work.Objective{}, err
 	}
@@ -109,6 +119,9 @@ type PatchObjectiveCommand struct {
 	DesiredOutcome  *string
 	Priority        *work.Priority
 	Appetite        *work.Measure
+	// MaxConcurrentRuns can be raised or lowered later; Mode cannot, so it has
+	// no field here.
+	MaxConcurrentRuns *int
 }
 
 func (s *Service) patchObjectiveMutation(ctx context.Context, command PatchObjectiveCommand) (work.Objective, error) {
@@ -136,6 +149,13 @@ func (s *Service) patchObjectiveMutation(ctx context.Context, command PatchObjec
 			}
 			if command.Appetite != nil {
 				objective.Appetite = *command.Appetite
+			}
+			// Mode is deliberately absent: it is fixed at creation, because
+			// changing it would retroactively change what completing this
+			// objective and every run recorded under it meant. A changed
+			// purpose gets a new objective linked to this one.
+			if command.MaxConcurrentRuns != nil {
+				objective.MaxConcurrentRuns = *command.MaxConcurrentRuns
 			}
 			if err := objective.Validate(); err != nil {
 				return work.Objective{}, err
@@ -236,6 +256,9 @@ func (s *Service) patchWorkItemMutation(ctx context.Context, command PatchWorkIt
 					}
 					if parent.ObjectiveID != item.ObjectiveID {
 						return work.WorkItem{}, errors.New("work item parent belongs to another objective")
+					}
+					if parent.PlanRunID != item.PlanRunID {
+						return work.WorkItem{}, errors.New("work item parent belongs to another plan run; runs are separate, so a run's work cannot hang off another run's")
 					}
 					if parent.ID == item.ID {
 						return work.WorkItem{}, errors.New("work item cannot be its own parent")
@@ -707,11 +730,16 @@ func (s *Service) createPlanMutation(ctx context.Context, command CreatePlanComm
 }
 
 type CreateWorkItemCommand struct {
-	ActorID              string
-	IdempotencyKey       string
-	Key                  string
-	ObjectiveID          string
-	PlanID               string
+	ActorID        string
+	IdempotencyKey string
+	Key            string
+	ObjectiveID    string
+	PlanID         string
+	// PlanRunID makes this a run-local work item: work an agent adds inside an
+	// active run because the situation asked for it. It has no plan step
+	// behind it, it executes under the same gates as the run's other work, and
+	// it changes the plan revision not at all.
+	PlanRunID            string
 	ParentID             string
 	Title                string
 	Description          string
@@ -773,6 +801,17 @@ func (s *Service) createWorkItemMutation(ctx context.Context, command CreateWork
 	if err != nil {
 		return work.WorkItem{}, err
 	}
+	// The run separator is reserved for keys a plan run materializes. A
+	// hand-written "research/1" would otherwise occupy the namespace a future
+	// run of a step called "research" needs, and that run — and every retry of
+	// it — would fail against an approved definition nobody could then use.
+	if strings.Contains(command.Key, work.RunKeySeparator) {
+		return work.WorkItem{}, fmt.Errorf("work item key %q must not contain %q: it is reserved for work a plan run materializes from a plan step", command.Key, work.RunKeySeparator)
+	}
+	origin := work.OriginUnplanned
+	if strings.TrimSpace(command.PlanRunID) != "" {
+		origin = work.OriginRunLocal
+	}
 	id, err := s.ids.New()
 	if err != nil {
 		return work.WorkItem{}, fmt.Errorf("generate work item id: %w", err)
@@ -795,6 +834,12 @@ func (s *Service) createWorkItemMutation(ctx context.Context, command CreateWork
 		RequiredActorKind:  command.RequiredActorKind,
 		AttentionState:     command.AttentionState,
 		ReviewRequirements: reviewRequirements,
+		// Work named for a run is run-local: it executes under that run's
+		// gates and ends with it. Work created with no run is a proposal —
+		// recorded and readable, and outside the plan-run audit path until
+		// someone deliberately takes it into a run.
+		Origin:    origin,
+		PlanRunID: command.PlanRunID,
 	}, s.clock.Now())
 	if err != nil {
 		return work.WorkItem{}, err
@@ -819,7 +864,31 @@ func (s *Service) createWorkItemMutation(ctx context.Context, command CreateWork
 					return work.WorkItem{}, errors.New("work item plan belongs to another objective")
 				}
 			}
-			if advanced && (item.PlanID == "" || objective.Phase != work.ObjectiveExecution || plan.CommitmentState != work.PlanApproved) {
+			// Run-local work is added to a run that is already executing, so
+			// it answers to the run rather than to the plan-approved gate that
+			// governs work created outside one.
+			if item.Origin == work.OriginRunLocal {
+				run, err := repository.PlanRun(ctx, item.PlanRunID)
+				if err != nil {
+					return work.WorkItem{}, fmt.Errorf("load plan run: %w", err)
+				}
+				if run.ObjectiveID != item.ObjectiveID {
+					return work.WorkItem{}, errors.New("work item plan run belongs to another objective")
+				}
+				if run.Status != work.PlanRunActive {
+					return work.WorkItem{}, fmt.Errorf("plan run is %s; work can only be added to an active run", run.Status)
+				}
+				if objective.Phase != work.ObjectiveExecution {
+					return work.WorkItem{}, fmt.Errorf("adding work to a run requires an objective in execution phase, not %s", objective.Phase)
+				}
+				if item.PlanID != "" && item.PlanID != run.PlanID {
+					return work.WorkItem{}, errors.New("run-local work cannot name a different plan revision than its run")
+				}
+				// It carries the run's revision so the existing plan-approved
+				// gate reads the same answer for it as for the run's other
+				// work, and so it is listed with the run it belongs to.
+				item.PlanID = run.PlanID
+			} else if advanced && (item.PlanID == "" || objective.Phase != work.ObjectiveExecution || plan.CommitmentState != work.PlanApproved) {
 				return work.WorkItem{}, errors.New("accepted ready work items require an approved plan in an execution objective")
 			}
 			if item.ParentID != "" {
@@ -830,6 +899,15 @@ func (s *Service) createWorkItemMutation(ctx context.Context, command CreateWork
 				if parent.ObjectiveID != item.ObjectiveID {
 					return work.WorkItem{}, errors.New("work item parent belongs to another objective")
 				}
+				if parent.PlanRunID != item.PlanRunID {
+					return work.WorkItem{}, errors.New("work item parent belongs to another plan run; runs are separate, so a run's work cannot hang off another run's")
+				}
+			}
+			// The run supplied the revision after the item was first
+			// validated, so the item is checked again against its own rules
+			// rather than trusted because it passed them earlier.
+			if err := item.Validate(); err != nil {
+				return work.WorkItem{}, err
 			}
 			if err := repository.CreateWorkItem(ctx, item); err != nil {
 				return work.WorkItem{}, err

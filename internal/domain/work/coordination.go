@@ -349,6 +349,7 @@ const (
 	TransitionRequirementOutputRequirements TransitionRequirementCode = "output_requirements_satisfied"
 	TransitionRequirementExternalActions    TransitionRequirementCode = "external_actions_satisfied"
 	TransitionRequirementReview             TransitionRequirementCode = "review_requirements_satisfied"
+	TransitionRequirementRunActive          TransitionRequirementCode = "plan_run_active"
 )
 
 type TransitionRequirement struct {
@@ -368,6 +369,10 @@ type TransitionGateFacts struct {
 	OutputRequirementsSatisfied bool
 	ExternalActionsSatisfied    bool
 	ReviewRequirementsSatisfied bool
+	// Origin and RunActive decide whether the item may execute at all: work
+	// belonging to a plan run advances only while that run is active.
+	Origin    WorkItemOrigin
+	RunActive bool
 }
 
 func EvaluateTransitionGate(facts TransitionGateFacts) []TransitionRequirement {
@@ -383,6 +388,14 @@ func EvaluateTransitionGate(facts TransitionGateFacts) []TransitionRequirement {
 	}
 	if facts.ItemCommitment != ItemAccepted {
 		requirements = append(requirements, TransitionRequirement{TransitionRequirementItemAccepted, "work item execution requires accepted work"})
+	}
+	// Cancelling is the withdrawal of work, not its execution, so the run gate
+	// does not apply to it: a proposal recorded outside a run must stay
+	// retractable, and closing a run cancels its remaining work.
+	if facts.TargetStatus != StatusCancelled {
+		if satisfied, message := RunGateSatisfied(facts.Origin, facts.RunActive); !satisfied {
+			requirements = append(requirements, TransitionRequirement{TransitionRequirementRunActive, message})
+		}
 	}
 	if facts.TargetStatus != StatusDone {
 		return requirements
@@ -420,6 +433,7 @@ const (
 	ClaimRequirementCapabilities       ClaimRequirementCode = "capabilities_satisfied"
 	ClaimRequirementApproval           ClaimRequirementCode = "approval_satisfied"
 	ClaimRequirementClaimAvailable     ClaimRequirementCode = "claim_available"
+	ClaimRequirementRunActive          ClaimRequirementCode = "plan_run_active"
 )
 
 type ClaimRequirement struct {
@@ -445,6 +459,25 @@ type ClaimGateFacts struct {
 	ApprovalSatisfied   bool
 	ActiveClaim         *Claim
 	Now                 time.Time
+	// Origin and RunActive decide whether the item may be claimed at all: work
+	// belonging to a plan run is claimable only while that run is active.
+	Origin    WorkItemOrigin
+	RunActive bool
+}
+
+// runGateCheck shapes the shared origin rule into the anonymous check the
+// claim gate's table uses.
+func runGateCheck(origin WorkItemOrigin, runActive bool) struct {
+	code      ClaimRequirementCode
+	satisfied bool
+	message   string
+} {
+	satisfied, message := RunGateSatisfied(origin, runActive)
+	return struct {
+		code      ClaimRequirementCode
+		satisfied bool
+		message   string
+	}{ClaimRequirementRunActive, satisfied, message}
 }
 
 func EvaluateClaimGate(facts ClaimGateFacts) []ClaimRequirement {
@@ -463,6 +496,7 @@ func EvaluateClaimGate(facts ClaimGateFacts) []ClaimRequirement {
 		{ClaimRequirementOutputRequirements, facts.OutputRequirementsSatisfied, "output requirements are not satisfied"},
 		{ClaimRequirementActorKind, actorMatchesRequiredKind(facts.Actor.Kind, facts.RequiredActorKind), "actor kind is not eligible"},
 		{ClaimRequirementCapabilities, facts.CapabilitiesSatisfied, missingCapabilitiesMessage(facts.Actor.ID, facts.MissingCapabilities)},
+		runGateCheck(facts.Origin, facts.RunActive),
 	} {
 		if !requirement.satisfied {
 			requirements = append(requirements, ClaimRequirement{requirement.code, requirement.message})

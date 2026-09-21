@@ -125,6 +125,10 @@ func transitionRequirements(ctx context.Context, repository ports.Repository, ob
 	if err != nil {
 		return nil, err
 	}
+	runActive, err := repository.PlanRunIsActive(ctx, item.PlanRunID)
+	if err != nil {
+		return nil, err
+	}
 	return work.EvaluateTransitionGate(work.TransitionGateFacts{
 		ObjectivePhase: objective.Phase, PlanApproved: planApproved, ItemCommitment: item.CommitmentState,
 		CurrentStatus: item.ExecutionStatus, TargetStatus: target,
@@ -132,6 +136,8 @@ func transitionRequirements(ctx context.Context, repository ports.Repository, ob
 		ExpectedOutputsSatisfied: expectedOutputsSatisfied, OutputRequirementsSatisfied: outputRequirementsSatisfied,
 		ExternalActionsSatisfied:    externalActionsSatisfied,
 		ReviewRequirementsSatisfied: work.ReviewRequirementsSatisfied(evidence),
+		Origin:                      item.Origin,
+		RunActive:                   runActive,
 	}), nil
 }
 
@@ -330,6 +336,14 @@ func (s *Service) linkDependencyMutation(ctx context.Context, command LinkDepend
 			}
 			if item.ObjectiveID != prerequisite.ObjectiveID {
 				return work.Dependency{}, errors.New("dependencies must stay within one objective")
+			}
+			// And within one run. A dependency decides when work becomes
+			// ready, so an edge across runs would make one run's readiness
+			// wait on another run's work — which is exactly what separate runs
+			// are for. A later run reaches an earlier one's result the one
+			// sanctioned way: by binding its exact accepted output revision.
+			if item.PlanRunID != prerequisite.PlanRunID {
+				return work.Dependency{}, errors.New("dependencies must stay within one plan run; bind an earlier run's exact accepted output revision instead")
 			}
 			if dependency.Kind == work.DependencyHard {
 				cycle, err := repository.DependencyCreatesCycle(ctx, dependency.WorkItemID, dependency.DependsOnItemID)

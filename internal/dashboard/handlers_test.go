@@ -258,13 +258,27 @@ func (h *testHarness) setupObjectiveWithOpenPlan() (objectiveID, planID string) 
 	})["result"].(map[string]any)
 	plan := h.call("propose_plan", map[string]any{
 		"objective_id": objective["id"], "actor_id": actorID, "idempotency_key": "plan", "title": "Plan One", "revision": 1,
-		"items": []any{map[string]any{
+		"steps": []any{map[string]any{
 			"client_ref": "item-1", "key": "ITEM-1", "title": "Item one", "kind": "research",
 			"priority": "medium", "estimated_scope": "small", "execution_policy": "autonomous_with_report",
 			"required_actor_kind": "agent",
 		}},
 	})["result"].(map[string]any)
 	return objective["id"].(string), plan["plan"].(map[string]any)["id"].(string)
+}
+
+// approveAndRun takes the open plan all the way to executable work: approving
+// the definition, moving the objective into execution and creating one run,
+// which is what materializes the work items these handlers render.
+func (h *testHarness) approveAndRun(objectiveID, planID string) string {
+	h.t.Helper()
+	h.call("review_plan", map[string]any{"plan_id": planID, "actor_id": "human:reviewer", "idempotency_key": "review", "decision": "approved", "reason": "Approved.", "expected_version": 1})
+	h.call("transition_objective", map[string]any{"objective_id": objectiveID, "actor_id": "human:reviewer", "idempotency_key": "planning-to-execution", "target_phase": "execution", "reason": "Go.", "expected_version": 1})
+	run := h.call("create_plan_run", map[string]any{
+		"objective_id": objectiveID, "plan_id": planID, "actor_id": "agent:dashboard-worker",
+		"idempotency_key": "run", "run_key": "dashboard-1",
+	})["result"].(map[string]any)
+	return run["work_items"].([]any)[0].(map[string]any)["id"].(string)
 }
 
 func TestLoopSnapshotSurfacesOpenPlanGate(t *testing.T) {
@@ -373,10 +387,7 @@ func TestChangesHandlerReportsCursorMovement(t *testing.T) {
 func TestItemDetailHandlerServesReadOnlyItem(t *testing.T) {
 	h := newTestHarness(t)
 	objectiveID, planID := h.setupObjectiveWithOpenPlan()
-	h.call("review_plan", map[string]any{"plan_id": planID, "actor_id": "human:reviewer", "idempotency_key": "review", "decision": "approved", "reason": "Approved.", "expected_version": 1})
-	h.call("transition_objective", map[string]any{"objective_id": objectiveID, "actor_id": "human:reviewer", "idempotency_key": "planning-to-execution", "target_phase": "execution", "reason": "Go.", "expected_version": 1})
-	items := h.call("list_items", map[string]any{"objective_id": objectiveID})["result"].(map[string]any)["items"].([]any)
-	itemID := items[0].(map[string]any)["work_item"].(map[string]any)["id"].(string)
+	itemID := h.approveAndRun(objectiveID, planID)
 
 	h.login("human:reviewer")
 	var detail itemDetail

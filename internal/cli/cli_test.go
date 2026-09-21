@@ -223,7 +223,7 @@ func TestReadyAndShowInspectExecutionGraph(t *testing.T) {
 	})
 	plan := call("propose_plan", map[string]any{
 		"objective_id": objective["id"], "actor_id": "agent:planner", "idempotency_key": "propose-plan-cli", "title": "Research plan", "revision": 1,
-		"items": []any{map[string]any{
+		"steps": []any{map[string]any{
 			"client_ref": "research", "key": "TH-CLI", "title": "Prepare the research dossier", "kind": "research",
 			"priority": "high", "estimated_scope": "small", "execution_policy": "autonomous_with_report", "required_actor_kind": "agent",
 		}},
@@ -231,6 +231,10 @@ func TestReadyAndShowInspectExecutionGraph(t *testing.T) {
 	planDetail, _ := plan["plan"].(map[string]any)
 	call("review_plan", map[string]any{"plan_id": planDetail["id"], "actor_id": "human:reviewer", "idempotency_key": "review-plan-cli", "decision": "approved", "reason": "Ready for execution.", "expected_version": 1})
 	call("transition_objective", map[string]any{"objective_id": objective["id"], "actor_id": "human:reviewer", "idempotency_key": "transition-objective-cli", "target_phase": "execution", "reason": "Begin work.", "expected_version": 1})
+	call("create_plan_run", map[string]any{
+		"objective_id": objective["id"], "plan_id": planDetail["id"], "actor_id": "agent:planner",
+		"idempotency_key": "run-plan-cli", "run_key": "cli-1",
+	})
 
 	items := call("list_items", map[string]any{"objective_id": objective["id"]})["items"].([]any)
 	firstWorkItem, _ := items[0].(map[string]any)["work_item"].(map[string]any)
@@ -247,7 +251,7 @@ func TestReadyAndShowInspectExecutionGraph(t *testing.T) {
 	if code := Run(ctx, []string{"ready", "--addr", addr, "--actor", "agent:researcher", root}, &stdout, &stderr); code != 0 {
 		t.Fatalf("ready exited %d: %s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "TH-CLI\tPrepare the research dossier") {
+	if !strings.Contains(stdout.String(), "TH-CLI/1\tPrepare the research dossier") {
 		t.Fatalf("ready output = %q", stdout.String())
 	}
 	stdout.Reset()
@@ -255,7 +259,7 @@ func TestReadyAndShowInspectExecutionGraph(t *testing.T) {
 	if code := Run(ctx, []string{"show", "--addr", addr, itemID, root}, &stdout, &stderr); code != 0 {
 		t.Fatalf("show exited %d: %s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), `"key": "TH-CLI"`) || !strings.Contains(stdout.String(), `"execution_status": "ready"`) {
+	if !strings.Contains(stdout.String(), `"key": "TH-CLI/1"`) || !strings.Contains(stdout.String(), `"execution_status": "ready"`) {
 		t.Fatalf("show output = %q", stdout.String())
 	}
 }

@@ -116,7 +116,7 @@ func (a *adapter) addTools(server *mcp.Server) {
 	a.add(server, "register_actor", "Register a trusted-local actor.", false, schemaFor[registerActorInput]("actor_id", "kind", "display_name", "idempotency_key"), a.registerActor)
 	a.add(server, "create_objective", "Create durable intent.", false, schemaFor[createObjectiveInput]("actor_id", "idempotency_key", "key", "title", "desired_outcome", "phase"), a.createObjective)
 	a.add(server, "patch_objective", "Update safe objective details with optimistic concurrency. objective_id accepts an objective's key.", false, schemaFor[patchObjectiveInput]("objective_id", "actor_id", "idempotency_key", "expected_version"), a.patchObjective)
-	a.add(server, "create_item", "Create one proposed domain-neutral work item. objective_id accepts an objective's key.", false, schemaFor[createItemInput]("actor_id", "idempotency_key", "key", "objective_id", "title", "kind"), a.createItem)
+	a.add(server, "create_item", "Record one work item. With plan_run_id it is run-local work inside that active run, executable under the run's own gates; without one it is a proposal and is never executable. objective_id accepts an objective's key.", false, schemaFor[createItemInput]("actor_id", "idempotency_key", "key", "objective_id", "title", "kind"), a.createItem)
 	a.add(server, "patch_item", "Update safe work-item details with optimistic concurrency.", false, patchItemSchema(), a.patchItem)
 	a.add(server, "request_attention", "Request an orthogonal human attention state for a governed target.", false, requestAttentionSchema(), a.requestAttention)
 	a.add(server, "request_approval", "Request an approval for a governed target.", false, requestApprovalSchema(), a.requestApproval)
@@ -125,8 +125,12 @@ func (a *adapter) addTools(server *mcp.Server) {
 	a.add(server, "block_item", "Create a persisted manual blocker.", false, schemaFor[blockItemInput]("work_item_id", "actor_id", "idempotency_key", "expected_version", "reason"), a.blockItem)
 	a.add(server, "unblock_item", "Resolve a persisted manual blocker.", false, schemaFor[unblockItemInput]("blocker_id", "actor_id", "idempotency_key", "expected_version", "resolution"), a.unblockItem)
 	a.add(server, "transition_objective", "Move an objective through its governed phase lifecycle. objective_id accepts an objective's key.", false, schemaFor[transitionObjectiveInput]("objective_id", "actor_id", "target_phase", "expected_version", "idempotency_key"), a.transitionObjective)
-	a.add(server, "propose_plan", "Create a proposed plan with domain-neutral work. objective_id accepts an objective's key.", false, schemaFor[planInput]("objective_id", "actor_id", "idempotency_key", "title", "items"), a.proposePlan)
+	a.add(server, "propose_plan", "Propose a reusable plan revision: the inputs it declares and the steps it is made of. It creates no executable work; create_plan_run instantiates an approved revision. objective_id accepts an objective's key.", false, schemaFor[planInput]("objective_id", "actor_id", "idempotency_key", "title", "steps"), a.proposePlan)
 	a.add(server, "review_plan", "Approve or reject a proposed plan.", false, schemaFor[reviewPlanInput]("plan_id", "actor_id", "idempotency_key", "decision", "reason", "expected_version"), a.reviewPlan)
+	a.add(server, "create_plan_run", "Instantiate one exact approved plan revision as a new plan run with immutable input bindings and fresh work items. objective_id accepts an objective's key.", false, schemaFor[createPlanRunInput]("objective_id", "plan_id", "actor_id", "idempotency_key", "run_key"), a.createPlanRun)
+	a.add(server, "close_plan_run", "End an active plan run explicitly as succeeded, failed, or cancelled.", false, schemaFor[closePlanRunInput]("plan_run_id", "actor_id", "idempotency_key", "expected_version", "target_status"), a.closePlanRun)
+	a.add(server, "get_plan_run", "Read one plan run with its bindings and materialized work items.", true, schemaFor[getPlanRunInput]("plan_run_id"), a.getPlanRun)
+	a.add(server, "list_plan_runs", "List plan runs newest first, with their revision and how much of their work is still open. objective_id accepts an objective's key.", true, schemaFor[listPlanRunsInput](), a.listPlanRuns)
 	a.add(server, "record_context", "Record typed objective or work-item context. objective_id accepts an objective's key.", false, schemaFor[recordContextInput]("objective_id", "actor_id", "idempotency_key", "kind", "title", "status"), a.recordContext)
 	a.add(server, "transition_context", "Transition a context record through its governed kind-specific lifecycle.", false, schemaFor[transitionContextInput]("context_record_id", "actor_id", "target_status", "expected_version", "idempotency_key"), a.transitionContext)
 	a.add(server, "record_decision", "Record a durable accepted decision. objective_id accepts an objective's key.", false, schemaFor[recordDecisionInput]("objective_id", "actor_id", "idempotency_key", "title", "decision"), a.recordDecision)
@@ -684,6 +688,10 @@ func resultSchema(name string) map[string]any {
 		return schemaForResult[work.ManualBlocker]()
 	case "propose_plan":
 		return schemaForResult[ports.PlanContext]()
+	case "create_plan_run", "close_plan_run", "get_plan_run":
+		return schemaForResult[ports.PlanRunContext]()
+	case "list_plan_runs":
+		return schemaForResult[listPlanRunsResult]()
 	case "review_plan":
 		return schemaForResult[work.Plan]()
 	case "record_context", "transition_context":
@@ -1496,6 +1504,7 @@ type listItemsInput struct {
 	ObjectiveID            string                 `json:"objective_id"`
 	ObjectivePhases        []work.ObjectivePhase  `json:"objective_phase"`
 	PlanID                 string                 `json:"plan_id"`
+	PlanRunID              string                 `json:"plan_run_id"`
 	CommitmentStates       []work.ItemCommitment  `json:"commitment_state"`
 	ExecutionStatus        []work.ExecutionStatus `json:"execution_status"`
 	Priorities             []work.Priority        `json:"priority"`
@@ -1543,6 +1552,12 @@ func (a *adapter) listItems(ctx context.Context, service *app.Service, raw json.
 			continue
 		}
 		if in.PlanID != "" && (item.Plan == nil || item.Plan.ID != in.PlanID) {
+			continue
+		}
+		// plan_run_id scopes the listing to one execution. plan_id cannot do
+		// that job: a materialized item keeps its revision, so every run of a
+		// revision answers to the same plan_id.
+		if in.PlanRunID != "" && item.WorkItem.PlanRunID != in.PlanRunID {
 			continue
 		}
 		if !contains(in.ObjectivePhases, item.Objective.Phase) || !contains(in.CommitmentStates, item.WorkItem.CommitmentState) || !contains(in.ExecutionStatus, item.WorkItem.ExecutionStatus) || !contains(in.Priorities, item.WorkItem.Priority) || !contains(in.Kinds, item.WorkItem.Kind) || !contains(in.AttentionStates, item.WorkItem.AttentionState) || !contains(in.ExecutionPolicy, item.WorkItem.ExecutionPolicy) {
@@ -2027,6 +2042,11 @@ type createObjectiveInput struct {
 	Phase          work.ObjectivePhase `json:"phase"`
 	Priority       work.Priority       `json:"priority"`
 	Appetite       measureInput        `json:"appetite"`
+	// Mode says how the objective ends and cannot be changed afterwards;
+	// MaxConcurrentRuns caps its concurrently active plan runs. Both default
+	// to the safe values — a finite objective running one plan run at a time.
+	Mode              work.ObjectiveMode `json:"mode,omitempty"`
+	MaxConcurrentRuns int                `json:"max_concurrent_runs,omitempty"`
 }
 
 func (a *adapter) createObjective(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
@@ -2034,7 +2054,7 @@ func (a *adapter) createObjective(ctx context.Context, service *app.Service, raw
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	command := app.CreateObjectiveCommand{ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome, Phase: in.Phase, Priority: in.Priority, Appetite: in.Appetite.toMeasure()}
+	command := app.CreateObjectiveCommand{ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, Title: in.Title, Description: in.Description, DesiredOutcome: in.DesiredOutcome, Phase: in.Phase, Priority: in.Priority, Appetite: in.Appetite.toMeasure(), Mode: in.Mode, MaxConcurrentRuns: in.MaxConcurrentRuns}
 	return service.CreateObjective(ctx, command)
 }
 
@@ -2049,6 +2069,10 @@ type patchObjectiveInput struct {
 	DesiredOutcome  *string        `json:"desired_outcome"`
 	Priority        *work.Priority `json:"priority"`
 	Appetite        *measureInput  `json:"appetite"`
+	// Mode has no field here: it is fixed at creation, because changing it
+	// would retroactively change what completing this objective and every run
+	// recorded under it meant.
+	MaxConcurrentRuns *int `json:"max_concurrent_runs"`
 }
 
 func (a *adapter) patchObjective(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
@@ -2065,6 +2089,7 @@ func (a *adapter) patchObjective(ctx context.Context, service *app.Service, raw 
 		appetite := in.Appetite.toMeasure()
 		command.Appetite = &appetite
 	}
+	command.MaxConcurrentRuns = in.MaxConcurrentRuns
 	return service.PatchObjective(ctx, command)
 }
 
@@ -2072,6 +2097,7 @@ type createItemInput struct {
 	workspaceInput
 	ActorID              string                         `json:"actor_id"`
 	IdempotencyKey       string                         `json:"idempotency_key"`
+	PlanRunID            string                         `json:"plan_run_id,omitempty"`
 	Key                  string                         `json:"key"`
 	ObjectiveID          string                         `json:"objective_id"`
 	PlanID               string                         `json:"plan_id"`
@@ -2126,7 +2152,7 @@ func (a *adapter) createItem(ctx context.Context, service *app.Service, raw json
 		return nil, err
 	}
 	command := app.CreateWorkItemCommand{
-		ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, ObjectiveID: objectiveID, PlanID: in.PlanID, ParentID: in.ParentID,
+		ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Key: in.Key, ObjectiveID: objectiveID, PlanID: in.PlanID, PlanRunID: in.PlanRunID, ParentID: in.ParentID,
 		Title: in.Title, Description: in.Description, Kind: in.Kind, CommitmentState: in.CommitmentState, ExecutionStatus: in.ExecutionStatus,
 		Priority: in.Priority, EstimatedScope: in.EstimatedScope, Measure: in.Measure.toMeasure(), ExecutionPolicy: in.ExecutionPolicy, RequiredActorKind: in.RequiredActorKind,
 		AttentionState: work.AttentionNone, RequiredCapabilities: in.RequiredCapabilities, ReviewRequirements: toReviewRequirements(in.ReviewRequirements),
@@ -2530,33 +2556,61 @@ func (a *adapter) transitionObjective(ctx context.Context, service *app.Service,
 
 type planInput struct {
 	workspaceInput
-	ObjectiveID    string          `json:"objective_id"`
-	ActorID        string          `json:"actor_id"`
-	IdempotencyKey string          `json:"idempotency_key"`
-	Title          string          `json:"title"`
-	Summary        string          `json:"summary,omitempty"`
-	Revision       int             `json:"revision"`
-	Items          []planItemInput `json:"items"`
+	ObjectiveID    string `json:"objective_id"`
+	ActorID        string `json:"actor_id"`
+	IdempotencyKey string `json:"idempotency_key"`
+	Title          string `json:"title"`
+	Summary        string `json:"summary,omitempty"`
+	Revision       int    `json:"revision"`
+	// DerivedFromPlanRunID cites the run whose experience produced this
+	// revision. It records provenance and nothing else: the revision is still
+	// a draft until reviewed, and the run it cites keeps running the
+	// definition it was created from.
+	DerivedFromPlanRunID string           `json:"derived_from_plan_run_id,omitempty"`
+	Inputs               []planInputInput `json:"inputs,omitempty"`
+	Steps                []planStepInput  `json:"steps"`
 }
 
-type planItemInput struct {
-	ClientRef            string                         `json:"client_ref"`
-	ParentRef            string                         `json:"parent_ref,omitempty"`
-	Key                  string                         `json:"key"`
-	Title                string                         `json:"title"`
-	Description          string                         `json:"description,omitempty"`
-	Kind                 string                         `json:"kind"`
-	Priority             work.Priority                  `json:"priority"`
-	EstimatedScope       work.EstimatedScope            `json:"estimated_scope"`
-	ExecutionPolicy      work.ExecutionPolicy           `json:"execution_policy"`
-	RequiredActorKind    work.ActorKind                 `json:"required_actor_kind"`
-	RequiredCapabilities []string                       `json:"required_capabilities,omitempty"`
-	ReviewRequirements   []reviewRequirementInput       `json:"review_requirements,omitempty"`
-	DependsOn            []string                       `json:"depends_on,omitempty"`
-	AcceptanceCriteria   []planAcceptanceCriterionInput `json:"acceptance_criteria,omitempty"`
-	ExpectedOutputs      []planExpectedOutputInput      `json:"expected_outputs,omitempty"`
-	OutputRequirements   []planOutputRequirementInput   `json:"output_requirements,omitempty"`
-	ExternalActions      []planExternalActionInput      `json:"external_actions,omitempty"`
+// planInputInput is one named value the plan declares it needs; a run binds it.
+type planInputInput struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
+	Ordinal     int    `json:"ordinal,omitempty"`
+}
+
+type planStepInput struct {
+	ClientRef   string `json:"client_ref"`
+	ParentRef   string `json:"parent_ref,omitempty"`
+	Key         string `json:"key"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	Kind        string `json:"kind"`
+	// Optional marks a step a run may skip with an audited rationale. A step
+	// is required unless it says otherwise, so omitting this field keeps the
+	// step a success obligation.
+	Optional             bool                             `json:"optional,omitempty"`
+	Priority             work.Priority                    `json:"priority"`
+	EstimatedScope       work.EstimatedScope              `json:"estimated_scope"`
+	ExecutionPolicy      work.ExecutionPolicy             `json:"execution_policy"`
+	RequiredActorKind    work.ActorKind                   `json:"required_actor_kind"`
+	RequiredCapabilities []string                         `json:"required_capabilities,omitempty"`
+	ReviewRequirements   []reviewRequirementInput         `json:"review_requirements,omitempty"`
+	DependsOn            []string                         `json:"depends_on,omitempty"`
+	AcceptanceCriteria   []planAcceptanceCriterionInput   `json:"acceptance_criteria,omitempty"`
+	ExpectedOutputs      []planExpectedOutputInput        `json:"expected_outputs,omitempty"`
+	OutputRequirements   []planStepOutputRequirementInput `json:"output_requirements,omitempty"`
+	ExternalActions      []planExternalActionInput        `json:"external_actions,omitempty"`
+}
+
+// planStepOutputRequirementInput accepts only an exact accepted output
+// revision. A profile-and-constraint requirement is deliberately not
+// expressible in a plan definition, because resolving one when a run is
+// created would silently pick up whatever another run happened to accept.
+type planStepOutputRequirementInput struct {
+	RequiredOutputRevisionID string `json:"required_output_revision_id"`
+	Required                 bool   `json:"required,omitempty"`
+	Note                     string `json:"note,omitempty"`
 }
 
 type planAcceptanceCriterionInput struct {
@@ -2623,32 +2677,147 @@ func (a *adapter) proposePlan(ctx context.Context, service *app.Service, raw jso
 	if err := decode(raw, &in); err != nil {
 		return nil, err
 	}
-	items := make([]app.ProposedWorkItem, 0, len(in.Items))
-	for _, item := range in.Items {
-		converted := app.ProposedWorkItem{ClientRef: item.ClientRef, ParentRef: item.ParentRef, Key: item.Key, Title: item.Title, Description: item.Description, Kind: item.Kind, Priority: item.Priority, EstimatedScope: item.EstimatedScope, ExecutionPolicy: item.ExecutionPolicy, RequiredActorKind: item.RequiredActorKind, RequiredCapabilities: item.RequiredCapabilities, ReviewRequirements: toReviewRequirements(item.ReviewRequirements), DependsOn: item.DependsOn}
-		for _, criterion := range item.AcceptanceCriteria {
+	inputs := make([]app.ProposedPlanInput, 0, len(in.Inputs))
+	for _, input := range in.Inputs {
+		inputs = append(inputs, app.ProposedPlanInput{Name: input.Name, Description: input.Description, Required: input.Required, Ordinal: input.Ordinal})
+	}
+	steps := make([]app.ProposedPlanStep, 0, len(in.Steps))
+	for _, step := range in.Steps {
+		converted := app.ProposedPlanStep{ClientRef: step.ClientRef, ParentRef: step.ParentRef, Key: step.Key, Title: step.Title, Description: step.Description, Kind: step.Kind, Required: !step.Optional, Priority: step.Priority, EstimatedScope: step.EstimatedScope, ExecutionPolicy: step.ExecutionPolicy, RequiredActorKind: step.RequiredActorKind, RequiredCapabilities: step.RequiredCapabilities, ReviewRequirements: toReviewRequirements(step.ReviewRequirements), DependsOn: step.DependsOn}
+		for _, criterion := range step.AcceptanceCriteria {
 			converted.AcceptanceCriteria = append(converted.AcceptanceCriteria, app.ProposedAcceptanceCriterion{Text: criterion.Text, Required: criterion.Required, Ordinal: criterion.Ordinal})
 		}
-		for _, expected := range item.ExpectedOutputs {
+		for _, expected := range step.ExpectedOutputs {
 			converted.ExpectedOutputs = append(converted.ExpectedOutputs, app.ProposedExpectedOutput{Name: expected.Name, ProfileName: expected.ProfileName, ProfileVersion: expected.ProfileVersion, Contract: expected.Contract, DestinationHint: expected.DestinationHint, Required: expected.Required, Ordinal: expected.Ordinal})
 		}
-		for _, requirement := range item.OutputRequirements {
-			converted.OutputRequirements = append(converted.OutputRequirements, app.ProposedOutputRequirement{RequiredOutputRevisionID: requirement.RequiredOutputRevisionID, RequiredProfileName: requirement.RequiredProfileName, VersionConstraint: requirement.VersionConstraint, Required: requirement.Required, Note: requirement.Note})
+		for _, requirement := range step.OutputRequirements {
+			converted.OutputRequirements = append(converted.OutputRequirements, app.ProposedStepOutputRequirement{RequiredOutputRevisionID: requirement.RequiredOutputRevisionID, Required: requirement.Required, Note: requirement.Note})
 		}
-		for _, action := range item.ExternalActions {
+		for _, action := range step.ExternalActions {
 			subject, err := externalActionSubject(action)
 			if err != nil {
 				return nil, err
 			}
 			converted.ExternalActions = append(converted.ExternalActions, app.ProposedExternalAction{Required: action.Required, Title: action.Title, Rationale: action.Rationale, AuthorizationSubject: subject})
 		}
-		items = append(items, converted)
+		steps = append(steps, converted)
 	}
 	objectiveID, err := resolveObjectiveReference(ctx, service, in.ObjectiveID)
 	if err != nil {
 		return nil, err
 	}
-	return service.ProposePlan(ctx, app.ProposePlanCommand{ObjectiveID: objectiveID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Title: in.Title, Summary: in.Summary, Revision: in.Revision, Items: items})
+	return service.ProposePlan(ctx, app.ProposePlanCommand{ObjectiveID: objectiveID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, Title: in.Title, Summary: in.Summary, Revision: in.Revision, DerivedFromPlanRunID: in.DerivedFromPlanRunID, Inputs: inputs, Steps: steps})
+}
+
+type createPlanRunInput struct {
+	workspaceInput
+	ObjectiveID    string                 `json:"objective_id"`
+	PlanID         string                 `json:"plan_id"`
+	ActorID        string                 `json:"actor_id"`
+	IdempotencyKey string                 `json:"idempotency_key"`
+	RunKey         string                 `json:"run_key"`
+	Bindings       []runInputBindingInput `json:"bindings,omitempty"`
+}
+
+// runInputBindingInput carries exactly one of three shapes: a literal value, one
+// exact accepted output revision, or an external reference whose identity the
+// caller supplies. Throughline never fetches an external source.
+type runInputBindingInput struct {
+	Name             string `json:"name"`
+	Value            string `json:"value,omitempty"`
+	OutputRevisionID string `json:"output_revision_id,omitempty"`
+	Locator          string `json:"locator,omitempty"`
+	SourceVersion    string `json:"source_version,omitempty"`
+	Digest           string `json:"digest,omitempty"`
+}
+
+func (a *adapter) createPlanRun(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
+	var in createPlanRunInput
+	if err := decode(raw, &in); err != nil {
+		return nil, err
+	}
+	objectiveID, err := resolveObjectiveReference(ctx, service, in.ObjectiveID)
+	if err != nil {
+		return nil, err
+	}
+	bindings := make([]app.RunInputBindingCommand, 0, len(in.Bindings))
+	for _, binding := range in.Bindings {
+		bindings = append(bindings, app.RunInputBindingCommand{Name: binding.Name, Value: binding.Value, OutputRevisionID: binding.OutputRevisionID, Locator: binding.Locator, SourceVersion: binding.SourceVersion, Digest: binding.Digest})
+	}
+	return service.CreatePlanRun(ctx, app.CreatePlanRunCommand{ObjectiveID: objectiveID, PlanID: in.PlanID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, RunKey: in.RunKey, Bindings: bindings})
+}
+
+type closePlanRunInput struct {
+	workspaceInput
+	PlanRunID       string             `json:"plan_run_id"`
+	ActorID         string             `json:"actor_id"`
+	IdempotencyKey  string             `json:"idempotency_key"`
+	ExpectedVersion int                `json:"expected_version"`
+	TargetStatus    work.PlanRunStatus `json:"target_status"`
+	Reason          string             `json:"reason,omitempty"`
+}
+
+func (a *adapter) closePlanRun(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
+	var in closePlanRunInput
+	if err := decode(raw, &in); err != nil {
+		return nil, err
+	}
+	return service.ClosePlanRun(ctx, app.ClosePlanRunCommand{PlanRunID: in.PlanRunID, ActorID: in.ActorID, IdempotencyKey: in.IdempotencyKey, ExpectedVersion: in.ExpectedVersion, TargetStatus: in.TargetStatus, Reason: in.Reason})
+}
+
+type getPlanRunInput struct {
+	workspaceInput
+	PlanRunID string `json:"plan_run_id"`
+}
+
+type listPlanRunsInput struct {
+	workspaceInput
+	ObjectiveID string               `json:"objective_id,omitempty"`
+	PlanID      string               `json:"plan_id,omitempty"`
+	Statuses    []work.PlanRunStatus `json:"status,omitempty"`
+	Cursor      string               `json:"cursor,omitempty"`
+	Limit       int                  `json:"limit,omitempty"`
+}
+
+func (a *adapter) listPlanRuns(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
+	var in listPlanRunsInput
+	if err := decode(raw, &in); err != nil {
+		return nil, err
+	}
+	objectiveID, err := resolveObjectiveReference(ctx, service, in.ObjectiveID)
+	if err != nil {
+		return nil, err
+	}
+	offset, err := decodePageCursor(in.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	page, err := service.ListPlanRuns(ctx, ports.PlanRunFilter{
+		ObjectiveID: objectiveID, PlanID: in.PlanID, Statuses: in.Statuses, Offset: offset, Limit: in.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	next := ""
+	if page.HasMore {
+		next = encodePageCursor(offset + len(page.Runs))
+	}
+	return listPlanRunsResult{Runs: page.Runs, Total: page.Total, NextCursor: next, HasMore: page.HasMore}, nil
+}
+
+type listPlanRunsResult struct {
+	Runs       []ports.PlanRunSummary `json:"runs"`
+	Total      int                    `json:"total"`
+	NextCursor string                 `json:"next_cursor"`
+	HasMore    bool                   `json:"has_more"`
+}
+
+func (a *adapter) getPlanRun(ctx context.Context, service *app.Service, raw json.RawMessage) (any, error) {
+	var in getPlanRunInput
+	if err := decode(raw, &in); err != nil {
+		return nil, err
+	}
+	return service.GetPlanRun(ctx, in.PlanRunID)
 }
 
 type reviewPlanInput struct {

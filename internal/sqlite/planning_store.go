@@ -27,12 +27,17 @@ func (r *transactionRepository) UpdateObjective(ctx context.Context, objective w
 	arguments := []any{objective.Title, objective.Description, objective.DesiredOutcome, objective.Phase, nullableString(string(objective.PriorPhase)),
 		objective.Priority, objective.Appetite.Value, objective.Appetite.Unit, objective.Appetite.Basis}
 	arguments = append(arguments, phaseTransitionColumns(objective.LastPhaseTransition)...)
+	arguments = append(arguments, objective.Mode, objective.MaxConcurrentRuns)
 	arguments = append(arguments, nullableString(objective.UpdatedBy), objective.Version, formatTime(objective.UpdatedAt), objective.ID, expectedVersion)
+	// mode is written here although it never changes: the update sets every
+	// column the objective carries, so a field added later cannot be silently
+	// dropped from the write while the caller is told the change landed.
 	result, err := r.transaction.ExecContext(ctx, `
 UPDATE objectives
 SET title = ?, description = ?, desired_outcome = ?, phase = ?, prior_phase = ?, priority = ?,
     appetite_value = ?, appetite_unit = ?, appetite_basis = ?,
     phase_transition_from = ?, phase_transition_to = ?, phase_transition_reason = ?, phase_transition_by = ?, phase_transition_at = ?,
+    mode = ?, max_concurrent_runs = ?,
     updated_by = ?, version = ?, updated_at = ?
 WHERE id = ? AND version = ?`, arguments...)
 	if err != nil {
@@ -187,17 +192,9 @@ WHERE id = ? AND version = ?`,
 	return requireChanged(result)
 }
 
-func (r *transactionRepository) LatestApprovedPlanRevision(ctx context.Context, objectiveID string) (int, error) {
-	var revision int
-	if err := r.transaction.QueryRowContext(ctx,
-		"SELECT COALESCE(MAX(revision), 0) FROM plans WHERE objective_id = ? AND commitment_state = ?",
-		objectiveID, work.PlanApproved,
-	).Scan(&revision); err != nil {
-		return 0, fmt.Errorf("query latest approved plan revision: %w", err)
-	}
-	return revision, nil
-}
-
+// LatestPlanRevision is used to number the next proposal, not to choose a
+// revision to run: every approved revision stays instantiable, and a run names
+// the one it means.
 func (r *transactionRepository) LatestPlanRevision(ctx context.Context, objectiveID string) (int, error) {
 	var revision int
 	if err := r.transaction.QueryRowContext(ctx,
@@ -206,28 +203,6 @@ func (r *transactionRepository) LatestPlanRevision(ctx context.Context, objectiv
 		return 0, fmt.Errorf("query latest plan revision: %w", err)
 	}
 	return revision, nil
-}
-
-func (r *transactionRepository) SupersedeEarlierPlans(ctx context.Context, objectiveID string, revision int, updatedAt time.Time) error {
-	if _, err := r.transaction.ExecContext(ctx, `
-UPDATE work_items
-SET commitment_state = ?, version = version + 1, updated_at = ?
-WHERE plan_id IN (
-  SELECT id FROM plans WHERE objective_id = ? AND revision < ? AND commitment_state = ?
-) AND commitment_state = ?`,
-		work.ItemSuperseded, formatTime(updatedAt), objectiveID, revision, work.PlanApproved, work.ItemAccepted,
-	); err != nil {
-		return fmt.Errorf("supersede earlier plan work items: %w", err)
-	}
-	if _, err := r.transaction.ExecContext(ctx, `
-UPDATE plans
-SET commitment_state = ?, version = version + 1, updated_at = ?
-WHERE objective_id = ? AND revision < ? AND commitment_state = ?`,
-		work.PlanSuperseded, formatTime(updatedAt), objectiveID, revision, work.PlanApproved,
-	); err != nil {
-		return fmt.Errorf("supersede earlier plans: %w", err)
-	}
-	return nil
 }
 
 func (r *transactionRepository) SetPlanItemsCommitment(ctx context.Context, planID string, state work.ItemCommitment, updatedAt time.Time) error {
@@ -410,6 +385,11 @@ func (s *Store) getObjectiveContext(ctx context.Context, reader sqlReader, id st
 	if result.Decisions, err = s.listDecisions(ctx, reader, id); err != nil {
 		return ports.ObjectiveContext{}, err
 	}
+	runs, err := s.listPlanRuns(ctx, reader, ports.PlanRunFilter{ObjectiveID: id})
+	if err != nil {
+		return ports.ObjectiveContext{}, err
+	}
+	result.PlanRuns = runs.Runs
 	if result.Approvals, err = s.listApprovals(ctx, reader, id); err != nil {
 		return ports.ObjectiveContext{}, err
 	}
@@ -473,13 +453,97 @@ func (s *Store) listPlanContexts(ctx context.Context, reader sqlReader, objectiv
 	}
 	var result []ports.PlanContext
 	for _, plan := range plans {
+		// Items is the legacy half: plans proposed before Plan Runs wrote work
+		// items directly, and those items still hang off the plan. A plan
+		// proposed since carries a definition instead and has no items of its
+		// own until a run materializes them.
 		items, err := s.listPlannedItems(ctx, reader, plan.ID)
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, ports.PlanContext{Plan: plan, Items: items})
+		inputs, steps, dependencies, err := s.listPlanDefinition(ctx, reader, plan.ID)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, ports.PlanContext{Plan: plan, Inputs: inputs, Steps: steps, StepDependencies: dependencies, Items: items})
 	}
 	return result, nil
+}
+
+// listPlanDefinition reads the reusable half of a plan revision: what it
+// declares it needs, what it is made of, and how its steps are ordered.
+func (s *Store) listPlanDefinition(ctx context.Context, reader sqlReader, planID string) ([]work.PlanInput, []work.PlanStep, []work.PlanStepDependency, error) {
+	var inputs []work.PlanInput
+	rows, err := reader.QueryContext(ctx, planInputSelect+" WHERE plan_id = ? ORDER BY ordinal", planID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("query plan inputs: %w", err)
+	}
+	for rows.Next() {
+		var input work.PlanInput
+		var required int
+		var createdAt string
+		if err := rows.Scan(&input.ID, &input.PlanID, &input.Name, &input.Description, &required, &input.Ordinal, &createdAt); err != nil {
+			_ = rows.Close()
+			return nil, nil, nil, fmt.Errorf("scan plan input: %w", err)
+		}
+		input.Required = required == 1
+		if input.CreatedAt, err = parseTime(createdAt); err != nil {
+			_ = rows.Close()
+			return nil, nil, nil, err
+		}
+		inputs = append(inputs, input)
+	}
+	if err := closeRows(rows); err != nil {
+		return nil, nil, nil, err
+	}
+
+	var steps []work.PlanStep
+	rows, err = reader.QueryContext(ctx, planStepSelect+" WHERE plan_id = ? ORDER BY ordinal", planID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("query plan steps: %w", err)
+	}
+	for rows.Next() {
+		step, err := scanPlanStep(rows)
+		if err != nil {
+			_ = rows.Close()
+			return nil, nil, nil, err
+		}
+		steps = append(steps, step)
+	}
+	if err := closeRows(rows); err != nil {
+		return nil, nil, nil, err
+	}
+
+	var dependencies []work.PlanStepDependency
+	rows, err = reader.QueryContext(ctx, `
+SELECT dependency.plan_step_id, dependency.depends_on_step_id
+FROM plan_step_dependencies dependency
+JOIN plan_steps step ON step.id = dependency.plan_step_id
+WHERE step.plan_id = ?
+ORDER BY dependency.plan_step_id, dependency.depends_on_step_id`, planID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("query plan step dependencies: %w", err)
+	}
+	for rows.Next() {
+		var dependency work.PlanStepDependency
+		if err := rows.Scan(&dependency.PlanStepID, &dependency.DependsOnStepID); err != nil {
+			_ = rows.Close()
+			return nil, nil, nil, fmt.Errorf("scan plan step dependency: %w", err)
+		}
+		dependencies = append(dependencies, dependency)
+	}
+	if err := closeRows(rows); err != nil {
+		return nil, nil, nil, err
+	}
+	return inputs, steps, dependencies, nil
+}
+
+func closeRows(rows *sql.Rows) error {
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	return rows.Close()
 }
 
 func (s *Store) listPlannedItems(ctx context.Context, reader sqlReader, planID string) ([]ports.PlannedWorkItem, error) {

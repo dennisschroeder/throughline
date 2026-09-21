@@ -534,6 +534,17 @@ func (s *Service) CheckActionAuthorization(ctx context.Context, query CheckActio
 		}
 		if !matched {
 			decision = authority.AuthorizationDecision{Denial: &authority.AuthorizationDenial{Reason: authority.DenialCapabilityMismatch}}
+			return nil
+		}
+		// The check answers the same question starting the effect would ask,
+		// so it applies the same run gate. A caller that is told "authorized"
+		// and then refused at the start would have learned nothing useful.
+		if err := requireExecutableWork(ctx, repository, action.WorkItemID); err != nil {
+			var refusal AuthorizationError
+			if !errors.As(err, &refusal) {
+				return err
+			}
+			decision = refusal.Decision
 		}
 		return nil
 	})
@@ -591,6 +602,13 @@ func (s *Service) startExternalActionExecutionMutation(ctx context.Context, comm
 			decision := authority.CheckAuthorization(action, revision, &grant, command.ActorID, command.SubjectHash, s.clock.Now())
 			if !decision.Authorized {
 				return ExternalActionExecutionResult{}, AuthorizationError{Decision: decision}
+			}
+			// Starting an external effect is execution, so the same gate that
+			// governs claiming and advancing work governs it: an active plan
+			// run and an objective in execution. An execution that already
+			// started may still record its terminal result afterwards.
+			if err := requireExecutableWork(ctx, repository, action.WorkItemID); err != nil {
+				return ExternalActionExecutionResult{}, err
 			}
 			capabilities, err := repository.RequiredCapabilities(ctx, action.WorkItemID)
 			if err != nil {
@@ -727,4 +745,29 @@ func (e AuthorizationError) Error() string {
 		return "external action is not authorized"
 	}
 	return string(e.Decision.Denial.Reason)
+}
+
+// requireExecutableWork denies starting an external effect for work that may
+// not execute: work whose plan run has ended, work proposed outside a run, or
+// work whose objective is not in execution.
+func requireExecutableWork(ctx context.Context, repository ports.Repository, workItemID string) error {
+	item, err := repository.WorkItem(ctx, workItemID)
+	if err != nil {
+		return err
+	}
+	objective, err := repository.Objective(ctx, item.ObjectiveID)
+	if err != nil {
+		return err
+	}
+	if objective.Phase != work.ObjectiveExecution {
+		return AuthorizationError{Decision: authority.AuthorizationDecision{Denial: &authority.AuthorizationDenial{Reason: authority.DenialObjectiveNotInExecution}}}
+	}
+	runActive, err := repository.PlanRunIsActive(ctx, item.PlanRunID)
+	if err != nil {
+		return err
+	}
+	if satisfied, _ := work.RunGateSatisfied(item.Origin, runActive); !satisfied {
+		return AuthorizationError{Decision: authority.AuthorizationDecision{Denial: &authority.AuthorizationDenial{Reason: authority.DenialRunNotActive}}}
+	}
+	return nil
 }

@@ -305,8 +305,8 @@ func (r *transactionRepository) CreateObjective(ctx context.Context, objective w
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO objectives
   (id, key, title, description, desired_outcome, phase, priority, appetite_value, appetite_unit,
-   appetite_basis, version, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+   appetite_basis, mode, max_concurrent_runs, version, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		objective.ID,
 		objective.Key,
 		objective.Title,
@@ -317,6 +317,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		objective.Appetite.Value,
 		objective.Appetite.Unit,
 		objective.Appetite.Basis,
+		objective.Mode,
+		objective.MaxConcurrentRuns,
 		objective.Version,
 		formatTime(objective.CreatedAt),
 		formatTime(objective.UpdatedAt),
@@ -336,8 +338,8 @@ func (r *transactionRepository) CreatePlan(ctx context.Context, plan work.Plan) 
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO plans
   (id, objective_id, title, summary, revision, commitment_state, proposed_by, proposed_at,
-   resolved_by, resolved_at, resolution_reason, version, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+   resolved_by, resolved_at, resolution_reason, derived_from_plan_run_id, version, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		plan.ID,
 		plan.ObjectiveID,
 		plan.Title,
@@ -349,6 +351,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		nullableString(plan.ResolvedBy),
 		nullableTime(plan.ResolvedAt),
 		plan.ResolutionReason,
+		nullableString(plan.DerivedFromPlanRunID),
 		plan.Version,
 		formatTime(plan.CreatedAt),
 		formatTime(plan.UpdatedAt),
@@ -369,8 +372,9 @@ func (r *transactionRepository) CreateWorkItem(ctx context.Context, item work.Wo
 INSERT INTO work_items
   (id, key, objective_id, plan_id, parent_id, title, description, kind, commitment_state,
    execution_status, priority, estimated_scope, measure_value, measure_unit, measure_basis,
-   execution_policy, required_actor_kind, attention_state, review_requirements_json, version, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+   execution_policy, required_actor_kind, attention_state, review_requirements_json,
+   origin, plan_run_id, origin_plan_step_id, version, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ID,
 		item.Key,
 		item.ObjectiveID,
@@ -390,6 +394,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.RequiredActorKind,
 		item.AttentionState,
 		encodeReviewRequirements(item.ReviewRequirements),
+		item.Origin,
+		nullableString(item.PlanRunID),
+		nullableString(item.OriginPlanStepID),
 		item.Version,
 		formatTime(item.CreatedAt),
 		formatTime(item.UpdatedAt),
@@ -436,18 +443,19 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 // stopped reading fields added later.
 var objectiveColumns = []string{"id", "key", "title", "description", "desired_outcome", "phase", "prior_phase", "priority",
 	"appetite_value", "appetite_unit", "appetite_basis", "phase_transition_from", "phase_transition_to", "phase_transition_reason",
-	"phase_transition_by", "phase_transition_at", "updated_by", "version", "created_at", "updated_at"}
+	"phase_transition_by", "phase_transition_at", "mode", "max_concurrent_runs", "updated_by", "version", "created_at", "updated_at"}
 
 var workItemColumns = []string{"id", "key", "objective_id", "plan_id", "parent_id", "title", "description", "kind", "commitment_state",
 	"execution_status", "priority", "estimated_scope", "measure_value", "measure_unit", "measure_basis",
-	"execution_policy", "required_actor_kind", "attention_state", "review_requirements_json", "version", "created_at", "updated_at"}
+	"execution_policy", "required_actor_kind", "attention_state", "review_requirements_json",
+	"origin", "plan_run_id", "origin_plan_step_id", "version", "created_at", "updated_at"}
 
 var objectiveSelect = "SELECT " + strings.Join(objectiveColumns, ", ") + " FROM objectives"
 
 const planSelect = `
 SELECT id, objective_id, title, summary, revision, commitment_state,
        proposed_by, proposed_at, resolved_by, resolved_at, resolution_reason,
-       version, created_at, updated_at
+       derived_from_plan_run_id, version, created_at, updated_at
 FROM plans`
 
 var workItemSelect = "SELECT " + strings.Join(workItemColumns, ", ") + " FROM work_items"
@@ -483,7 +491,7 @@ func objectiveScanTargets(objective *work.Objective) ([]any, func() error) {
 		&objective.ID, &objective.Key, &objective.Title, &objective.Description, &objective.DesiredOutcome,
 		&objective.Phase, &priorPhase, &objective.Priority, &objective.Appetite.Value, &objective.Appetite.Unit,
 		&appetiteBasis, &transitionFrom, &transitionTo, &transitionReason, &transitionBy, &transitionAt,
-		&updatedBy, &objective.Version, &createdAt, &updatedAt,
+		&objective.Mode, &objective.MaxConcurrentRuns, &updatedBy, &objective.Version, &createdAt, &updatedAt,
 	}
 	return targets, func() error {
 		objective.Appetite.Basis = work.MeasureBasis(appetiteBasis)
@@ -511,7 +519,7 @@ func objectiveScanTargets(objective *work.Objective) ([]any, func() error) {
 func scanPlan(row scanner) (work.Plan, error) {
 	var plan work.Plan
 	var createdAt, updatedAt string
-	var proposedBy, proposedAt, resolvedBy, resolvedAt sql.NullString
+	var proposedBy, proposedAt, resolvedBy, resolvedAt, derivedFrom sql.NullString
 	if err := row.Scan(
 		&plan.ID,
 		&plan.ObjectiveID,
@@ -524,6 +532,7 @@ func scanPlan(row scanner) (work.Plan, error) {
 		&resolvedBy,
 		&resolvedAt,
 		&plan.ResolutionReason,
+		&derivedFrom,
 		&plan.Version,
 		&createdAt,
 		&updatedAt,
@@ -532,6 +541,7 @@ func scanPlan(row scanner) (work.Plan, error) {
 	}
 	plan.ProposedBy = proposedBy.String
 	plan.ResolvedBy = resolvedBy.String
+	plan.DerivedFromPlanRunID = derivedFrom.String
 	var err error
 	if proposedAt.Valid {
 		plan.ProposedAt, err = parseTime(proposedAt.String)
@@ -568,18 +578,21 @@ func scanWorkItem(row scanner) (work.WorkItem, error) {
 // workItemScanTargets returns the destinations for workItemColumns, in order,
 // and the conversion to run once they are filled.
 func workItemScanTargets(item *work.WorkItem) ([]any, func() error) {
-	var planID, parentID sql.NullString
+	var planID, parentID, planRunID, originStepID sql.NullString
 	var createdAt, updatedAt, measureBasis, reviewRequirements string
 	targets := []any{
 		&item.ID, &item.Key, &item.ObjectiveID, &planID, &parentID, &item.Title, &item.Description, &item.Kind,
 		&item.CommitmentState, &item.ExecutionStatus, &item.Priority, &item.EstimatedScope,
 		&item.Measure.Value, &item.Measure.Unit, &measureBasis, &item.ExecutionPolicy, &item.RequiredActorKind,
-		&item.AttentionState, &reviewRequirements, &item.Version, &createdAt, &updatedAt,
+		&item.AttentionState, &reviewRequirements, &item.Origin, &planRunID, &originStepID,
+		&item.Version, &createdAt, &updatedAt,
 	}
 	return targets, func() error {
 		item.Measure.Basis = work.MeasureBasis(measureBasis)
 		item.PlanID = planID.String
 		item.ParentID = parentID.String
+		item.PlanRunID = planRunID.String
+		item.OriginPlanStepID = originStepID.String
 		var err error
 		if item.ReviewRequirements, err = decodeReviewRequirements(reviewRequirements); err != nil {
 			return err

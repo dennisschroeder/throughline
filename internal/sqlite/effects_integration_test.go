@@ -19,25 +19,27 @@ import (
 	"github.com/dennisschroeder/throughline/internal/ports"
 )
 
-// TestBulkPlanApprovalReportsEveryAcceptedEntity covers the bulk path: one
-// review_plan transaction commits the plan and every item it accepted, so the
-// mutation must name all of them with the versions it actually committed.
-func TestBulkPlanApprovalReportsEveryAcceptedEntity(t *testing.T) {
+// TestBulkPlanRunCreationReportsEveryMaterializedEntity covers the bulk path:
+// one create_plan_run transaction commits the run and every work item it
+// materialized, so the mutation must name all of them with the versions it
+// actually committed. Proposing the plan is the other bulk write, and reports
+// the plan revision with each step of its definition.
+func TestBulkPlanRunCreationReportsEveryMaterializedEntity(t *testing.T) {
 	ctx := context.Background()
 	service := newEffectsService(t, "bulk-plan.db")
 	if _, err := app.UnwrapMutation(service.RegisterActor(ctx, app.RegisterActorCommand{Actor: work.Actor{ID: "human:owner", Kind: work.ActorTypeHuman, DisplayName: "Owner"}, IdempotencyKey: "register-bulk-owner"})); err != nil {
 		t.Fatal(err)
 	}
-	objective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{ActorID: "human:owner", IdempotencyKey: "bulk-objective", Key: "OBJ-BULK", Title: "Approve a plan in one write", DesiredOutcome: "Every accepted item is reported.", Phase: work.ObjectivePlanning}))
+	objective, err := app.UnwrapMutation(service.CreateObjective(ctx, app.CreateObjectiveCommand{ActorID: "human:owner", IdempotencyKey: "bulk-objective", Key: "OBJ-BULK", Title: "Approve a plan in one write", DesiredOutcome: "Every materialized item is reported.", Phase: work.ObjectivePlanning}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	proposal, err := service.ProposePlan(ctx, app.ProposePlanCommand{
-		ObjectiveID: objective.ID, ActorID: "human:owner", IdempotencyKey: "bulk-plan", Title: "Three-item plan", Revision: 1,
-		Items: []app.ProposedWorkItem{
-			{ClientRef: "one", Key: "TH-BULK-1", Title: "First", Kind: "research", Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny},
-			{ClientRef: "two", Key: "TH-BULK-2", Title: "Second", Kind: "research", Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny},
-			{ClientRef: "three", Key: "TH-BULK-3", Title: "Third", Kind: "research", Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny},
+		ObjectiveID: objective.ID, ActorID: "human:owner", IdempotencyKey: "bulk-plan", Title: "Three-step plan", Revision: 1,
+		Steps: []app.ProposedPlanStep{
+			{ClientRef: "one", Key: "TH-BULK-1", Title: "First", Kind: "research", Required: true, Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny},
+			{ClientRef: "two", Key: "TH-BULK-2", Title: "Second", Kind: "research", Required: true, Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny},
+			{ClientRef: "three", Key: "TH-BULK-3", Title: "Third", Kind: "research", Required: true, Priority: work.PriorityMedium, EstimatedScope: work.ScopeSmall, ExecutionPolicy: work.PolicyAgentMayPropose, RequiredActorKind: work.ActorAny},
 		},
 	})
 	if err != nil {
@@ -45,21 +47,19 @@ func TestBulkPlanApprovalReportsEveryAcceptedEntity(t *testing.T) {
 	}
 	plan := proposal.Result
 	wantProposal := map[string]int{"plan:" + plan.Plan.ID: 1}
-	for _, item := range plan.Items {
-		wantProposal["work_item:"+item.WorkItem.ID] = 1
+	for _, step := range plan.Steps {
+		wantProposal["plan_step:"+step.ID] = 1
 	}
 	assertEffects(t, proposal.Effects, wantProposal)
 
-	approval, err := service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: plan.Plan.ID, ReviewerActorID: "human:owner", IdempotencyKey: "bulk-review", Decision: work.PlanApproved, Reason: "All three items are committed together.", ExpectedVersion: 1})
+	approval, err := service.ReviewPlan(ctx, app.ReviewPlanCommand{PlanID: plan.Plan.ID, ReviewerActorID: "human:owner", IdempotencyKey: "bulk-review", Decision: work.PlanApproved, Reason: "The definition is complete.", ExpectedVersion: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Approving the plan also records the reviewer's approval, which is a
-	// governed entity of its own and therefore an effect.
+	// governed entity of its own and therefore an effect. It commits no work:
+	// an approved revision is a definition, not an execution.
 	wantApproval := map[string]int{"plan:" + plan.Plan.ID: 2}
-	for _, item := range plan.Items {
-		wantApproval["work_item:"+item.WorkItem.ID] = 2
-	}
 	approvalEffects := 0
 	for _, effect := range approval.Effects {
 		if effect.Kind == "approval" {
@@ -72,16 +72,34 @@ func TestBulkPlanApprovalReportsEveryAcceptedEntity(t *testing.T) {
 	}
 	assertEffects(t, approval.Effects, wantApproval)
 	assertEffectOrderStable(t, approval.Effects)
-
-	// The plan is reported before the items it accepted, and the items keep the
-	// order the approved plan declared them in.
 	if approval.Effects[0].Kind != "plan" || approval.Effects[0].ID != plan.Plan.ID {
 		t.Fatalf("first approval effect = %#v, want the plan", approval.Effects[0])
 	}
-	for index, item := range plan.Items {
-		effect := approval.Effects[index+1]
-		if effect.Kind != "work_item" || effect.ID != item.WorkItem.ID {
-			t.Fatalf("approval effect %d = %#v, want work item %s", index+1, effect, item.WorkItem.ID)
+
+	if _, err := app.UnwrapMutation(service.TransitionObjective(ctx, app.TransitionObjectiveCommand{ObjectiveID: objective.ID, TargetPhase: work.ObjectiveExecution, ActorID: "human:owner", IdempotencyKey: "bulk-execute", Reason: "Run the approved revision.", ExpectedVersion: 1})); err != nil {
+		t.Fatal(err)
+	}
+	creation, err := service.CreatePlanRun(ctx, app.CreatePlanRunCommand{ObjectiveID: objective.ID, PlanID: plan.Plan.ID, ActorID: "human:owner", IdempotencyKey: "bulk-run", RunKey: "bulk-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := creation.Result
+	wantRun := map[string]int{"plan_run:" + run.Run.ID: 1}
+	for _, item := range run.WorkItems {
+		wantRun["work_item:"+item.ID] = 1
+	}
+	assertEffects(t, creation.Effects, wantRun)
+	assertEffectOrderStable(t, creation.Effects)
+
+	// The run is reported before the work it materialized, and the items keep
+	// the order the approved definition declared its steps in.
+	if creation.Effects[0].Kind != "plan_run" || creation.Effects[0].ID != run.Run.ID {
+		t.Fatalf("first creation effect = %#v, want the plan run", creation.Effects[0])
+	}
+	for index, step := range plan.Steps {
+		effect := creation.Effects[index+1]
+		if effect.Kind != "work_item" || effect.ID != run.WorkItems[index].ID {
+			t.Fatalf("creation effect %d = %#v, want the work item materialized from %s", index+1, effect, step.Key)
 		}
 	}
 }
@@ -1101,6 +1119,11 @@ func TestEffectTableDefinitionsAreTheReviewedList(t *testing.T) {
 		{table: "objectives", kind: "objective", id: "NEW.id", version: "NEW.version"},
 		{table: "plans", kind: "plan", id: "NEW.id", version: "NEW.version"},
 		{table: "work_items", kind: "work_item", id: "NEW.id", version: "NEW.version"},
+		{table: "plan_inputs", kind: "plan_input", id: "NEW.id", version: "NEW.version"},
+		{table: "plan_steps", kind: "plan_step", id: "NEW.id", version: "NEW.version"},
+		{table: "plan_step_dependencies", kind: "plan_step_dependency", id: "NEW.plan_step_id || ':' || NEW.depends_on_step_id", version: "NEW.version"},
+		{table: "plan_runs", kind: "plan_run", id: "NEW.id", version: "NEW.version"},
+		{table: "run_input_bindings", kind: "run_input_binding", id: "NEW.id", version: "NEW.version"},
 		{table: "output_profiles", kind: "output_profile", id: "NEW.id", version: "NEW.state_version"},
 		{table: "expected_outputs", kind: "expected_output", id: "NEW.id", version: "NEW.version"},
 		{table: "context_records", kind: "context_record", id: "NEW.id", version: "NEW.version"},

@@ -178,7 +178,17 @@ func planSummaryHint(pc ports.PlanContext) string {
 	if pc.Plan.Summary != "" {
 		return truncate(pc.Plan.Summary, 120)
 	}
-	return fmt.Sprintf("%d item(s) proposed", len(pc.Items))
+	// A revision proposes a definition, so the hint counts its steps. Counting
+	// work items told a reviewer "0 item(s) proposed" about a plan with steps,
+	// because a definition creates no work until a run instantiates it; items
+	// are still counted for plans written before runs existed.
+	if len(pc.Steps) != 0 {
+		return fmt.Sprintf("%d step(s) proposed", len(pc.Steps))
+	}
+	if len(pc.Items) != 0 {
+		return fmt.Sprintf("%d legacy item(s) proposed", len(pc.Items))
+	}
+	return "no steps proposed"
 }
 
 // approvalTarget reads which single target field work.Approval carries (the domain

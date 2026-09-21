@@ -64,8 +64,8 @@ func rep02OutputSchema(t *testing.T, name string) map[string]any {
 
 func TestREP02MutationOutputSchemasRequireEffects(t *testing.T) {
 	mutations, _ := rep02ToolInventory(t)
-	if got := len(mutations); got != 41 {
-		t.Fatalf("server advertises %d mutating tools, want 41: %v", got, mutations)
+	if got := len(mutations); got != 43 {
+		t.Fatalf("server advertises %d mutating tools, want 43: %v", got, mutations)
 	}
 	for _, name := range mutations {
 		t.Run(name, func(t *testing.T) {
@@ -109,8 +109,8 @@ func TestREP02MutationOutputSchemasRequireEffects(t *testing.T) {
 
 func TestREP02ReadOnlyOutputSchemasDoNotExposeEffects(t *testing.T) {
 	_, readOnly := rep02ToolInventory(t)
-	if got := len(readOnly); got != 13 {
-		t.Fatalf("server advertises %d read-only tools, want 13: %v", got, readOnly)
+	if got := len(readOnly); got != 15 {
+		t.Fatalf("server advertises %d read-only tools, want 15: %v", got, readOnly)
 	}
 	for _, name := range readOnly {
 		t.Run(name, func(t *testing.T) {

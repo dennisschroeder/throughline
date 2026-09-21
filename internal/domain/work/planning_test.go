@@ -94,7 +94,7 @@ func TestReviewPlanCommitsOnlyProposedPlan(t *testing.T) {
 
 func TestObjectivePhaseTransitionPausesAndResumesPriorPhase(t *testing.T) {
 	now := time.Date(2026, 8, 21, 14, 0, 0, 0, time.UTC)
-	objective, err := NewObjective("objective-1", "OBJ-1", "Design a skill", "", "Reviewed skill package", ObjectivePlanning, PriorityMedium, now)
+	objective, err := NewObjective(Objective{ID: "objective-1", Key: "OBJ-1", Title: "Design a skill", DesiredOutcome: "Reviewed skill package", Phase: ObjectivePlanning, Priority: PriorityMedium}, now)
 	if err != nil {
 		t.Fatal(err)
 	}

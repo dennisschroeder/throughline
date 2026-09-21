@@ -26,6 +26,19 @@ SELECT NOT EXISTS(
 )`, workItemID)
 }
 
+// StartedExternalActionsSettled reports whether this work item has any
+// external effect still under way. Cancelling an optional step releases its
+// not-yet-started actions, but an effect that already began in the world does
+// not stop being real because the step was dropped — its result is still owed.
+func (r *transactionRepository) StartedExternalActionsSettled(ctx context.Context, workItemID string) (bool, error) {
+	return queryBoolean(ctx, r.transaction, `
+SELECT NOT EXISTS(
+  SELECT 1 FROM external_action_executions execution
+  JOIN external_actions action ON action.id = execution.external_action_id
+  WHERE action.work_item_id = ? AND execution.state = ?
+)`, workItemID, executionStateForStorage(authority.ExecutionStarted))
+}
+
 func (r *transactionRepository) CreateExternalAction(ctx context.Context, action authority.ExternalAction) error {
 	_, err := r.transaction.ExecContext(ctx, `
 INSERT INTO external_actions

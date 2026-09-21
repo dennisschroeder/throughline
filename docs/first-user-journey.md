@@ -7,6 +7,16 @@
 > install/verify/download flow (steps 1–5), which is unchanged; its MCP configuration and
 > multi-session steps describe the retired `throughline mcp <workspace>` stdio form and should be
 > read against the current `throughline setup`/`daemon` flow instead.
+>
+> **2026-09-21 note:** step 5's plan flow has also been superseded. A plan revision is now a
+> reusable *definition* — the inputs it declares and the steps it is made of — and approving it
+> creates no work. `propose_plan` takes `steps` rather than `items`, and `create_plan_run`
+> instantiates one exact approved revision, materializing one fresh work item per step into a
+> durable, separately auditable run. Everything the journey then shows about readiness, claims,
+> output requirements and reuse still holds; it now happens to a run's work rather than to the
+> plan's. See [docs/product/reusable-plan-runs-acceptance.md](product/reusable-plan-runs-acceptance.md)
+> and ADR [0028](adr/0028-reusable-plans-and-plan-runs.md). This record is left as it was run: it is
+> evidence of what that release did, not a description of the current contract.
 
 Evidence that a target user without a source checkout or Go toolchain can discover, download,
 verify, install, configure, and run Throughline `v0.1.0`, then complete the bounded
