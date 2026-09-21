@@ -112,6 +112,10 @@ differently. `_txlock=immediate` takes the write lock at `BEGIN`, so the loser w
 committed state, and is refused by the rule it actually broke. The driver applies it only to write
 transactions; read-only ones stay deferred.
 
+With that in place, the write lock is what enforces the concurrency limit, and
+`UNIQUE(objective_id, sequence)` is the backstop behind it rather than the mechanism. Comments
+written before the fix said the opposite, because before the fix it was true.
+
 ## Alternatives considered
 
 **Five tables for a step's owned child data.** A step's criteria, expected outputs, output

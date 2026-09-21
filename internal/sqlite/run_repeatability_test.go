@@ -197,9 +197,11 @@ func TestConcurrentCreationCannotExceedTheLimit(t *testing.T) {
 }
 
 // isSequenceCollision recognizes the other shape a losing concurrent creation
-// can legitimately take: UNIQUE(objective_id, sequence) rejecting the second
-// writer that read the same highest sequence. That constraint, not the count,
-// is what makes the capacity limit atomic rather than advisory.
+// can legitimately take: UNIQUE(objective_id, sequence) rejecting a second
+// writer that read the same highest sequence. Since writes begin immediate
+// that should not happen — the write lock serializes them and the loser reads
+// the committed capacity — so this is the backstop, accepted here because a
+// constraint refusing the write is still the system enforcing the rule.
 func isSequenceCollision(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed: plan_runs.objective_id, plan_runs.sequence")
 }

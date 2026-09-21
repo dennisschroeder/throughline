@@ -1154,7 +1154,7 @@
     "schema_version": "1.0",
     "model_version": "1.3.0",
     "content_digest": "532e917c7656e2a8475c1ebc2adba9f73070f1c0bb15c0ba321926e3854fd0b7",
-    "source_digest": "f46ca4cf945a34ff0715d8b2ddd5bfd14bc7b09b86b1394daa9598c25fc7fe9b",
+    "source_digest": "205ea443600500d68083f89165b6731959e3e57656c9cc24a328b72461cc058a",
     "bootstrap": "Throughline is a local, authoritative coordination state layer for domain-neutral work. It records intent, plans, work, outputs, validation, reuse, and delegated authority; it does not orchestrate agents or perform external effects. Capability does not imply Authority. Call get_semantic_model for details.",
     "available_sections": [
       "manifest",
@@ -1174,5 +1174,5 @@
     }
   },
   "content_digest": "532e917c7656e2a8475c1ebc2adba9f73070f1c0bb15c0ba321926e3854fd0b7",
-  "source_digest": "f46ca4cf945a34ff0715d8b2ddd5bfd14bc7b09b86b1394daa9598c25fc7fe9b"
+  "source_digest": "205ea443600500d68083f89165b6731959e3e57656c9cc24a328b72461cc058a"
 }

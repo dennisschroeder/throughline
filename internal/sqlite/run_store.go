@@ -285,8 +285,11 @@ func (r *transactionRepository) ActivePlanRunCount(ctx context.Context, objectiv
 }
 
 // NextPlanRunSequence is read inside the creating transaction and written in
-// the same one. The UNIQUE(objective_id, sequence) constraint is what actually
-// prevents two concurrent creations from agreeing on a number.
+// the same one. What makes that safe is the transaction itself: writes begin
+// immediate, so two creations serialize and the second reads the first's
+// committed sequence and capacity. UNIQUE(objective_id, sequence) is the
+// backstop behind that, not the mechanism — it would catch two writers that
+// somehow did agree on a number, which the write lock is there to prevent.
 func (r *transactionRepository) NextPlanRunSequence(ctx context.Context, objectiveID string) (int, error) {
 	var sequence sql.NullInt64
 	if err := r.transaction.QueryRowContext(ctx,
