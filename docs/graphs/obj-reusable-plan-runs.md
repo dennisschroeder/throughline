@@ -211,7 +211,39 @@ one run's readiness wait on another run's work — the exact thing separate runs
 weaker reviewer is not merely quieter; it is confidently wrong in both directions, and every one of
 its claims, positive and negative, had to be checked against the code.
 
+### N4 — RPR-CC delivered
+
+Commits `2c47d70` (contraction, scenarios and proofs) and `cc9a939` (a review repair). All six gates
+green in order at `cc9a939`.
+
+**Gate loop: 0 of 3 attempts spent.** The habit finally held: the gate ran in full, in order, before
+each commit rather than after.
+
+**Review loop: 1 result pass and 1 KISS pass, 1 material finding, 0 outstanding.** The final passes
+ran on `gemini-3.1-pro-high` and `gpt-oss-120b-medium`; `gpt-5.6-sol` was still out of credits. Of
+the six findings the two passes produced, one was accepted — comments still crediting the unique
+sequence constraint with the atomicity that `_txlock=immediate` now provides — and five rested on
+premises that were checked and found false.
+
+**The specification criterion 4 names does not exist.** It asks for "the complete twenty acceptance
+scenarios in the approved reusable-plan-runs specification". There is no such document in the
+repository and no context record holding it on the objective — only the twenty-nine accepted
+decisions, which is where its content lives. The scenarios are reconstructed from those decisions in
+`docs/product/reusable-plan-runs-acceptance.md`, each naming the decision it derives from and the
+test that runs it, so the reconstruction can be checked against the record instead of trusted. Three
+of the twenty had no test and now do.
+
 ### Feedback on the frozen design
+
+**Two independent readers, in different slices, raised the same unprompted objection.** Neither was
+asked about it: a run that fails at step eight is retried by creating a new run, which
+re-materializes steps one through seven, and nothing structurally records that they were already
+done. It is a recorded consequence — runs are never reset (`01a085d3-d3bb`), every step is
+materialized with no applicability conditions (`01a08669`), and binding an earlier run's exact
+accepted output (`01a085f2`) is the intended route. Both readers reached for it anyway, from
+different directions, which is the strongest signal this objective produced about where the model
+will next be felt. It belongs in front of Dennis as a consequence to accept or revisit, not in a
+backlog.
 
 **A review is evidence, not a verdict — in both directions.** The frozen graph treats a pass with no
 findings as an edge that opens. Across three slices the readers produced 16 findings, of which 6 were
@@ -268,3 +300,24 @@ all: approving a later revision still supersedes earlier approved ones, which co
 and is `RPR-REA`'s first criterion. Leaving it was sanctioned by the successor existing as a hard
 dependency that carries the repair. Had the graph not said this in advance, the honest options would
 have been to pull `RPR-REA`'s work forward or to ship a quiet inconsistency.
+
+## Objective outcome
+
+Delivered across four sequential nodes, `81604f8..cc9a939`. Every approved plan revision can be
+instantiated any number of times within its objective as a permanently separate, auditable run; each
+run materializes fresh work items; past runs and revisions stay unchanged and readable. Twenty
+acceptance scenarios, each traced to the decision it comes from and the test that runs it. The
+objective's non-goals are asserted directly rather than left to the absence of a feature.
+
+**Totals across the four nodes.** 16 material review findings accepted and fixed, 13 rejected after
+being checked against the code, 0 outstanding. Two gate-loop attempts spent, both on the same
+mistake — committing a change to a mapped source without regenerating the semantic model — and both
+caught by the next full gate run. Three reviewer substitutions, all recorded as degraded: the pinned
+`gpt-5.6-sol` ran the first slice's three passes and then exhausted its provider credits for the
+remainder of the objective.
+
+**The single most valuable thing the graph did** was not the gate. It was requiring a fresh reader
+at every node, and then requiring each of that reader's claims to be checked rather than believed.
+Six of those claims were wrong about the code, and one clean bill of health concealed a real defect
+the reader had asserted was covered. The gate was green at every commit where the eight worst
+defects of this objective were sitting.
