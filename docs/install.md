@@ -3,10 +3,10 @@
 ## Homebrew (macOS, Linux)
 
 ```bash
-brew install dennisschroeder/throughline/throughline
+brew install dennisschroeder/tap/throughline
 ```
 
-This taps `dennisschroeder/homebrew-throughline` and installs the formula automatically; skip to
+This taps `dennisschroeder/homebrew-tap` and installs the formula automatically; skip to
 [step 4](#4-verify-the-install) to verify. The remaining steps in this guide install from a
 released archive directly and use no package manager. None of them require the Go toolchain. If you
 have Go and want to build from source instead, see [development.md](development.md).
@@ -101,7 +101,7 @@ This should report `v0.1.0` along with the commit and build date.
 Homebrew install:
 
 ```bash
-brew upgrade dennisschroeder/throughline/throughline
+brew upgrade dennisschroeder/tap/throughline
 ```
 
 Archive install: download the new version's archive and checksums file (step 1 with the new
@@ -226,7 +226,7 @@ This preserves every workspace's data and the registry unconditionally — it on
 Homebrew install:
 
 ```bash
-brew uninstall dennisschroeder/throughline/throughline
+brew uninstall dennisschroeder/tap/throughline
 ```
 
 Archive install:
