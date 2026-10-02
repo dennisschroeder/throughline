@@ -57,7 +57,7 @@ accepted decision.
 macOS or Linux with [Homebrew](https://brew.sh):
 
 ```bash
-brew install dennisschroeder/throughline/throughline
+brew install dennisschroeder/tap/throughline
 ```
 
 Otherwise, download the archive matching your OS/architecture and the matching checksums file from

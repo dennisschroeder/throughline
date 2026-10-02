@@ -45,12 +45,12 @@ gh run watch
 
 ## 3a. Homebrew tap (one-time setup)
 
-`.goreleaser.yaml`'s `brews:` block pushes a formula to `dennisschroeder/homebrew-throughline` on
-every tagged release, authenticated with the `HOMEBREW_TAP_GITHUB_TOKEN` repository secret. Before
-the first release that should auto-publish a formula:
+`.goreleaser.yaml`'s `brews:` block pushes a formula to `dennisschroeder/homebrew-tap` on
+every tagged release, authenticated with the `HOMEBREW_TAP_GITHUB_TOKEN` repository secret. The tap is
+shared with other tools (it was renamed from `homebrew-throughline`) and already exists. Before the
+first release that should auto-publish a formula:
 
 ```bash
-gh repo create dennisschroeder/homebrew-throughline --public
 gh secret set HOMEBREW_TAP_GITHUB_TOKEN --repo dennisschroeder/throughline
 ```
 

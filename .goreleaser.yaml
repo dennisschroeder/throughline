@@ -32,7 +32,7 @@ checksum:
 brews:
   - repository:
       owner: dennisschroeder
-      name: homebrew-throughline
+      name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Formula
     homepage: https://github.com/dennisschroeder/throughline
